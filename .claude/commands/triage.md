@@ -1,19 +1,26 @@
-Triage the CCC issue backlog — analyze, prioritize, and manage.
+Triage the CCC issue backlog — validate external issues, prioritize, and manage.
+
+Any contributor can triage. You don't need write access — triage uses comments.
 
 ## Steps
 
 1. **Fetch current state** — run in parallel:
    ```bash
    gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
-   gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,updatedAt --limit 50
+   gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,updatedAt,isDraft --limit 50
    gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 20
    gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
    ```
 
-2. **Categorize** — group issues by priority and status (available/claimed/stale).
+2. **Categorize** — group issues by priority and status (available/in progress/complete/stale).
 
-3. **Identify action items**:
-   - Unprefixed issues that need a priority assignment
+3. **Validate external issues** — issues without `[P<N>]` prefix and no lifecycle comment:
+   - Read the issue body, check the source code
+   - If valid → post `<!-- CCC:TRIAGED -->` comment with recommended priority and validation
+   - If not valid → post `<!-- CCC:DENIED -->` comment with proof
+   - Maintainers can also edit titles to add `[P<N>]`
+
+4. **Identify other action items**:
    - Stale claims (draft PRs with no activity in 24+ hours)
    - Duplicate issues
    - Issues missing required information

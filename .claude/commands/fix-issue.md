@@ -20,16 +20,23 @@ If any PR title contains `[Fix #$ARGUMENTS]` — **draft or ready, both count** 
    gh issue view $ARGUMENTS --repo anthropics/claudes-c-compiler
    ```
 
-2. **Post REVIEWING comment:**
+2. **Check if already triaged:**
+   ```bash
+   gh api repos/anthropics/claudes-c-compiler/issues/$ARGUMENTS/comments \
+     --jq '.[].body' | grep -o 'CCC:[A-Z]*' | tail -1
+   ```
+   If result is `CCC:TRIAGED` → already validated, skip to Phase 0.5.
+
+3. **Post REVIEWING comment:**
    ```bash
    gh issue comment $ARGUMENTS --repo anthropics/claudes-c-compiler \
      --body "<!-- CCC:REVIEWING -->
    **Reviewing** — investigating whether this issue is valid."
    ```
 
-3. **Check if the bug actually exists** — read the source files, run a quick test if possible.
+4. **Check if the bug actually exists** — read the source files, run a quick test if possible.
 
-4. **If NOT real** → post DENIED with proof, tell the user:
+5. **If NOT real** → post DENIED with proof, tell the user:
    ```bash
    gh issue comment $ARGUMENTS --repo anthropics/claudes-c-compiler \
      --body "<!-- CCC:DENIED -->
@@ -37,7 +44,7 @@ If any PR title contains `[Fix #$ARGUMENTS]` — **draft or ready, both count** 
    ```
    Do NOT create a branch or PR. Suggest picking another issue.
 
-5. **If real** → post CONFIRMED and proceed:
+6. **If real** → post CONFIRMED and proceed:
    ```bash
    gh issue comment $ARGUMENTS --repo anthropics/claudes-c-compiler \
      --body "<!-- CCC:CONFIRMED -->

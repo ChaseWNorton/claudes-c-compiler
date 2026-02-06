@@ -32,7 +32,14 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    gh issue view <NUMBER> --repo anthropics/claudes-c-compiler
    ```
 
-   **Post REVIEWING comment:**
+   **Check if already triaged:**
+   ```bash
+   gh api repos/anthropics/claudes-c-compiler/issues/<NUMBER>/comments \
+     --jq '.[].body' | grep -o 'CCC:[A-Z]*' | tail -1
+   ```
+   If result is `CCC:TRIAGED` → already validated, skip to step 3.
+
+   **Otherwise, post REVIEWING comment:**
    ```bash
    gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
      --body "<!-- CCC:REVIEWING -->

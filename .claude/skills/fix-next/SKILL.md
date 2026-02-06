@@ -15,9 +15,10 @@ Claim and fix the next available issue from `anthropics/claudes-c-compiler`, the
 LOOP:
   1. Find next unclaimed issue (highest priority first)
   2. If none available → STOP (all done!)
-  3. VALIDATE FIRST — post CCC:REVIEWING comment, read code, check if real
-     3a. If NOT real → post CCC:DENIED comment with proof, skip, GOTO 1
-     3b. If real → post CCC:CONFIRMED comment, continue
+  3. VALIDATE FIRST — check for CCC:TRIAGED (skip validation if found)
+     3a. If NOT triaged → post CCC:REVIEWING, read code, check if real
+     3b. If NOT real → post CCC:DENIED with proof, skip, GOTO 1
+     3c. If real → post CCC:CONFIRMED, continue
   4. Detect chain tip (highest non-draft [CC] PR, or main)
   5. CLAIM (branch off chain tip + draft PR with [CC] prefix)
   6. Read the files mentioned in the issue
@@ -67,13 +68,22 @@ try to help, do NOT open a second PR. Skip it immediately.
 
 Subtract claimed from open. Pick highest priority: `[P0]` > `[P1]` > `[P2]` > `[P3]`.
 Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational).
-Also skip issues that have a `CCC:DENIED` or `CCC:REVIEWING` comment (check via
-`gh api repos/anthropics/claudes-c-compiler/issues/<N>/comments --jq '.[].body'`).
+Also skip issues that have a `CCC:DENIED` or `CCC:REVIEWING` comment. Issues with
+`CCC:TRIAGED` are pre-validated and ready for pickup (skip validation step).
+Check via `gh api repos/anthropics/claudes-c-compiler/issues/<N>/comments --jq '.[].body'`.
 
 ### Validate the issue (BEFORE creating any branch or PR)
 
-**CRITICAL: You MUST validate the issue before claiming it.**
+**CRITICAL: You MUST validate the issue before claiming it — unless already triaged.**
 
+Check for existing triage:
+```bash
+gh api repos/anthropics/claudes-c-compiler/issues/<NUMBER>/comments \
+  --jq '.[].body' | grep -o 'CCC:[A-Z]*' | tail -1
+```
+If `CCC:TRIAGED` → skip to "Claim an issue" below.
+
+Otherwise:
 1. Read the issue body completely
 2. Post REVIEWING comment:
 ```bash

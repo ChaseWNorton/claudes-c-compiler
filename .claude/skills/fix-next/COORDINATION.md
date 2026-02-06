@@ -26,8 +26,9 @@ they didn't create. State is derived from comments posted on the issue and from 
 
 | State | How to detect | Meaning |
 |-------|--------------|---------|
-| **Available** | Open issue, no `<!-- CCC:REVIEWING -->` comment, no `[Fix #N]` PR | Ready for pickup |
-| **Reviewing** | `<!-- CCC:REVIEWING -->` comment exists on the issue | Agent is investigating validity |
+| **Available** | Open issue, no lifecycle comment, no `[Fix #N]` PR | Ready for pickup |
+| **Triaged** | `<!-- CCC:TRIAGED -->` comment on the issue | Validated by triage, priority recommended, ready for pickup |
+| **Reviewing** | `<!-- CCC:REVIEWING -->` comment on the issue | Agent is investigating validity |
 | **Confirmed / WIP** | `<!-- CCC:CONFIRMED -->` comment + draft PR with `[Fix #N]` | Bug is real, fix in progress |
 | **Denied** | `<!-- CCC:DENIED -->` comment with proof | Not a real bug |
 | **Complete** | Ready (non-draft) PR with `[Fix #N]` | Fix shipped, awaiting merge |
@@ -35,9 +36,13 @@ they didn't create. State is derived from comments posted on the issue and from 
 ### Flow
 
 ```
-Available ──→ Reviewing (comment) ──→ Confirmed + draft PR ──→ Complete (PR ready)
-                                   └──→ Denied (comment with proof)
+Available ──→ Triaged (triage validates) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
+         └──→ Reviewing (fix agent) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
+                                     └──→ Denied (comment with proof)
 ```
+
+**Triaged issues skip validation.** The triage agent already confirmed the issue is real
+and recommended a priority. Fix agents can go straight to claiming.
 
 ### Lifecycle comments
 
@@ -60,6 +65,25 @@ gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
   --body "$(cat <<'EOF'
 <!-- CCC:CONFIRMED -->
 **Confirmed** — <brief explanation of why it's real>. Creating draft PR to claim.
+EOF
+)"
+```
+
+**Post TRIAGED** (valid external issue, not claiming now — used by triage):
+```bash
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "$(cat <<'EOF'
+<!-- CCC:TRIAGED -->
+**Triaged** — this issue is valid.
+
+## Recommended priority
+`[P<N>]` — <reasoning>
+
+## Validation
+<brief explanation of why this is real, code references>
+
+## Suggested approach
+<which files to modify and what to change>
 EOF
 )"
 ```
@@ -102,10 +126,9 @@ If empty, the issue has never been reviewed — it's available.
 
 ### Rules
 
-1. **BEFORE creating a draft PR**, the agent MUST:
-   - Read the issue body completely
-   - Post a `<!-- CCC:REVIEWING -->` comment
-   - Verify the bug exists (check the code, run a test if possible)
+1. **BEFORE creating a draft PR**, the agent MUST validate — unless already triaged:
+   - If issue has `CCC:TRIAGED` → already validated, skip to draft PR
+   - Otherwise: read the issue body, post `<!-- CCC:REVIEWING -->`, verify the bug exists
    - If confirmed real → post `<!-- CCC:CONFIRMED -->` comment + create draft PR
    - If not real → post `<!-- CCC:DENIED -->` comment with proof, NO PR
 
@@ -116,6 +139,9 @@ If empty, the issue has never been reviewed — it's available.
 
 4. **Skip issues that already have a `CCC:REVIEWING` or `CCC:DENIED` comment** —
    someone else is already handling it or has already rejected it.
+
+5. **`CCC:TRIAGED` issues are ready for pickup** — treat them like any other
+   available issue, but skip the validation step since triage already did it.
 
 ## State Model
 

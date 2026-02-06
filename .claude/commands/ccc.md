@@ -106,6 +106,7 @@ CCC — What do you want to do?
   FIND       Audit the codebase and discover new bugs     (file issues for what you find)
   PLAN       Create a strategic roadmap with milestones   (X milestones exist)
   REVIEW     Review a pull request                        (X PRs open)
+  TRIAGE     Validate external issues, clean up backlog   (X untriaged issues)
   STATUS     See who's working on what                    (quick overview)
 ```
 
@@ -118,8 +119,8 @@ CCC — What do you want to do?
   FIND       Audit the codebase and discover new bugs     (file issues for what you find)
   PLAN       Create a strategic roadmap with milestones   (X milestones exist)
   REVIEW     Review a pull request                        (X PRs open)
+  TRIAGE     Validate external issues, clean up backlog   (X untriaged issues)
   RELEASE    Cut a release from merged work               (X PRs merged since last release)
-  TRIAGE     Clean up the backlog                         (stale claims, duplicates, priorities)
   STATUS     See who's working on what                    (quick overview)
 ```
 
@@ -151,14 +152,14 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 | **PLAN** | Full planning flow — see PLAN flow below |
 | **REVIEW** | Show open PRs, ask which one, fetch PR + linked issue, review against acceptance criteria. **Maintainers**: formal review. **Contributors**: PR comment. |
 | **RELEASE** | Gather merged PRs since last release, generate changelog, create git tag + GitHub release, close completed milestones |
-| **TRIAGE** | Report backlog health — stale claims, unprioritized issues, duplicates — then take action |
+| **TRIAGE** | Validate external issues (post `CCC:TRIAGED` with recommended priority), report backlog health, clean up stale claims/duplicates. **Contributors**: comment-based triage. **Maintainers**: can also edit titles to add `[P<N>]`. |
 | **STATUS** | Show dashboard with milestone progress, claimed/available/completed counts |
 
 ### FIX flow
 
 The flow has four phases: validate, claim, fix, ship.
 
-1. **Validate** — read the issue body, post `<!-- CCC:REVIEWING -->` comment, check if the bug is real. If NOT real → post `<!-- CCC:DENIED -->` comment with proof, skip to next issue. If real → post `<!-- CCC:CONFIRMED -->` comment.
+1. **Validate** — if issue has `CCC:TRIAGED` comment, skip to step 2 (already validated). Otherwise: read the issue body, post `<!-- CCC:REVIEWING -->` comment, check if the bug is real. If NOT real → post `<!-- CCC:DENIED -->` comment with proof, skip to next issue. If real → post `<!-- CCC:CONFIRMED -->` comment.
 2. **Detect chain** — find the chain tip (highest non-draft `[CC]` PR). If none, use `main`.
 3. **Claim** — branch off chain tip (or main), push to `origin`, open draft PR to `upstream` with title `[CC][Fix #<N>] <description>` (or `[Fix #<N>]` if no chain). **This draft PR is a LOCK — it tells all other agents this issue is taken. Other agents MUST skip it.**
 4. **Fix** — read the source files, implement the fix, write tests, verify build.

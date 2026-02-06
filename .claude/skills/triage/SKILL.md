@@ -58,12 +58,40 @@ Group open issues by:
 - Testing infrastructure
 - Documentation
 
-### 3. Identify action items
+### 3. Validate external issues
 
-**Issues needing triage** (unprefixed titles):
-- Read the issue body
-- Assign a priority prefix
-- Suggest: `gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler --title "[P<N>] <title>"`
+External issues (no `[P<N>]` prefix, no lifecycle comment) need triage. For each one:
+
+1. Read the issue body
+2. Check the source code — is this a real bug?
+3. If valid, post a `<!-- CCC:TRIAGED -->` comment with recommended priority and validation:
+
+```bash
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "$(cat <<'EOF'
+<!-- CCC:TRIAGED -->
+**Triaged** — this issue is valid.
+
+## Recommended priority
+`[P<N>]` — <reasoning>
+
+## Validation
+<brief explanation, code references>
+
+## Suggested approach
+<which files to modify>
+EOF
+)"
+```
+
+4. If NOT valid, post `<!-- CCC:DENIED -->` with proof.
+5. **Maintainers only**: can also edit the title to add `[P<N>]`:
+   `gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler --title "[P<N>] <title>"`
+
+Triaged issues are immediately available for the fix cycle — agents see `CCC:TRIAGED`
+and skip validation.
+
+### 4. Identify other action items
 
 **Stale claims**:
 - Check if the PR has any real commits (not just the WIP empty commit)
@@ -79,7 +107,7 @@ Group open issues by:
 - Comment asking for clarification
 - If the issue was filed by the file-issue skill, it should be complete — check against the template
 
-### 4. Report
+### 5. Report
 
 Format the output as:
 

@@ -59,20 +59,25 @@ and PR signals.
 
 | State | Signal | Meaning |
 |-------|--------|---------|
-| **Available** | Open issue, no `<!-- CCC:REVIEWING -->` comment, no `[Fix #N]` PR | Ready for pickup |
+| **Available** | Open issue, no lifecycle comment, no `[Fix #N]` PR | Ready for pickup |
+| **Triaged** | Comment with `<!-- CCC:TRIAGED -->` marker | Validated by triage, priority recommended, ready for pickup |
 | **Reviewing** | Comment with `<!-- CCC:REVIEWING -->` marker | Agent investigating validity |
 | **Claimed (WIP)** | Draft PR with `[Fix #N]` in title | Confirmed real, work in progress |
 | **Denied** | Comment with `<!-- CCC:DENIED -->` marker + proof | Not a real bug |
 | **Complete** | Ready (non-draft) PR with `[Fix #N]` in title | Fix shipped |
 
 ```
-Available ──→ Reviewing (comment) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
-                                   └──→ Denied (comment with proof)
+Available ──→ Triaged (triage validates) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
+         └──→ Reviewing (fix agent) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
+                                     └──→ Denied (comment with proof)
 ```
 
-**CRITICAL: An agent MUST validate an issue BEFORE creating a draft PR.**
-Post a `<!-- CCC:REVIEWING -->` comment, read the code, confirm the bug exists.
-If not real, post a `<!-- CCC:DENIED -->` comment with proof. Only if real, create the PR.
+**Triaged issues skip validation.** If an issue has a `<!-- CCC:TRIAGED -->` comment,
+it's already been validated — the fix agent can go straight to claiming.
+
+**CRITICAL: An agent MUST validate an issue BEFORE creating a draft PR** — unless
+it's already been triaged. Post a `<!-- CCC:REVIEWING -->` comment, read the code,
+confirm the bug exists. If not real, post a `<!-- CCC:DENIED -->` comment with proof.
 
 ### PR claim states
 
