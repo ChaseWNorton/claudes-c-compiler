@@ -60,15 +60,21 @@ All project state is readable from titles alone:
 
 ### PR Chain (`[CC]` protocol)
 
-While upstream review is pending, fix PRs can build on each other using the `[CC]` chain.
-Each `[CC]` PR's branch includes all commits from lower-numbered `[CC]` PRs, so there are
-zero merge conflicts when merging top-to-bottom.
+This is an AI-native workflow. When Claude Code fixes an issue, the resulting PR is correct
+or nearly correct — it read the issue body (the full work order), read the source, wrote
+tests, and verified the build passes. Waiting for human review before starting the next fix
+means idle time and drift. The chain eliminates both.
+
+**Core assumption:** PRs opened by this system are correct. Build forward, don't wait.
+
+Each `[CC]` PR's branch includes all commits from lower-numbered `[CC]` PRs, forming a
+linear chain. No merge conflicts. No drift. Work compounds — every fix builds on the last.
 
 **How it works:**
 - PRs with `[CC]` at the start of their title are part of the chain
 - Chain order = PR number (immutable, monotonic)
 - **Chain tip** = highest-numbered non-draft `[CC]` PR
-- New fix branches are created off the chain tip
+- New fix branches are created off the chain tip (not `main`)
 - All `[CC]` PRs target `main` — GitHub auto-shrinks diffs when chain PRs merge
 
 **Detect the chain tip:**
@@ -78,7 +84,11 @@ gh pr list --repo anthropics/claudes-c-compiler --state open \
   | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last'
 ```
 
-**Speed merge:** Maintainer can merge just the tip PR to get everything, or merge top-to-bottom for incremental review. Either way, zero conflicts.
+**Speed merge:** Maintainer can merge just the tip PR to get everything (it contains all
+prior chain commits), or merge top-to-bottom for incremental review. Either way, zero conflicts.
+
+**If a chain PR is rejected:** downstream PRs cherry-pick their own commits onto the new tip.
+The chain self-heals. See TROUBLESHOOTING.md for recovery steps.
 
 **If no chain exists:** fall back to branching off `main` (standard flow, no `[CC]` prefix).
 
