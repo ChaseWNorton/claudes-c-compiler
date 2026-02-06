@@ -8,6 +8,7 @@ pub struct Lexer {
     pos: usize,
     file_id: u32,
     gnu_extensions: bool,
+    errors: Vec<(String, Span)>,
 }
 
 impl Lexer {
@@ -17,11 +18,16 @@ impl Lexer {
             pos: 0,
             file_id,
             gnu_extensions: true,
+            errors: Vec::new(),
         }
     }
 
     pub fn set_gnu_extensions(&mut self, enabled: bool) {
         self.gnu_extensions = enabled;
+    }
+
+    pub fn take_errors(&mut self) -> Vec<(String, Span)> {
+        std::mem::take(&mut self.errors)
     }
 
     pub fn tokenize(&mut self) -> Vec<Token> {
@@ -871,22 +877,76 @@ impl Lexer {
     /// Parse a universal character name (\uNNNN or \UNNNNNNNN).
     /// `num_digits` is 4 for \u or 8 for \U.
     /// Returns the Unicode code point as a Rust char.
-    // TODO: C11 requires exactly num_digits hex digits; emit diagnostic if fewer provided.
-    // TODO: C11 §6.4.3 disallows certain code points (below 0x00A0 except 0x24/0x40/0x60,
-    //       and surrogates 0xD800-0xDFFF). Validate and emit diagnostics for these.
+    /// Validates per C11 §6.4.3: rejects too few digits, surrogates, out-of-range,
+    /// and restricted code points.
     fn lex_unicode_escape(&mut self, num_digits: usize) -> char {
+        // pos is right after 'u' or 'U'; the backslash was 2 bytes before
+        let escape_start = self.pos - 2;
         let mut val = 0u32;
+        let mut digits_consumed = 0usize;
         for _ in 0..num_digits {
             if self.pos < self.input.len() && self.input[self.pos].is_ascii_hexdigit() {
                 val = val * 16 + hex_digit_val(self.input[self.pos]) as u32;
                 self.pos += 1;
+                digits_consumed += 1;
             } else {
                 break;
             }
         }
-        // TODO: Emit a diagnostic for invalid code points (e.g. surrogates) instead of
-        //       silently using the replacement character.
+        let span = Span::new(escape_start as u32, self.pos as u32, self.file_id);
+        let prefix = if num_digits == 4 { "\\u" } else { "\\U" };
+
+        if digits_consumed < num_digits {
+            self.errors.push((
+                format!("{}{:0>width$} is not a valid universal character",
+                    prefix,
+                    &self.input_slice_as_hex(escape_start + 2, self.pos),
+                    width = digits_consumed),
+                span,
+            ));
+            return '\u{FFFD}';
+        }
+
+        // C11 §6.4.3p2: surrogates (0xD800-0xDFFF) are not allowed
+        if (0xD800..=0xDFFF).contains(&val) {
+            self.errors.push((
+                format!("\\{}{:0width$X} is not a valid universal character (surrogate)",
+                    if num_digits == 4 { "u" } else { "U" },
+                    val,
+                    width = num_digits),
+                span,
+            ));
+            return '\u{FFFD}';
+        }
+
+        // Values beyond Unicode range
+        if val > 0x10FFFF {
+            self.errors.push((
+                format!("\\U{:08X} is not a valid universal character (out of range)", val),
+                span,
+            ));
+            return '\u{FFFD}';
+        }
+
+        // C11 §6.4.3p2: code points below 0x00A0 are disallowed except
+        // 0x0024 ($), 0x0040 (@), 0x0060 (`)
+        if val < 0x00A0 && val != 0x0024 && val != 0x0040 && val != 0x0060 {
+            self.errors.push((
+                format!("\\{}{:0width$X} is not a valid universal character",
+                    if num_digits == 4 { "u" } else { "U" },
+                    val,
+                    width = num_digits),
+                span,
+            ));
+            return '\u{FFFD}';
+        }
+
         char::from_u32(val).unwrap_or('\u{FFFD}')
+    }
+
+    /// Helper to extract hex digit characters from a byte range as a string.
+    fn input_slice_as_hex(&self, start: usize, end: usize) -> String {
+        self.input[start..end].iter().map(|&b| b as char).collect()
     }
 
     fn lex_identifier(&mut self, start: usize) -> Token {
@@ -1184,5 +1244,110 @@ fn hex_digit_val(c: u8) -> u8 {
         b'a'..=b'f' => c - b'a' + 10,
         b'A'..=b'F' => c - b'A' + 10,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lex_errors(src: &str) -> Vec<String> {
+        let mut lexer = Lexer::new(src, 0);
+        let _ = lexer.tokenize();
+        lexer.take_errors().into_iter().map(|(msg, _)| msg).collect()
+    }
+
+    fn lex_no_errors(src: &str) {
+        let mut lexer = Lexer::new(src, 0);
+        let _ = lexer.tokenize();
+        let errors = lexer.take_errors();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn valid_unicode_escape_u() {
+        // \u00A1 = inverted exclamation mark (>= 0x00A0, so allowed)
+        lex_no_errors("'\\u00A1'");
+    }
+
+    #[test]
+    fn valid_unicode_escape_upper_u() {
+        // \U0001F600 = emoji
+        lex_no_errors("'\\U0001F600'");
+    }
+
+    #[test]
+    fn valid_unicode_dollar_sign() {
+        // \u0024 ($) is explicitly allowed per C11 §6.4.3
+        lex_no_errors("'\\u0024'");
+    }
+
+    #[test]
+    fn valid_unicode_at_sign() {
+        // \u0040 (@) is explicitly allowed
+        lex_no_errors("'\\u0040'");
+    }
+
+    #[test]
+    fn valid_unicode_backtick() {
+        // \u0060 (`) is explicitly allowed
+        lex_no_errors("'\\u0060'");
+    }
+
+    #[test]
+    fn valid_unicode_a0() {
+        // \u00A0 (non-breaking space) is the first allowed value above the restricted range
+        lex_no_errors("'\\u00A0'");
+    }
+
+    #[test]
+    fn unicode_too_few_digits() {
+        let errors = lex_errors("'\\u00'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("not a valid universal character"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn unicode_surrogate_rejected() {
+        let errors = lex_errors("'\\uD800'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("surrogate"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn unicode_surrogate_high_end_rejected() {
+        let errors = lex_errors("'\\uDFFF'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("surrogate"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn unicode_out_of_range() {
+        let errors = lex_errors("'\\U00110000'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("out of range"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn unicode_restricted_below_a0() {
+        // \u0001 is below 0x00A0 and not in the allowed set
+        let errors = lex_errors("'\\u0001'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("not a valid universal character"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn unicode_restricted_null() {
+        let errors = lex_errors("'\\u0000'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("not a valid universal character"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn unicode_big_u_too_few_digits() {
+        // \U with only 4 hex digits instead of 8
+        let errors = lex_errors("'\\U0041'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("not a valid universal character"), "got: {}", errors[0]);
     }
 }

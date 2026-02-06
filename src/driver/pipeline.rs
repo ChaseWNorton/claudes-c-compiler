@@ -957,6 +957,7 @@ impl Driver {
         let mut lexer = Lexer::new(source_manager.get_content(file_id), file_id);
         lexer.set_gnu_extensions(self.gnu_extensions);
         let tokens = lexer.tokenize();
+        let lexer_errors = lexer.take_errors();
         if time_phases { eprintln!("[TIME] lex: {:.3}s ({} tokens)", t1.elapsed().as_secs_f64(), tokens.len()); }
 
         if self.verbose {
@@ -968,6 +969,16 @@ impl Driver {
         // backward-compatible span_to_location() calls.
         let t2 = std::time::Instant::now();
         diagnostics.set_source_manager(source_manager);
+
+        // Emit lexer errors (unicode escape validation, etc.) now that
+        // the source manager is available for span rendering.
+        if !lexer_errors.is_empty() {
+            for (msg, span) in &lexer_errors {
+                let diag = crate::common::error::Diagnostic::error(msg.clone()).with_span(*span);
+                diagnostics.emit(&diag);
+            }
+            return Err(format!("{} lexer error(s) in {}", lexer_errors.len(), input_file));
+        }
         let mut parser = Parser::new(tokens);
         parser.set_diagnostics(diagnostics);
         let ast = parser.parse();
