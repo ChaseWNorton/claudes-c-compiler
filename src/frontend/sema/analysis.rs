@@ -17,7 +17,7 @@
 
 use crate::common::error::DiagnosticEngine;
 use crate::common::source::Span;
-use crate::common::symbol_table::{Symbol, SymbolTable};
+use crate::common::symbol_table::{Linkage, Symbol, SymbolTable};
 use crate::common::type_builder;
 use crate::common::types::{AddressSpace, CType, FunctionType, StructLayout};
 use crate::frontend::parser::ast::{
@@ -231,10 +231,19 @@ impl SemanticAnalyzer {
             params: params.clone(),
             variadic: func.variadic,
         }));
+        let func_linkage = if func.attrs.is_static() {
+            Linkage::Internal
+        } else if func.attrs.is_extern() {
+            Linkage::Extern
+        } else {
+            Linkage::External
+        };
+        self.check_linkage_conflict(&func.name, func_linkage, func.span);
         self.symbol_table.declare(Symbol {
             name: func.name.clone(),
             ty: func_ctype,
             explicit_alignment: None,
+            linkage: func_linkage,
         });
 
         // Push scope for function body (both symbol table and type context,
@@ -250,6 +259,7 @@ impl SemanticAnalyzer {
                     name: name.clone(),
                     ty,
                     explicit_alignment: None,
+                    linkage: Linkage::None,
                 });
             }
         }
@@ -498,10 +508,23 @@ impl SemanticAnalyzer {
                 decl.alignment
             };
 
+            let var_linkage = if decl.is_static() {
+                Linkage::Internal
+            } else if decl.is_extern() {
+                Linkage::Extern
+            } else if _is_global {
+                Linkage::External
+            } else {
+                Linkage::None
+            };
+            if !init_decl.name.is_empty() {
+                self.check_linkage_conflict(&init_decl.name, var_linkage, init_decl.span);
+            }
             self.symbol_table.declare(Symbol {
                 name: init_decl.name.clone(),
                 ty: full_type,
                 explicit_alignment,
+                linkage: var_linkage,
             });
 
             // Analyze array size expressions in derived declarators
@@ -743,6 +766,7 @@ impl SemanticAnalyzer {
                 name: variant.name.clone(),
                 ty: sym_ty,
                 explicit_alignment: None,
+                linkage: Linkage::None,
             });
             self.enum_counter += 1;
         }
@@ -1771,6 +1795,41 @@ impl SemanticAnalyzer {
         }
     }
 
+    /// Check for conflicting linkage on a redeclared symbol.
+    /// Per C11 6.2.2: a `static` declaration followed by `extern` is allowed
+    /// (the extern inherits internal linkage), but `extern`/no-specifier
+    /// followed by `static` is an error.
+    fn check_linkage_conflict(&self, name: &str, new_linkage: Linkage, span: Span) {
+        if matches!(new_linkage, Linkage::None) {
+            return; // block-scope, no linkage checking needed
+        }
+        let prev = match self.symbol_table.lookup(name) {
+            Some(s) => s,
+            None => return,
+        };
+        if matches!(prev.linkage, Linkage::None) {
+            return;
+        }
+        match (prev.linkage, new_linkage) {
+            // static → extern: C11 6.2.2p4 says extern inherits prior internal
+            // linkage, but we still warn since the conflicting intent is suspicious
+            (Linkage::Internal, Linkage::Extern) | (Linkage::Internal, Linkage::External) => {
+                // GCC allows this silently per C11; we accept it too
+            }
+            // extern/external → static: hard error in GCC
+            (Linkage::External, Linkage::Internal) | (Linkage::Extern, Linkage::Internal) => {
+                self.diagnostics.borrow_mut().error(
+                    format!(
+                        "static declaration of '{}' follows non-static declaration",
+                        name
+                    ),
+                    span,
+                );
+            }
+            _ => {} // same linkage or compatible
+        }
+    }
+
     fn check_pointer_subtraction_compat(&self, lhs: &Expr, rhs: &Expr, span: Span) {
         let checker = super::type_checker::ExprTypeChecker {
             symbols: &self.symbol_table,
@@ -2475,5 +2534,56 @@ mod tests {
     #[test]
     fn global_null_pointer_no_warn() {
         assert_eq!(sema_warnings("int *p = 0; int main(void) { return 0; }"), 0);
+    }
+
+    fn sema_errors(src: &str) -> usize {
+        sema_counts(src).0
+    }
+
+    // ---- linkage conflict: extern then static → error ----
+
+    #[test]
+    fn extern_then_static_var_errors() {
+        assert!(sema_errors("extern int x; static int x = 42; int main(void) { return x; }") > 0);
+    }
+
+    #[test]
+    fn extern_then_static_func_errors() {
+        assert!(sema_errors("int foo(void); static int foo(void) { return 42; } int main(void) { return foo(); }") > 0);
+    }
+
+    #[test]
+    fn no_specifier_then_static_errors() {
+        // No specifier at file scope = external linkage
+        assert!(sema_errors("int x; static int x; int main(void) { return x; }") > 0);
+    }
+
+    // ---- linkage: static then extern → accepted (C11 6.2.2p4) ----
+
+    #[test]
+    fn static_then_extern_accepted() {
+        assert_eq!(sema_errors("static int x = 42; extern int x; int main(void) { return x; }"), 0);
+    }
+
+    // ---- valid single linkage ----
+
+    #[test]
+    fn static_alone_accepted() {
+        assert_eq!(sema_errors("static int x = 42; int main(void) { return x; }"), 0);
+    }
+
+    #[test]
+    fn extern_alone_accepted() {
+        assert_eq!(sema_errors("extern int x; int x = 42; int main(void) { return x; }"), 0);
+    }
+
+    #[test]
+    fn extern_redecl_accepted() {
+        assert_eq!(sema_errors("extern int x; extern int x; int x = 42; int main(void) { return x; }"), 0);
+    }
+
+    #[test]
+    fn static_func_accepted() {
+        assert_eq!(sema_errors("static int foo(void) { return 42; } int main(void) { return foo(); }"), 0);
     }
 }
