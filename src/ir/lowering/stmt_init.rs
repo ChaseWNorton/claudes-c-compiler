@@ -325,6 +325,7 @@ impl Lowerer {
             }
         }).collect();
 
+        let is_fastcall = self.fastcall_functions.contains(name);
         let sig = if !variadic || !param_tys.is_empty() {
             FuncSig {
                 return_type: ret_ty,
@@ -339,6 +340,7 @@ impl Lowerer {
                 param_struct_sizes,
                 param_struct_classes,
                 param_riscv_float_classes,
+                is_fastcall,
             }
         } else {
             FuncSig {
@@ -354,6 +356,7 @@ impl Lowerer {
                 param_struct_sizes: Vec::new(),
                 param_struct_classes: Vec::new(),
                 param_riscv_float_classes: Vec::new(),
+                is_fastcall,
             }
         };
         // Don't overwrite an existing, more complete sig from the first pass

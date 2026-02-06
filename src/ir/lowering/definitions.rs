@@ -264,6 +264,8 @@ pub(super) struct FuncSig {
     /// Per-parameter RISC-V LP64D float field classification for struct params.
     /// Each entry is Some(..) for struct params that qualify for FP register passing.
     pub param_riscv_float_classes: Vec<Option<crate::common::types::RiscvFloatClass>>,
+    /// Whether this function uses the __attribute__((fastcall)) calling convention.
+    pub is_fastcall: bool,
 }
 
 impl FuncSig {
@@ -283,6 +285,7 @@ impl FuncSig {
             param_struct_sizes: Vec::new(),
             param_struct_classes: Vec::new(),
             param_riscv_float_classes: Vec::new(),
+            is_fastcall: false,
         }
     }
 }

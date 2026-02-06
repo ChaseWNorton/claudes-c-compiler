@@ -793,8 +793,9 @@ impl Lowerer {
                 if self.is_func_ptr_variable(name) {
                     // Function pointer variable: load pointer and call indirect
                     let func_ptr = self.load_func_ptr_variable(name);
-                    // TODO: Support fastcall through function pointers (requires tracking
-                    // calling convention in function pointer types)
+                    let fptr_is_fastcall = self.func_meta.ptr_sigs.get(name.as_str())
+                        .is_some_and(|s| s.is_fastcall)
+                        || self.fastcall_functions.contains(name.as_str());
                     self.emit(Instruction::CallIndirect {
                         func_ptr: Operand::Value(func_ptr),
                         info: CallInfo {
@@ -802,7 +803,7 @@ impl Lowerer {
                             return_type: indirect_ret_ty, is_variadic, num_fixed_args,
                             struct_arg_sizes, struct_arg_aligns, struct_arg_classes,
                             struct_arg_riscv_float_classes,
-                            is_sret: sret_size.is_some(), is_fastcall: false,
+                            is_sret: sret_size.is_some(), is_fastcall: fptr_is_fastcall,
                             ret_eightbyte_classes: call_ret_classes,
                         },
                     });
@@ -859,6 +860,14 @@ impl Lowerer {
                 let saa = struct_arg_aligns;
                 let sac = struct_arg_classes;
                 let sarfc = struct_arg_riscv_float_classes;
+                // Check if the inner expression is an identifier with fastcall convention
+                let deref_is_fastcall = if let Expr::Identifier(name, _) = inner.as_ref() {
+                    self.func_meta.ptr_sigs.get(name.as_str())
+                        .is_some_and(|s| s.is_fastcall)
+                        || self.fastcall_functions.contains(name.as_str())
+                } else {
+                    false
+                };
                 let func_ptr = if is_noop_deref {
                     // No-op dereference: (*fp)() == fp()
                     self.lower_expr(inner)
@@ -873,7 +882,7 @@ impl Lowerer {
                         return_type: indirect_ret_ty, is_variadic: false, num_fixed_args: n,
                         struct_arg_sizes: sas, struct_arg_aligns: saa, struct_arg_classes: sac,
                         struct_arg_riscv_float_classes: sarfc,
-                        is_sret: sret_size.is_some(), is_fastcall: false,
+                        is_sret: sret_size.is_some(), is_fastcall: deref_is_fastcall,
                         ret_eightbyte_classes: call_ret_classes,
                     },
                 });

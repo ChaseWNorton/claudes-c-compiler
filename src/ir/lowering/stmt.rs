@@ -149,6 +149,16 @@ impl Lowerer {
             self.register_local_var(decl, declarator, type_spec, &da, alloca, (alloca_align, vla_size));
             self.track_fptr_sig(declarator, type_spec);
 
+            // Propagate fastcall from init expression to function pointer sig.
+            // e.g. void (*fptr)(int) = fastcall_func;
+            if let Some(Initializer::Expr(Expr::Identifier(ref init_name, _))) = declarator.init {
+                if self.fastcall_functions.contains(init_name.as_str()) {
+                    if let Some(sig) = self.func_meta.ptr_sigs.get_mut(declarator.name.as_str()) {
+                        sig.is_fastcall = true;
+                    }
+                }
+            }
+
             if let Some(ref init) = declarator.init {
                 self.lower_local_var_init(init, decl, declarator, &da, alloca, (is_complex, &complex_elem_ctype));
             }
@@ -354,7 +364,9 @@ impl Lowerer {
                 let param_tys: Vec<IrType> = params.iter().map(|p| {
                     self.type_spec_to_ir(&p.type_spec)
                 }).collect();
-                self.func_meta.ptr_sigs.insert(declarator.name.clone(), FuncSig::for_ptr(ret_ty, param_tys));
+                let mut sig = FuncSig::for_ptr(ret_ty, param_tys);
+                sig.is_fastcall = declarator.attrs.is_fastcall();
+                self.func_meta.ptr_sigs.insert(declarator.name.clone(), sig);
                 break;
             }
         }
@@ -522,7 +534,9 @@ impl Lowerer {
                 let param_tys: Vec<IrType> = params.iter().map(|p| {
                     self.type_spec_to_ir(&p.type_spec)
                 }).collect();
-                self.func_meta.ptr_sigs.insert(declarator.name.clone(), FuncSig::for_ptr(ret_ty, param_tys));
+                let mut sig = FuncSig::for_ptr(ret_ty, param_tys);
+                sig.is_fastcall = declarator.attrs.is_fastcall();
+                self.func_meta.ptr_sigs.insert(declarator.name.clone(), sig);
                 break;
             }
         }

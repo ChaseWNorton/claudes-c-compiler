@@ -801,4 +801,56 @@ mod atomic_tests {
         let m = compile_to_ir("void f(void) { int x; __atomic_store_n(&x, 5, __ATOMIC_SEQ_CST); }");
         assert!(has_atomic_store(&m, "f"), "expected AtomicStore from __atomic_store_n");
     }
+
+    /// Check if a function's IR contains a CallIndirect with is_fastcall set.
+    fn has_fastcall_indirect(module: &IrModule, func_name: &str) -> bool {
+        module.functions.iter()
+            .find(|f| f.name == func_name)
+            .map(|f| f.blocks.iter().any(|b| b.instructions.iter().any(|i|
+                matches!(i, Instruction::CallIndirect { info, .. } if info.is_fastcall)
+            )))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn fastcall_fptr_identifier_propagates() {
+        // Calling a fastcall function through a named function pointer variable
+        let m = compile_to_ir(
+            "__attribute__((fastcall)) void foo(int a, int b);
+             void test(void) {
+                 void (*fptr)(int, int) = foo;
+                 fptr(1, 2);
+             }"
+        );
+        assert!(has_fastcall_indirect(&m, "test"),
+            "expected CallIndirect with is_fastcall for fastcall function pointer");
+    }
+
+    #[test]
+    fn fastcall_fptr_deref_propagates() {
+        // Calling through (*fptr)() syntax should also propagate fastcall
+        let m = compile_to_ir(
+            "__attribute__((fastcall)) void bar(int x);
+             void test(void) {
+                 void (*fptr)(int) = bar;
+                 (*fptr)(42);
+             }"
+        );
+        assert!(has_fastcall_indirect(&m, "test"),
+            "expected CallIndirect with is_fastcall for dereferenced fastcall fptr");
+    }
+
+    #[test]
+    fn non_fastcall_fptr_not_marked() {
+        // Normal function pointer should NOT have is_fastcall
+        let m = compile_to_ir(
+            "void baz(int a);
+             void test(void) {
+                 void (*fptr)(int) = baz;
+                 fptr(1);
+             }"
+        );
+        assert!(!has_fastcall_indirect(&m, "test"),
+            "non-fastcall function pointer should not have is_fastcall set");
+    }
 }

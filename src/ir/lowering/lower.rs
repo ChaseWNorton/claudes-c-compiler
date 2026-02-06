@@ -1022,6 +1022,7 @@ impl Lowerer {
                 param_struct_sizes,
                 param_struct_classes,
                 param_riscv_float_classes,
+                is_fastcall: self.fastcall_functions.contains(name),
             }
         } else {
             FuncSig {
@@ -1037,6 +1038,7 @@ impl Lowerer {
                 param_struct_sizes: Vec::new(),
                 param_struct_classes: Vec::new(),
                 param_riscv_float_classes: Vec::new(),
+                is_fastcall: self.fastcall_functions.contains(name),
             }
         };
         self.func_meta.sigs.insert(name.to_string(), sig);
