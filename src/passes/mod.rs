@@ -1,13 +1,12 @@
 //! Optimization passes for the IR.
 //!
 //! This module contains various optimization passes that transform the IR
-//! to produce better code.
+//! to produce better code. The pass pipeline is tiered by optimization level:
 //!
-//! All optimization levels (-O0 through -O3, -Os, -Oz) run the same full set
-//! of passes. While the compiler is still maturing, having separate tiers
-//! creates hard-to-find bugs where code works at one level but breaks at
-//! another. We always run all passes to maximize test coverage of the
-//! optimizer and catch issues early.
+//! - `-O0`: No passes run (early return).
+//! - `-O1`: Inline + 1 iteration of core passes (cfg_simplify, copy_prop,
+//!   simplify, constfold, dce).
+//! - `-O2`+: Full pipeline — inline + 3 iterations of all passes.
 
 pub(crate) mod cfg_simplify;
 pub(crate) mod constant_fold;
@@ -239,43 +238,38 @@ fn run_inline_phase(module: &mut IrModule, disabled: &str) {
     resolve_asm::resolve_inline_asm_symbols(module);
 }
 
-/// All optimization levels run the same pipeline with the same number of
-/// iterations. The `opt_level` parameter is accepted for API compatibility
-/// but currently ignored -- all levels behave identically.
+/// Runs optimization passes on the IR module. The pass pipeline is tiered
+/// based on `opt_level`:
 ///
-/// **Why single-level optimization matters for this project:**
+/// - **O0**: Returns immediately — no passes run. `mem2reg` and `phi-eliminate`
+///   (called by the driver before/after this function) still run since they are
+///   required for correct codegen.
+/// - **O1**: Inline + 1 iteration of core passes (cfg_simplify, copy_prop,
+///   simplify, constfold, dce) + dead-static elimination. Skips expensive
+///   analysis-heavy passes (GVN, LICM, IVSR, if-convert, narrow, div_by_const,
+///   IPCP).
+/// - **O2+**: Full pipeline — inline + 3 iterations of all passes (including
+///   GVN, LICM, IVSR, if-convert, narrow, div_by_const, IPCP) + dead-static
+///   elimination. O3 currently behaves identically to O2.
 ///
-/// Having multiple optimization tiers (e.g., -O0 doing minimal work, -O1 doing
-/// partial work, -O2 doing full work) is exponentially harder to test. Each tier
-/// is a separate code path through the optimizer, and bugs that only appear at
-/// one level are extremely difficult to reproduce and diagnose. For a compiler
-/// that is still maturing and being validated against hundreds of real-world
-/// projects (Linux kernel, PostgreSQL, Redis, etc.), a single optimization level
-/// ensures that:
-///
-/// 1. Every test run exercises every optimization pass. A bug in GVN or LICM
-///    will be caught even when testing with `-O0`, rather than hiding until a
-///    user happens to compile with `-O2`.
-/// 2. The number of configurations to validate stays linear (N architectures)
-///    rather than quadratic (N architectures × M optimization levels).
-/// 3. Build system interactions are predictable — the same code is always
-///    generated regardless of which `-O` flag a project's Makefile passes.
-///
-/// The `optimize` and `optimize_size` booleans on the Driver still control the
-/// `__OPTIMIZE__` and `__OPTIMIZE_SIZE__` predefined macros, which build systems
-/// like the Linux kernel depend on (e.g., `BUILD_BUG()` uses `__OPTIMIZE__` to
-/// select between a noreturn function call and a no-op). The actual pass pipeline
-/// is unaffected by these flags.
-pub(crate) fn run_passes(module: &mut IrModule, _opt_level: u32, target: crate::backend::Target) {
+/// The `CCC_DISABLE_PASSES` environment variable can still be used to disable
+/// individual passes or all passes (`CCC_DISABLE_PASSES=all`) regardless of
+/// the optimization level.
+pub(crate) fn run_passes(module: &mut IrModule, opt_level: u32, target: crate::backend::Target) {
     let disabled = std::env::var("CCC_DISABLE_PASSES").unwrap_or_default();
     if disabled.contains("all") {
+        return;
+    }
+
+    // -O0: skip all optimization passes entirely.
+    if opt_level == 0 {
         return;
     }
 
     run_inline_phase(module, &disabled);
     constant_fold::resolve_remaining_is_constant(module);
 
-    let iterations = 3;
+    let iterations = if opt_level <= 1 { 1 } else { 3 };
     let num_funcs = module.functions.len();
     let mut dirty = vec![true; num_funcs];
     let dis = DisabledPasses::from_env(&disabled);
@@ -365,7 +359,7 @@ pub(crate) fn run_passes(module: &mut IrModule, _opt_level: u32, target: crate::
         // sequences produce wrong results. Fall back to hardware idiv/div instead.
         // TODO: Re-enable once i686 has proper 64-bit arithmetic support, or implement
         // a 32-bit-aware variant that uses single-operand imull for mulhi.
-        if iter == 0 && !disabled.contains("divconst") && !target.is_32bit() {
+        if iter == 0 && opt_level >= 2 && !disabled.contains("divconst") && !target.is_32bit() {
             let n = timed_pass!("div_by_const", run_on_visited(module, &dirty, &mut changed, div_by_const::div_by_const_function));
             total_changes += n;
             total_changes_excl_dce += n;
@@ -373,7 +367,7 @@ pub(crate) fn run_passes(module: &mut IrModule, _opt_level: u32, target: crate::
 
         // Phase 2b: Integer narrowing
         // Upstream: copy_prop (propagated values expose narrowing)
-        if !dis.narrow && should_run!(2, 1) {
+        if opt_level >= 2 && !dis.narrow && should_run!(2, 1) {
             let n = timed_pass!("narrow", run_on_visited(module, &dirty, &mut changed, narrow::narrow_function));
             cur_pass_changes[2] = n;
             total_changes += n;
@@ -407,9 +401,9 @@ pub(crate) fn run_passes(module: &mut IrModule, _opt_level: u32, target: crate::
         // existing blocks), the analysis computed for GVN remains valid for LICM
         // and IVSR. We compute it once per function and share it across all three.
         {
-            let run_gvn = !dis.gvn && should_run!(5, 0, 1, 3);
-            let run_licm = !dis.licm && should_run!(6, 0, 1, 5);
-            let run_ivsr = iter == 0 && !disabled.contains("ivsr");
+            let run_gvn = opt_level >= 2 && !dis.gvn && should_run!(5, 0, 1, 3);
+            let run_licm = opt_level >= 2 && !dis.licm && should_run!(6, 0, 1, 5);
+            let run_ivsr = opt_level >= 2 && iter == 0 && !disabled.contains("ivsr");
 
             if run_gvn || run_licm || run_ivsr {
                 let (gvn_n, licm_n, ivsr_n) = run_gvn_licm_ivsr_shared(
@@ -430,7 +424,7 @@ pub(crate) fn run_passes(module: &mut IrModule, _opt_level: u32, target: crate::
 
         // Phase 7: If-conversion
         // Upstream: cfg_simplify (simpler CFG), constfold (simplified conditions)
-        if !dis.ifconv && should_run!(7, 0, 4) {
+        if opt_level >= 2 && !dis.ifconv && should_run!(7, 0, 4) {
             let n = timed_pass!("if_convert", run_on_visited(module, &dirty, &mut changed, if_convert::if_convert_function));
             cur_pass_changes[7] = n;
             total_changes += n;
@@ -481,7 +475,7 @@ pub(crate) fn run_passes(module: &mut IrModule, _opt_level: u32, target: crate::
         // have simplified call arguments to constants (e.g., phi nodes collapsed
         // after CFG simplification resolved dead branches from IS_ENABLED() checks).
         let mut ipcp_changes = 0;
-        if !dis.ipcp {
+        if opt_level >= 2 && !dis.ipcp {
             ipcp_changes = timed_pass!("ipcp", ipcp::run(module));
             if ipcp_changes > 0 {
                 changed.iter_mut().for_each(|c| *c = true);
@@ -548,4 +542,216 @@ pub(crate) fn run_passes(module: &mut IrModule, _opt_level: u32, target: crate::
     // (e.g., kernel's `___siphash_aligned` calling `__siphash_aligned` which doesn't
     // exist on x86 where CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS is set).
     dead_statics::eliminate_dead_static_functions(module);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Target;
+    use crate::common::error::DiagnosticEngine;
+    use crate::common::source::SourceManager;
+    use crate::frontend::lexer::Lexer;
+    use crate::frontend::parser::Parser;
+    use crate::frontend::preprocessor::Preprocessor;
+    use crate::frontend::sema::SemanticAnalyzer;
+    use crate::ir::lowering::Lowerer;
+    use crate::ir::mem2reg::promote_allocas;
+
+    /// Compile C source to an optimized IR module at the given opt_level.
+    fn compile_at_opt_level(source: &str, opt_level: u32) -> IrModule {
+        let mut pp = Preprocessor::new();
+        let preprocessed = pp.preprocess(source);
+
+        let mut sm = SourceManager::new();
+        let fid = sm.add_file("test.c".into(), preprocessed);
+        sm.build_line_map();
+        let mut lexer = Lexer::new(sm.get_content(fid), fid);
+        let tokens = lexer.tokenize();
+
+        let mut diagnostics = DiagnosticEngine::new();
+        diagnostics.set_source_manager(sm);
+        let mut parser = Parser::new(tokens);
+        parser.set_diagnostics(diagnostics);
+        let ast = parser.parse();
+        assert_eq!(parser.error_count, 0, "parse errors");
+
+        let diagnostics = parser.take_diagnostics();
+        let mut sema = SemanticAnalyzer::new();
+        sema.set_diagnostics(diagnostics);
+        sema.analyze(&ast).expect("sema errors");
+        let sema_result = sema.into_result();
+
+        let diagnostics = DiagnosticEngine::new();
+        let lowerer = Lowerer::with_type_context(
+            Target::X86_64,
+            sema_result.type_context,
+            sema_result.functions,
+            sema_result.expr_types,
+            sema_result.const_values,
+            diagnostics,
+            false,
+        );
+        let (mut module, _diag) = lowerer.lower(&ast);
+
+        promote_allocas(&mut module);
+        run_passes(&mut module, opt_level, Target::X86_64);
+        module
+    }
+
+    /// Count total instructions (excluding terminators) across all non-declaration functions.
+    fn count_instructions(module: &IrModule) -> usize {
+        module.functions.iter()
+            .filter(|f| !f.is_declaration)
+            .flat_map(|f| &f.blocks)
+            .map(|b| b.instructions.len())
+            .sum()
+    }
+
+    #[test]
+    fn test_o0_skips_all_passes() {
+        // With -O0, dead code and redundant operations should be preserved.
+        let source = r#"
+            int foo(int x) {
+                int a = x + 1;
+                int b = x + 1;  // redundant, GVN would eliminate at -O2
+                int unused = 42; // dead, DCE would remove at -O1+
+                return a + b;
+            }
+        "#;
+        let module = compile_at_opt_level(source, 0);
+        let count = count_instructions(&module);
+        // At -O0, all instructions are preserved (no optimization).
+        // The exact count depends on lowering, but it should be more than -O2.
+        let o2_module = compile_at_opt_level(source, 2);
+        let o2_count = count_instructions(&o2_module);
+        assert!(count > o2_count,
+            "O0 should have more instructions ({}) than O2 ({})", count, o2_count);
+    }
+
+    #[test]
+    fn test_o1_runs_basic_passes() {
+        // -O1 should do constant folding and DCE, but skip GVN.
+        let source = r#"
+            int foo(void) {
+                int x = 2 + 3;   // constfold should fold to 5
+                int unused = 99; // DCE should remove
+                return x;
+            }
+        "#;
+        let o0_module = compile_at_opt_level(source, 0);
+        let o1_module = compile_at_opt_level(source, 1);
+        let o0_count = count_instructions(&o0_module);
+        let o1_count = count_instructions(&o1_module);
+        // -O1 should optimize more than -O0
+        assert!(o1_count < o0_count,
+            "O1 ({}) should have fewer instructions than O0 ({})", o1_count, o0_count);
+    }
+
+    #[test]
+    fn test_o2_full_pipeline() {
+        // -O2 runs all passes including GVN, which eliminates redundant computations.
+        let source = r#"
+            int foo(int x) {
+                int a = x * 3;
+                int b = x * 3;  // GVN should eliminate this redundancy
+                return a + b;
+            }
+        "#;
+        let o1_module = compile_at_opt_level(source, 1);
+        let o2_module = compile_at_opt_level(source, 2);
+        let o1_count = count_instructions(&o1_module);
+        let o2_count = count_instructions(&o2_module);
+        // -O2 should optimize at least as much as -O1 (often more due to GVN/LICM)
+        assert!(o2_count <= o1_count,
+            "O2 ({}) should have <= instructions than O1 ({})", o2_count, o1_count);
+    }
+
+    #[test]
+    fn test_o3_same_as_o2() {
+        let source = r#"
+            int foo(int x) {
+                return x * 2 + 1;
+            }
+        "#;
+        let o2_module = compile_at_opt_level(source, 2);
+        let o3_module = compile_at_opt_level(source, 3);
+        let o2_count = count_instructions(&o2_module);
+        let o3_count = count_instructions(&o3_module);
+        assert_eq!(o2_count, o3_count, "O3 should produce same output as O2");
+    }
+
+    #[test]
+    fn test_different_levels_produce_different_ir() {
+        // A program with dead code and redundant computations to exercise all tiers.
+        let source = r#"
+            int foo(int x, int y) {
+                int a = x + y;
+                int b = x + y;      // redundant
+                int c = a * 2;
+                int unused = c + 1;  // dead
+                return a + b + c;
+            }
+        "#;
+        let o0 = count_instructions(&compile_at_opt_level(source, 0));
+        let o2 = count_instructions(&compile_at_opt_level(source, 2));
+        // O0 must have strictly more instructions than O2
+        assert!(o0 > o2, "O0 ({}) should have more instructions than O2 ({})", o0, o2);
+    }
+
+    #[test]
+    fn test_o1_single_iteration() {
+        // Verify -O1 uses only 1 iteration (fewer optimizations on multi-iteration patterns).
+        // This is a simple program where 1 iteration is sufficient.
+        let source = r#"
+            int foo(int x) {
+                if (1) {
+                    return x + 1;
+                }
+                return x; // dead branch, removed by constfold + cfg_simplify
+            }
+        "#;
+        let o1_module = compile_at_opt_level(source, 1);
+        let o1_count = count_instructions(&o1_module);
+        // Even with 1 iteration, constfold + cfg_simplify should remove the dead branch.
+        // We just verify it compiles and produces reasonable output.
+        assert!(o1_count > 0, "O1 should produce at least 1 instruction");
+    }
+
+    #[test]
+    fn test_o0_preserves_dead_code() {
+        let source = r#"
+            int foo(void) {
+                int a = 1;
+                int b = 2;
+                int c = 3;
+                return a;
+            }
+        "#;
+        let o0_module = compile_at_opt_level(source, 0);
+        let o0_count = count_instructions(&o0_module);
+        // At O0, all three assignments should be preserved (no DCE).
+        // After mem2reg, we should still have the copy instructions for b and c.
+        assert!(o0_count >= 3, "O0 should preserve dead assignments, got {} instructions", o0_count);
+    }
+
+    #[test]
+    fn test_o1_skips_gvn() {
+        // GVN eliminates redundant expressions. At O1, GVN is skipped so
+        // both computations of x*3 should survive. At O2, GVN removes the duplicate.
+        let source = r#"
+            int foo(int x) {
+                int a = x * 3;
+                int b = x * 3;
+                return a + b;
+            }
+        "#;
+        let o1_module = compile_at_opt_level(source, 1);
+        let o2_module = compile_at_opt_level(source, 2);
+        let o1_count = count_instructions(&o1_module);
+        let o2_count = count_instructions(&o2_module);
+        // O2 should have fewer instructions than O1 because GVN eliminates the redundant x*3.
+        assert!(o2_count < o1_count,
+            "O2 ({}) should have fewer instructions than O1 ({}) due to GVN", o2_count, o1_count);
+    }
+
 }

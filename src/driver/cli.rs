@@ -254,24 +254,39 @@ impl Driver {
 
                 // Optimization levels
                 //
-                // IMPORTANT: All optimization levels internally use the same pipeline
-                // (opt_level=2). This is intentional — see the comment in passes/mod.rs
-                // for the full rationale. In short: having multiple optimization tiers
-                // is exponentially harder to test, and while the compiler is maturing,
-                // running all passes at every level maximizes test coverage and prevents
-                // hard-to-find bugs that only surface at specific tiers.
+                // -O0: No optimization passes. mem2reg and phi-eliminate still run
+                //      (required for codegen). Keeps frame pointer for debuggability.
+                // -O1: Inline + 1 iteration of core passes (cfg_simplify, copy_prop,
+                //      simplify, constfold, dce). Skips expensive passes (GVN, LICM,
+                //      IVSR, if-convert, narrow, div_by_const, IPCP).
+                // -O2: Full optimization pipeline (3 iterations, all passes).
+                // -O3: Same as -O2 (reserved for future aggressive optimizations).
+                // -Os/-Oz: Same pipeline as -O2; optimize_size flag controls
+                //          __OPTIMIZE_SIZE__ macro for build system compatibility.
                 //
-                // The `optimize` and `optimize_size` booleans only control predefined
+                // The `optimize` and `optimize_size` booleans control predefined
                 // macros (__OPTIMIZE__, __OPTIMIZE_SIZE__), which build systems like
                 // the Linux kernel rely on.
                 "-O0" => {
-                    self.opt_level = 2; // internally always optimize
+                    self.opt_level = 0;
                     self.optimize = false;
                     self.optimize_size = false;
                     self.omit_frame_pointer = false;
                 }
-                "-O" | "-O1" | "-O2" | "-O3" => {
+                "-O" | "-O1" => {
+                    self.opt_level = 1;
+                    self.optimize = true;
+                    self.optimize_size = false;
+                    self.omit_frame_pointer = true;
+                }
+                "-O2" => {
                     self.opt_level = 2;
+                    self.optimize = true;
+                    self.optimize_size = false;
+                    self.omit_frame_pointer = true;
+                }
+                "-O3" => {
+                    self.opt_level = 3;
                     self.optimize = true;
                     self.optimize_size = false;
                     self.omit_frame_pointer = true;
