@@ -32,6 +32,15 @@ For each issue show:
 - Status: **AVAILABLE** or **CLAIMED** (with link to the PR)
 - A one-line summary of effort required (small/medium/large)
 
+## Step 3.5: Show chain status
+
+If any open PR title starts with `[CC]`, show the chain:
+```
+CHAIN:
+  Current tip: PR #<N> — <title>
+  New fix branches will automatically build on this chain.
+```
+
 ## Step 4: Recommend
 
 Suggest the highest-priority **available** (unclaimed) issue. Then ask which issue the user wants to work on.

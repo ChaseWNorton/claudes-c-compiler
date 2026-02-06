@@ -15,18 +15,35 @@ Claim and fix the next available issue from `anthropics/claudes-c-compiler`, the
 LOOP:
   1. Find next unclaimed issue (highest priority first)
   2. If none available → STOP (all done!)
-  3. CLAIM FIRST (branch + draft PR before any code)
-  4. Read issue body (= the complete work order)
-  5. Read the files mentioned in the issue
-  6. Implement the fix
-  7. Write tests as described in the issue
-  8. Verify: cargo build --release && cargo test --lib
-  9. Push
-  10. **MARK PR READY** (gh pr ready) — NOT OPTIONAL, a draft is invisible
-  11. GOTO 1
+  3. Detect chain tip (highest non-draft [CC] PR, or main)
+  4. CLAIM FIRST (branch off chain tip + draft PR with [CC] prefix)
+  5. Read issue body (= the complete work order)
+  6. Read the files mentioned in the issue
+  7. Implement the fix
+  8. Write tests as described in the issue
+  9. Verify: cargo build --release && cargo test --lib
+  10. Push
+  11. **MARK PR READY** (gh pr ready) — NOT OPTIONAL, a draft is invisible
+  12. Your [CC] PR is now the chain tip for the next iteration
+  13. GOTO 1
 ```
 
 **DO NOT STOP** after fixing one issue. **DO NOT ASK** the user what to do next. Claim the next issue and continue.
+
+## Chain Protocol
+
+Before creating each branch, detect the PR chain:
+
+```bash
+CHAIN_TIP=$(gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft --limit 100 \
+  | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last')
+CHAIN_TIP_NUMBER=$(echo "$CHAIN_TIP" | jq -r '.number // empty')
+```
+
+**If chain exists**: branch off the tip (`gh pr checkout $CHAIN_TIP_NUMBER --detach`), add `[CC]` to PR title.
+**If no chain**: branch off `main` (standard flow, no `[CC]`).
+**After your PR is marked ready**: your PR is the new chain tip. The next loop iteration should detect it.
 
 ## Quick Reference
 
@@ -36,23 +53,35 @@ LOOP:
 # Open issues
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 
-# Open PRs — titles contain [Fix #N] for claim detection
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
+# Open PRs — titles contain [Fix #N] for claim detection, [CC] for chain
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,headRefName,isDraft --limit 100
 ```
 
 An issue is **claimed** if any open PR title contains `[Fix #<number>]`.
 Subtract claimed from open. Pick highest priority: `[P0]` > `[P1]` > `[P2]` > `[P3]`.
 Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational).
 
-### Claim an issue (BEFORE writing any code)
+### Claim an issue (chain-aware, BEFORE writing any code)
 
+**If chain exists:**
+```bash
+gh pr checkout $CHAIN_TIP_NUMBER --detach
+git switch -c fix/issue-<NUMBER>
+git commit --allow-empty -m "WIP: claiming issue #<NUMBER>"
+git push -u origin fix/issue-<NUMBER>
+gh pr create --repo anthropics/claudes-c-compiler \
+  --title "[CC][Fix #<NUMBER>] <description>" \
+  --body "WIP — Fixes #<NUMBER>" --draft
+```
+
+**If no chain:**
 ```bash
 git switch main && git pull upstream main
 git switch -c fix/issue-<NUMBER>
 git commit --allow-empty -m "WIP: claiming issue #<NUMBER>"
 git push -u origin fix/issue-<NUMBER>
 gh pr create --repo anthropics/claudes-c-compiler \
-  --title "[Fix #<NUMBER>] <description from issue title, without priority/milestone codes>" \
+  --title "[Fix #<NUMBER>] <description>" \
   --body "WIP — Fixes #<NUMBER>" --draft
 ```
 

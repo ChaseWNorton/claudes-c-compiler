@@ -12,6 +12,7 @@ All `git push` goes to `origin`. All PRs go from `origin` to `upstream`.
 ## Contents
 
 - State model
+- PR chain
 - Claim protocol (step by step)
 - Release and abandonment
 - Race conditions and conflict resolution
@@ -36,6 +37,51 @@ Available ──claim──→ Claimed ──merge──→ Done
                         └──close PR──→ Available (abandoned)
 ```
 
+## PR Chain
+
+When PRs build on each other's work, they form a linear chain. Each PR's branch
+includes all commits from every earlier chain PR. The `[CC]` prefix in PR titles
+identifies chain membership.
+
+```
+main → [CC] PR #19 (infra) → [CC][Fix #20] PR #45 → [CC][Fix #21] PR #46 → ...
+```
+
+### Chain state
+
+| State | Signal |
+|-------|--------|
+| **Chain tip** | Highest-numbered non-draft `[CC]` PR |
+| **In chain** | Open `[CC]` PR |
+| **No chain** | No `[CC]` PRs exist — fall back to `main` |
+
+### Detecting the chain tip
+
+```bash
+gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft --limit 100 \
+  | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last'
+```
+
+This returns the chain tip PR (number, title, branch name). If empty, no chain exists.
+
+### Chain ordering
+
+Ordered by PR number (ascending). Each `[CC]` PR's branch must include all commits
+from lower-numbered `[CC]` PRs. This invariant is maintained by always branching off
+the current chain tip.
+
+### Why `[CC]`?
+
+Follows the existing title-code convention (`[P0]`, `[M1]`, `[Fix #N]`). Detectable
+from titles alone. Opt-in: PRs that don't build on the chain omit `[CC]`.
+
+### Speed merge
+
+The maintainer can merge top-to-bottom (each merge is trivial because the branch
+includes everything already in `main`). Or merge just the chain tip to get everything
+at once.
+
 ## Claim Protocol
 
 ### Step 1: Discover unclaimed work
@@ -54,14 +100,27 @@ Subtract claimed from open issues. Pick the highest-priority unclaimed one.
 Priority sort: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`, then unprefixed.
 Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational, doesn't affect priority).
 
-### Step 2: Switch to clean main
+### Step 2: Base off the chain tip (or main)
 
 ```bash
-git switch main
-git pull upstream main
+# Detect the chain tip
+CHAIN_TIP=$(gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft --limit 100 \
+  | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last')
+CHAIN_TIP_NUMBER=$(echo "$CHAIN_TIP" | jq -r '.number // empty')
 ```
 
-Always start from a fresh main. Never branch off another fix branch.
+If chain exists, check out the chain tip. If not, use main:
+
+```bash
+if [ -n "$CHAIN_TIP_NUMBER" ]; then
+  gh pr checkout $CHAIN_TIP_NUMBER --detach
+else
+  git switch main && git pull upstream main
+fi
+```
+
+**Never branch off another worker's fix branch directly** — always go through chain detection.
 
 ### Step 3: Create branch
 
@@ -76,11 +135,20 @@ Branch naming convention: `fix/issue-<NUMBER>`. This makes it easy to identify w
 ```bash
 git commit --allow-empty -m "WIP: claiming issue #<NUMBER>"
 git push -u origin fix/issue-<NUMBER>
+```
+
+If chain exists (CHAIN_TIP_NUMBER is set), add `[CC]` to the title:
+
+```bash
+# Chain-aware PR creation
 gh pr create --repo anthropics/claudes-c-compiler \
-  --title "[Fix #<NUMBER>] <description from issue title, without priority/milestone codes>" \
+  --title "[CC][Fix #<NUMBER>] <description>" \
   --body "$(cat <<'EOF'
 ## Summary
 Work in progress — implementing fix.
+
+## Chain
+- **Based on**: #<CHAIN_TIP_NUMBER>
 
 ## Changes
 (will be updated when complete)
@@ -91,6 +159,14 @@ Work in progress — implementing fix.
 Fixes #<NUMBER>
 EOF
 )" --draft
+```
+
+If no chain, standard PR creation (no `[CC]` prefix):
+
+```bash
+gh pr create --repo anthropics/claudes-c-compiler \
+  --title "[Fix #<NUMBER>] <description>" \
+  --body "WIP — Fixes #<NUMBER>" --draft
 ```
 
 The moment this PR exists, other workers will see `[Fix #<NUMBER>]` in the title and skip this issue.

@@ -48,6 +48,7 @@ All project state is readable from titles alone:
 [P2][M1] Description                — issue belonging to milestone M1
 [MILESTONE] M1: Description         — milestone definition
 [Fix #20] Description               — PR: claims issue #20
+[CC][Fix #20] Description           — PR: chain member + claims issue #20
 ```
 
 | State | How it looks on GitHub |
@@ -56,6 +57,30 @@ All project state is readable from titles alone:
 | **Claimed** | Open PR with `[Fix #N]` in the title |
 | **Done** | PR merged, issue auto-closed |
 | **Abandoned** | Close the PR to release the claim |
+
+### PR Chain (`[CC]` protocol)
+
+While upstream review is pending, fix PRs can build on each other using the `[CC]` chain.
+Each `[CC]` PR's branch includes all commits from lower-numbered `[CC]` PRs, so there are
+zero merge conflicts when merging top-to-bottom.
+
+**How it works:**
+- PRs with `[CC]` at the start of their title are part of the chain
+- Chain order = PR number (immutable, monotonic)
+- **Chain tip** = highest-numbered non-draft `[CC]` PR
+- New fix branches are created off the chain tip
+- All `[CC]` PRs target `main` — GitHub auto-shrinks diffs when chain PRs merge
+
+**Detect the chain tip:**
+```bash
+gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft --limit 100 \
+  | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last'
+```
+
+**Speed merge:** Maintainer can merge just the tip PR to get everything, or merge top-to-bottom for incremental review. Either way, zero conflicts.
+
+**If no chain exists:** fall back to branching off `main` (standard flow, no `[CC]` prefix).
 
 ### The Product Lifecycle
 

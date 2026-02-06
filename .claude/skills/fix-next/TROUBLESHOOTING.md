@@ -187,3 +187,48 @@ gh pr close <PR_NUMBER> --repo anthropics/claudes-c-compiler \
 ```
 
 Then continue the cycle with the next unclaimed issue.
+
+## Chain Issues
+
+### PR diff on GitHub shows too many files
+
+**Symptom**: Your PR shows changes from the entire chain, not just your work.
+
+**Fix**: This is expected. GitHub shows the diff relative to `main`, which includes all chain commits. When lower chain PRs merge, GitHub automatically recalculates your diff to show only your changes. No action needed.
+
+### Chain tip PR was denied
+
+**Symptom**: A `[CC]` PR you based your work on was closed without merging.
+
+**Fix**: Your PR still contains valid work. Cherry-pick your commits onto the new chain tip:
+```bash
+# Find the new chain tip (the PR before the denied one)
+NEW_TIP_NUMBER=$(gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft --limit 100 \
+  | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last | .number // empty')
+
+# Check out the new tip and rebuild your branch
+gh pr checkout $NEW_TIP_NUMBER --detach
+git switch -c fix/issue-<NUMBER>-rebased
+git cherry-pick <your-commit-hashes>
+git push --force-with-lease origin fix/issue-<NUMBER>
+```
+
+### Two workers created `[CC]` PRs off the same tip
+
+**Symptom**: Two PRs have `[CC]` but neither includes the other's commits.
+
+**Fix**: Lower PR number wins (created first). The higher-numbered PR must rebase:
+```bash
+gh pr checkout <LOWER_NUMBER> --detach
+git rebase --onto HEAD <old-chain-tip-branch> fix/issue-<YOUR_NUMBER>
+git push --force-with-lease origin fix/issue-<YOUR_NUMBER>
+```
+
+### Chain detection returns nothing but `[CC]` PRs exist
+
+**Symptom**: The `jq` filter returns empty.
+
+**Fix**: Check if all `[CC]` PRs are drafts (drafts are excluded from tip detection).
+Also verify the `[CC]` prefix is exactly at the start of the title — whitespace before
+`[CC]` causes the regex to not match.

@@ -18,10 +18,28 @@ Triage the CCC issue backlog — analyze, prioritize, and manage.
    - Duplicate issues
    - Issues missing required information
 
-4. **Display the backlog health report**:
+4. **Check chain health** (if `[CC]` PRs exist):
+   ```bash
+   # Detect chain
+   gh pr list --repo anthropics/claudes-c-compiler --state open \
+     --json number,title,headRefName,isDraft --limit 100 \
+     | jq '[.[] | select(.title | test("^\\[CC\\]"))]'
+   ```
+   Report:
+   - **Chain integrity**: all `[CC]` PRs present and ordered by PR number
+   - **Stale chain tip**: tip PR is draft (no one can build on it) or has no activity in 24+ hours
+   - **Broken chain**: a `[CC]` PR was closed/denied mid-chain — downstream PRs need rebase
+   - **Orphaned chain PRs**: `[CC]` PRs whose base branch no longer exists
+   - **Chain length**: if chain is very long (10+ PRs), recommend the maintainer speed-merge the tip
+
+5. **Display the backlog health report**:
    ```
    BACKLOG HEALTH REPORT
    =====================
+   CHAIN:
+     Status: healthy | broken | stale tip
+     Length: X PRs (#N → #N → ... → #N)
+     Tip: PR #N — <title>
    NEEDS TRIAGE: ...
    STALE CLAIMS: ...
    PROGRESS: Open XX | Claimed XX | Available XX | Completed XX
@@ -29,4 +47,4 @@ Triage the CCC issue backlog — analyze, prioritize, and manage.
    RECOMMENDATIONS: ...
    ```
 
-5. **Take action** — for each recommendation, ask the user if they want to proceed (reprioritize, close stale PRs, close duplicates).
+6. **Take action** — for each recommendation, ask the user if they want to proceed (reprioritize, close stale PRs, close duplicates, fix chain issues).

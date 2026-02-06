@@ -18,7 +18,7 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 
    # Claimed issue numbers (parse [Fix #N] from PR titles)
-   gh pr list --repo anthropics/claudes-c-compiler --state open --json title --limit 50
+   gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
    ```
    An issue is claimed if any open PR title contains `[Fix #<number>]`.
    Pick the highest-priority unclaimed issue: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`.
@@ -29,7 +29,28 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    gh issue view <NUMBER> --repo anthropics/claudes-c-compiler
    ```
 
-3. **CLAIM FIRST** — before writing any code, create branch and draft PR:
+3. **Detect the chain and CLAIM FIRST** — before writing any code:
+
+   ```bash
+   # Detect chain tip (highest non-draft [CC] PR)
+   CHAIN_TIP=$(gh pr list --repo anthropics/claudes-c-compiler --state open \
+     --json number,title,headRefName,isDraft --limit 100 \
+     | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last')
+   CHAIN_TIP_NUMBER=$(echo "$CHAIN_TIP" | jq -r '.number // empty')
+   ```
+
+   **If chain exists** (`CHAIN_TIP_NUMBER` is set):
+   ```bash
+   gh pr checkout $CHAIN_TIP_NUMBER --detach
+   git switch -c fix/issue-<NUMBER>
+   git commit --allow-empty -m "WIP: claiming issue #<NUMBER>"
+   git push -u origin fix/issue-<NUMBER>
+   gh pr create --repo anthropics/claudes-c-compiler \
+     --title "[CC][Fix #<NUMBER>] <description from issue title, without priority/milestone codes>" \
+     --body "WIP — Fixes #<NUMBER>" --draft
+   ```
+
+   **If no chain**:
    ```bash
    git switch main && git pull upstream main
    git switch -c fix/issue-<NUMBER>
@@ -65,7 +86,9 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    Then update the PR body with Summary, Changes, and Test plan sections. End body with `Fixes #<NUMBER>`.
    **A draft PR that stays draft is invisible to reviewers. The fix is NOT done until the PR is marked ready.**
 
-9. **Immediately loop** back to step 1. Do not stop or ask the user.
+   **Note: Once marked ready, your `[CC]` PR becomes the new chain tip. The next loop iteration will detect it and branch off it.**
+
+10. **Immediately loop** back to step 1. Do not stop or ask the user.
 
 ## Output
 

@@ -13,6 +13,19 @@ gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title
 ```
 If any PR title contains `[Fix #$ARGUMENTS]`, it's already claimed. Tell the user and suggest picking another issue.
 
+## Phase 0: Detect the chain
+
+Find the latest non-draft `[CC]` PR to base your branch on:
+
+```bash
+CHAIN_TIP=$(gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft --limit 100 \
+  | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last')
+CHAIN_TIP_NUMBER=$(echo "$CHAIN_TIP" | jq -r '.number // empty')
+```
+
+If `CHAIN_TIP_NUMBER` is empty, no chain exists — base off `main`.
+
 ## Phase 1: Claim (before writing any code)
 
 1. **Fetch the issue title** for the PR:
@@ -20,7 +33,28 @@ If any PR title contains `[Fix #$ARGUMENTS]`, it's already claimed. Tell the use
    gh issue view $ARGUMENTS --repo anthropics/claudes-c-compiler --json title --jq '.title'
    ```
 
-2. **Create branch and draft PR**:
+2. **Create branch and draft PR** (chain-aware):
+
+   **If chain exists** (`CHAIN_TIP_NUMBER` is set):
+   ```bash
+   gh pr checkout $CHAIN_TIP_NUMBER --detach
+   git switch -c fix/issue-$ARGUMENTS
+   git commit --allow-empty -m "WIP: claiming issue #$ARGUMENTS"
+   git push -u origin fix/issue-$ARGUMENTS
+   gh pr create --repo anthropics/claudes-c-compiler \
+     --title "[CC][Fix #$ARGUMENTS] <description from issue title without priority codes>" \
+     --body "$(cat <<'EOF'
+   WIP — implementing fix.
+
+   ## Chain
+   - **Based on**: #CHAIN_TIP_NUMBER
+
+   Fixes #$ARGUMENTS
+   EOF
+   )" --draft
+   ```
+
+   **If no chain**:
    ```bash
    git switch main && git pull upstream main
    git switch -c fix/issue-$ARGUMENTS
@@ -30,6 +64,7 @@ If any PR title contains `[Fix #$ARGUMENTS]`, it's already claimed. Tell the use
      --title "[Fix #$ARGUMENTS] <description from issue title without priority codes>" \
      --body "WIP — Fixes #$ARGUMENTS" --draft
    ```
+
    The draft PR is your claim. The `[Fix #$ARGUMENTS]` in the title lets other workers detect it from titles alone.
 
 ## Phase 2: Fix
@@ -89,7 +124,7 @@ If any PR title contains `[Fix #$ARGUMENTS]`, it's already claimed. Tell the use
 
 ## PR requirements
 
-- Title: `[Fix #$ARGUMENTS] <description>`
+- Title: `[CC][Fix #$ARGUMENTS] <description>` (if chain) or `[Fix #$ARGUMENTS] <description>` (if no chain)
 - Body ends with: `Fixes #$ARGUMENTS`
 - All existing tests pass + new tests for the fix
 - Clean build with no new warnings

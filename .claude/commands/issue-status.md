@@ -26,6 +26,10 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 ## Step 3: Display dashboard
 
 ```
+CHAIN:
+  #19 → #45 → #46                    (3 PRs, tip: #46)
+  New [CC] branches base off #46
+
 MILESTONES:
   M1: Core Diagnostic Coverage (#42)    — 2/6 done
   M2: CLI Reliability (#43)             — needs decomposition (0 sub-issues)

@@ -38,8 +38,8 @@ Titles only — no bodies needed for routing:
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
 gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# PRs (open + merged) — titles contain [Fix #N] for claim detection
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
+# PRs (open + merged) — titles contain [Fix #N] for claim detection, [CC] for chain
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,headRefName,isDraft --limit 100
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
 ```
 
@@ -49,6 +49,8 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 - **Milestone membership**: `[M<N>]` in issue title
 - **Milestone definitions**: `[MILESTONE] M<N>:` in issue title
 - **Claims**: `[Fix #<N>]` in PR title — issue #N is claimed
+- **Chain**: `[CC]` at start of PR title — PR is part of the chain
+- **Chain tip**: highest-numbered non-draft `[CC]` PR
 - **Unprioritized**: issue title has no `[P<N>]` code → needs triage
 
 ### Compute milestone progress
@@ -58,6 +60,24 @@ For each open `[MILESTONE]` issue, count `[M<N>]` issues across open + closed ti
 - Zero `[M<N>]` issues → needs decomposition
 - Some open, some closed → in progress (X/Y)
 - All closed → complete
+
+### Detect PR chain
+
+Find all non-draft `[CC]` PRs, sorted by PR number. The chain tip is the highest one:
+
+```bash
+# Chain tip = highest non-draft [CC] PR
+CHAIN_TIP=$(echo "$OPEN_PRS" | jq -r '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)] | sort_by(.number) | last')
+CHAIN_TIP_NUMBER=$(echo "$CHAIN_TIP" | jq -r '.number // empty')
+```
+
+If chain exists, show it before the menu:
+```
+CHAIN:
+  Tip: PR #46 — [CC][Fix #21] Detect duplicate default labels
+  Length: 3 PRs (#19 → #45 → #46)
+  New branches will be based off PR #46
+```
 
 ## Step 3: Present the menu
 
@@ -123,10 +143,11 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 
 The claim and the fix are separate phases:
 
-1. **Claim** — create branch, push to `origin` (your fork), open draft PR to `upstream` with title `[Fix #<N>] <description>`. This is the lock. Do this BEFORE writing any code.
-2. **Fix** — read the issue body (work order), read the source files, implement the fix, write tests, verify build.
-3. **Ship** — commit, push, **MUST mark PR ready** (`gh pr ready`), update PR body with summary/changes/test plan. A draft PR that stays draft is invisible to reviewers — the fix is not done until it's marked ready.
-4. **Loop** — go back to step 1 with the next unclaimed issue.
+1. **Detect chain** — find the chain tip (highest non-draft `[CC]` PR). If none, use `main`.
+2. **Claim** — branch off chain tip (or main), push to `origin`, open draft PR to `upstream` with title `[CC][Fix #<N>] <description>` (or `[Fix #<N>]` if no chain). This is the lock. Do this BEFORE writing any code.
+3. **Fix** — read the issue body (work order), read the source files, implement the fix, write tests, verify build.
+4. **Ship** — commit, push, **MUST mark PR ready** (`gh pr ready`), update PR body with summary/changes/test plan. A draft PR that stays draft is invisible to reviewers — the fix is not done until it's marked ready. Once ready, your `[CC]` PR becomes the new chain tip.
+5. **Loop** — go back to step 1 with the next unclaimed issue.
 
 ### PLAN flow (auto-chains)
 
