@@ -157,6 +157,12 @@ pub struct SemanticAnalyzer {
     local_declarations: Vec<(String, Span)>,
     /// Set of variable names referenced in expressions within the current function.
     used_variables: FxHashSet<String>,
+    /// Global variables that have been defined with an initializer.
+    /// Used to detect duplicate definitions (C11 §6.9p5: "there shall be
+    /// exactly one external definition for each identifier").
+    /// Tentative definitions (no initializer) are allowed to repeat and
+    /// merge with an actual definition per C11 §6.9.2p2.
+    defined_globals: FxHashSet<String>,
 }
 
 impl SemanticAnalyzer {
@@ -172,6 +178,7 @@ impl SemanticAnalyzer {
             current_return_type: None,
             local_declarations: Vec::new(),
             used_variables: FxHashSet::default(),
+            defined_globals: FxHashSet::default(),
         };
         // Pre-populate with common implicit declarations
         analyzer.declare_implicit_functions();
@@ -601,6 +608,20 @@ impl SemanticAnalyzer {
                     }
                     self.diagnostics.borrow_mut().emit(&diag);
                 }
+            }
+
+            // C11 §6.9p5: detect duplicate external definitions.
+            // A global with an initializer is a definition. Two definitions
+            // of the same name are an error. Tentative definitions (no init)
+            // are allowed to repeat and merge with one actual definition.
+            if _is_global && !decl.is_extern() && !init_decl.name.is_empty()
+                && init_decl.init.is_some()
+                && !self.defined_globals.insert(init_decl.name.clone())
+            {
+                self.diagnostics.borrow_mut().error(
+                    format!("redefinition of '{}'", init_decl.name),
+                    init_decl.span,
+                );
             }
 
             self.symbol_table.declare(Symbol {
@@ -2800,6 +2821,44 @@ mod tests {
     #[test]
     fn static_func_accepted() {
         assert_eq!(sema_errors("static int foo(void) { return 42; } int main(void) { return foo(); }"), 0);
+    }
+
+    // ---- tentative definitions (C11 §6.9.2) ----
+
+    #[test]
+    fn tentative_then_actual_definition() {
+        // int x; is a tentative definition, int x = 5; is the actual — merge is valid
+        assert_eq!(sema_errors("int x; int x = 5; int main(void) { return x; }"), 0);
+    }
+
+    #[test]
+    fn two_tentative_definitions() {
+        // Multiple tentative definitions of the same variable are valid
+        assert_eq!(sema_errors("int x; int x; int main(void) { return x; }"), 0);
+    }
+
+    #[test]
+    fn actual_then_tentative_definition() {
+        // Definition followed by tentative — valid, doesn't overwrite
+        assert_eq!(sema_errors("int x = 5; int x; int main(void) { return x; }"), 0);
+    }
+
+    #[test]
+    fn duplicate_definitions_error() {
+        // Two actual definitions → error (C11 §6.9p5)
+        assert!(sema_errors("int x = 1; int x = 2;") > 0);
+    }
+
+    #[test]
+    fn extern_then_tentative_then_actual() {
+        // extern + tentative + actual definition — all valid
+        assert_eq!(sema_errors("extern int x; int x; int x = 5; int main(void) { return x; }"), 0);
+    }
+
+    #[test]
+    fn tentative_different_types_accepted() {
+        // Two tentative definitions of arrays — valid (both are tentative)
+        assert_eq!(sema_errors("int arr[10]; int arr[10]; int main(void) { return arr[0]; }"), 0);
     }
 
     // ---- const assignment: direct variable ----
