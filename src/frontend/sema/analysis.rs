@@ -1398,6 +1398,7 @@ impl SemanticAnalyzer {
                 if *op == BinOp::Sub {
                     self.check_pointer_subtraction_compat(lhs, rhs, *span);
                 }
+                self.check_const_expr_warnings(op, lhs, rhs, *span);
             }
             Expr::UnaryOp(_, operand, _) => {
                 self.analyze_expr(operand);
@@ -1643,6 +1644,129 @@ impl SemanticAnalyzer {
     /// Check that pointer subtraction operands have compatible pointee types.
     /// C11 6.5.6p3: both operands must point to compatible types.
     /// Emits an error if both operands are pointers to different struct/union types.
+    /// Check for problematic constant expressions: overflow, division by zero,
+    /// shift count >= type width.  Only fires when both operands are compile-time
+    /// constants so we don't warn about runtime-computed values.
+    fn check_const_expr_warnings(&self, op: &BinOp, lhs: &Expr, rhs: &Expr, span: Span) {
+        use crate::common::error::WarningKind;
+
+        let evaluator = SemaConstEval {
+            types: &self.result.type_context,
+            symbols: &self.symbol_table,
+            functions: &self.result.functions,
+            const_values: Some(&self.result.const_values),
+            expr_types: Some(&self.result.expr_types),
+        };
+
+        // We need both sides to be constant to issue useful warnings.
+        let lv = match evaluator.eval_const_expr(lhs) {
+            Some(v) => v,
+            None => return,
+        };
+        let rv = match evaluator.eval_const_expr(rhs) {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Division / modulo by zero
+        if matches!(op, BinOp::Div | BinOp::Mod) {
+            if rv.to_i64() == Some(0) {
+                self.diagnostics.borrow_mut().warning_with_kind(
+                    "division by zero in constant expression",
+                    span,
+                    WarningKind::DivByZero,
+                );
+                return;
+            }
+        }
+
+        // Shift count >= type width
+        if matches!(op, BinOp::Shl | BinOp::Shr) {
+            if let Some(shift_amount) = rv.to_i64() {
+                // Determine width from LHS type
+                let checker = super::type_checker::ExprTypeChecker {
+                    symbols: &self.symbol_table,
+                    types: &self.result.type_context,
+                    functions: &self.result.functions,
+                    expr_types: Some(&self.result.expr_types),
+                };
+                let width = checker.infer_expr_ctype(lhs)
+                    .map(|ct| ct.size_ctx(&*self.result.type_context.borrow_struct_layouts()) * 8)
+                    .unwrap_or(32)  // default to int width
+                    .max(32) as i64; // integer promotion: minimum 32 bits
+                if shift_amount < 0 || shift_amount >= width {
+                    self.diagnostics.borrow_mut().warning_with_kind(
+                        format!(
+                            "shift count {} is {} the width of type ({} bits)",
+                            shift_amount,
+                            if shift_amount < 0 { "negative for" } else { ">= than" },
+                            width,
+                        ),
+                        span,
+                        WarningKind::ShiftCountOverflow,
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Integer overflow in add/sub/mul
+        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
+            if let (Some(l), Some(r)) = (lv.to_i64(), rv.to_i64()) {
+                // Determine the result type to know signed vs unsigned and width
+                let checker = super::type_checker::ExprTypeChecker {
+                    symbols: &self.symbol_table,
+                    types: &self.result.type_context,
+                    functions: &self.result.functions,
+                    expr_types: Some(&self.result.expr_types),
+                };
+                let lhs_ctype = checker.infer_expr_ctype(lhs);
+                let rhs_ctype = checker.infer_expr_ctype(rhs);
+                let is_unsigned = lhs_ctype.as_ref().is_some_and(|ct| ct.is_unsigned())
+                    || rhs_ctype.as_ref().is_some_and(|ct| ct.is_unsigned());
+                // Unsigned overflow is well-defined in C, only warn on signed
+                if is_unsigned {
+                    return;
+                }
+                let lhs_size = lhs_ctype.as_ref()
+                    .map(|ct| ct.size_ctx(&*self.result.type_context.borrow_struct_layouts()))
+                    .unwrap_or(4).max(4);
+                let rhs_size = rhs_ctype.as_ref()
+                    .map(|ct| ct.size_ctx(&*self.result.type_context.borrow_struct_layouts()))
+                    .unwrap_or(4).max(4);
+                let result_size = lhs_size.max(rhs_size);
+
+                let overflows = if result_size <= 4 {
+                    // 32-bit signed: check with i32 overflow
+                    let l32 = l as i32;
+                    let r32 = r as i32;
+                    match op {
+                        BinOp::Add => l32.checked_add(r32).is_none(),
+                        BinOp::Sub => l32.checked_sub(r32).is_none(),
+                        BinOp::Mul => l32.checked_mul(r32).is_none(),
+                        _ => false,
+                    }
+                } else {
+                    // 64-bit signed
+                    match op {
+                        BinOp::Add => l.checked_add(r).is_none(),
+                        BinOp::Sub => l.checked_sub(r).is_none(),
+                        BinOp::Mul => l.checked_mul(r).is_none(),
+                        _ => false,
+                    }
+                };
+
+                if overflows {
+                    self.diagnostics.borrow_mut().warning_with_kind(
+                        "integer overflow in constant expression",
+                        span,
+                        WarningKind::Overflow,
+                    );
+                }
+            }
+        }
+    }
+
     fn check_pointer_subtraction_compat(&self, lhs: &Expr, rhs: &Expr, span: Span) {
         let checker = super::type_checker::ExprTypeChecker {
             symbols: &self.symbol_table,
@@ -2053,5 +2177,108 @@ impl type_builder::TypeConvertContext for SemanticAnalyzer {
 impl Default for SemanticAnalyzer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::lexer::scan::Lexer;
+    use crate::frontend::parser::parse::Parser;
+
+    /// Helper: parse + sema the given C source, return (error_count, warning_count).
+    fn sema_counts(src: &str) -> (usize, usize) {
+        let tokens = Lexer::new(src, 0).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse();
+        let mut analyzer = SemanticAnalyzer::new();
+        let _ = analyzer.analyze(&ast);
+        let diag = analyzer.take_diagnostics();
+        (diag.error_count(), diag.warning_count())
+    }
+
+    // ---- integer overflow ----
+
+    #[test]
+    fn overflow_add_warns() {
+        let (_, w) = sema_counts("int main(void) { int x = 2147483647 + 1; return x; }");
+        assert!(w > 0, "should warn about signed overflow in addition");
+    }
+
+    #[test]
+    fn overflow_sub_warns() {
+        let (_, w) = sema_counts("int main(void) { int x = -2147483647 - 2; return x; }");
+        assert!(w > 0, "should warn about signed overflow in subtraction");
+    }
+
+    #[test]
+    fn overflow_mul_warns() {
+        let (_, w) = sema_counts("int main(void) { int x = 2147483647 * 2; return x; }");
+        assert!(w > 0, "should warn about signed overflow in multiplication");
+    }
+
+    #[test]
+    fn no_overflow_clean() {
+        let (_, w) = sema_counts("int main(void) { int x = 100 + 200; return x; }");
+        assert_eq!(w, 0, "no overflow should produce no warnings");
+    }
+
+    #[test]
+    fn unsigned_wrap_no_warning() {
+        let (_, w) = sema_counts("int main(void) { unsigned x = 4294967295u + 1u; return (int)x; }");
+        assert_eq!(w, 0, "unsigned overflow is defined, should not warn");
+    }
+
+    // ---- division by zero ----
+
+    #[test]
+    fn div_by_zero_warns() {
+        let (_, w) = sema_counts("int main(void) { int x = 1 / 0; return x; }");
+        assert!(w > 0, "should warn about division by zero");
+    }
+
+    #[test]
+    fn mod_by_zero_warns() {
+        let (_, w) = sema_counts("int main(void) { int x = 5 % 0; return x; }");
+        assert!(w > 0, "should warn about modulo by zero");
+    }
+
+    #[test]
+    fn div_nonzero_clean() {
+        let (_, w) = sema_counts("int main(void) { int x = 10 / 2; return x; }");
+        assert_eq!(w, 0, "division by non-zero should not warn");
+    }
+
+    // ---- shift count overflow ----
+
+    #[test]
+    fn shift_ge_width_warns() {
+        let (_, w) = sema_counts("int main(void) { int x = 1 << 32; return x; }");
+        assert!(w > 0, "shift count >= type width should warn");
+    }
+
+    #[test]
+    fn shift_negative_warns() {
+        let (_, w) = sema_counts("int main(void) { int x = 1 << -1; return x; }");
+        assert!(w > 0, "negative shift count should warn");
+    }
+
+    #[test]
+    fn shift_exact_width_warns() {
+        // long long is 64-bit, shift by 64 should warn
+        let (_, w) = sema_counts("int main(void) { long long x = 1LL << 64; return (int)x; }");
+        assert!(w > 0, "shift count == type width should warn");
+    }
+
+    #[test]
+    fn shift_valid_clean() {
+        let (_, w) = sema_counts("int main(void) { int x = 1 << 16; return x; }");
+        assert_eq!(w, 0, "valid shift should not warn");
+    }
+
+    #[test]
+    fn shift_31_valid_clean() {
+        let (_, w) = sema_counts("int main(void) { int x = 1 << 31; return x; }");
+        assert_eq!(w, 0, "shift by 31 (max valid for int) should not warn");
     }
 }

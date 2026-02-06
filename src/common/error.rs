@@ -106,6 +106,15 @@ pub enum WarningKind {
     /// Sizeof or pointer arithmetic on function types or void.
     /// GCC flag: -Wpointer-arith
     PointerArith,
+    /// Integer overflow in a constant expression.
+    /// GCC flag: -Woverflow
+    Overflow,
+    /// Division by zero in a constant expression.
+    /// GCC flag: -Wdiv-by-zero
+    DivByZero,
+    /// Shift count >= width of type.
+    /// GCC flag: -Wshift-count-overflow
+    ShiftCountOverflow,
     // Future categories (add as warnings are implemented):
     // UnusedVariable,         // -Wunused-variable
     // UnusedFunction,         // -Wunused-function
@@ -126,6 +135,9 @@ impl WarningKind {
             WarningKind::Cpp => "cpp",
             WarningKind::ReturnType => "return-type",
             WarningKind::PointerArith => "pointer-arith",
+            WarningKind::Overflow => "overflow",
+            WarningKind::DivByZero => "div-by-zero",
+            WarningKind::ShiftCountOverflow => "shift-count-overflow",
         }
     }
 
@@ -139,6 +151,9 @@ impl WarningKind {
             "cpp" => Some(WarningKind::Cpp),
             "return-type" => Some(WarningKind::ReturnType),
             "pointer-arith" => Some(WarningKind::PointerArith),
+            "overflow" => Some(WarningKind::Overflow),
+            "div-by-zero" => Some(WarningKind::DivByZero),
+            "shift-count-overflow" => Some(WarningKind::ShiftCountOverflow),
             _ => None,
         }
     }
@@ -150,6 +165,9 @@ impl WarningKind {
             WarningKind::Cpp,
             WarningKind::ReturnType,
             WarningKind::PointerArith,
+            WarningKind::Overflow,
+            WarningKind::DivByZero,
+            WarningKind::ShiftCountOverflow,
             // WarningKind::Undeclared is now a hard error, not a warning
         ]
     }
@@ -168,6 +186,9 @@ impl WarningKind {
             WarningKind::Cpp,
             WarningKind::ReturnType,
             WarningKind::PointerArith,
+            WarningKind::Overflow,
+            WarningKind::DivByZero,
+            WarningKind::ShiftCountOverflow,
         ]
     }
 }
