@@ -142,6 +142,10 @@ pub struct SemanticAnalyzer {
     /// Each entry maps a case constant value to the span of its first occurrence,
     /// enabling duplicate detection with "previous case defined here" notes.
     switch_cases: Vec<FxHashMap<i64, Span>>,
+    /// Stack tracking whether the current switch has a default label.
+    /// Each entry is `Some(span)` if a default was seen, `None` if not.
+    /// Pushed on switch entry, popped on switch exit.
+    switch_default_spans: Vec<Option<Span>>,
 }
 
 impl SemanticAnalyzer {
@@ -153,6 +157,7 @@ impl SemanticAnalyzer {
             diagnostics: RefCell::new(DiagnosticEngine::new()),
             defined_structs: RefCell::new(FxHashSet::default()),
             switch_cases: Vec::new(),
+            switch_default_spans: Vec::new(),
         };
         // Pre-populate with common implicit declarations
         analyzer.declare_implicit_functions();
@@ -930,8 +935,10 @@ impl SemanticAnalyzer {
                     }
                 }
                 self.switch_cases.push(FxHashMap::default());
+                self.switch_default_spans.push(None);
                 self.analyze_stmt(body);
                 self.switch_cases.pop();
+                self.switch_default_spans.pop();
             }
             Stmt::Case(expr, body, span) => {
                 self.analyze_expr(expr);
@@ -959,7 +966,20 @@ impl SemanticAnalyzer {
                 self.analyze_expr(high);
                 self.analyze_stmt(body);
             }
-            Stmt::Default(body, _) => {
+            Stmt::Default(body, span) => {
+                // C11 6.8.4.2p2: There may be at most one default label in
+                // a switch statement.
+                if let Some(prev_span) = self.switch_default_spans.last().copied().flatten() {
+                    let diag = crate::common::error::Diagnostic::error(
+                        "multiple default labels in one switch"
+                    ).with_span(*span)
+                     .with_note(crate::common::error::Diagnostic::note(
+                        "previous default label was here"
+                     ).with_span(prev_span));
+                    self.diagnostics.borrow_mut().emit(&diag);
+                } else if let Some(slot) = self.switch_default_spans.last_mut() {
+                    *slot = Some(*span);
+                }
                 self.analyze_stmt(body);
             }
             Stmt::Label(_, body, _) => {
@@ -2388,7 +2408,6 @@ impl Default for SemanticAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-<<<<<<< HEAD
     use crate::frontend::lexer::scan::Lexer;
     use crate::frontend::parser::parse::Parser;
 
@@ -2825,5 +2844,35 @@ mod tests {
         assert!(sema_errors(
             "int f(void) { int x = 0; switch(x) { case -1: break; case -1: break; } return 0; }",
         ) > 0, "expected error for duplicate negative case");
+    }
+
+    // ---- duplicate default labels (C11 §6.8.4.2p2) ----
+
+    #[test]
+    fn duplicate_default_label() {
+        assert!(sema_errors(
+            "int f(void) { switch(0) { default: break; default: break; } return 0; }"
+        ) > 0, "expected error for duplicate default");
+    }
+
+    #[test]
+    fn single_default_ok() {
+        assert_eq!(sema_errors(
+            "int f(void) { switch(0) { case 1: break; default: break; } return 0; }"
+        ), 0, "single default should not produce errors");
+    }
+
+    #[test]
+    fn nested_switch_separate_defaults() {
+        assert_eq!(sema_errors(
+            "int f(void) { switch(0) { default: switch(1) { default: break; } break; } return 0; }"
+        ), 0, "nested switches should each allow their own default");
+    }
+
+    #[test]
+    fn three_defaults_two_errors() {
+        assert!(sema_errors(
+            "int f(void) { switch(0) { default: break; default: break; default: break; } return 0; }"
+        ) >= 2, "expected at least 2 errors for 3 defaults");
     }
 }
