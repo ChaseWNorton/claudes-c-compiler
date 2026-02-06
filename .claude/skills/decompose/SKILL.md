@@ -52,11 +52,14 @@ Don't create issues that already exist. If an existing issue partially overlaps,
 
 ### 5. File each issue
 
-Title format: `[P<N>][M<N>] <Short description>` — priority code + milestone code.
+Title format: `[OPEN][P<N>][M<N>] <Short description>` — lifecycle state + priority code + milestone code.
+
+The `[OPEN]` tag marks the issue as validated and ready for pickup. Agents will see this
+and know they can proceed to `[REVIEWING]` → `[WIP]` without extra validation.
 
 ```bash
 gh issue create --repo anthropics/claudes-c-compiler \
-  --title "[P<N>][M<N>] <Short description>" \
+  --title "[OPEN][P<N>][M<N>] <Short description>" \
   --body "$(cat <<'ISSUE'
 ## Problem
 <specific problem>

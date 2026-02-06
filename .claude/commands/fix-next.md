@@ -27,12 +27,39 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    Pick the highest-priority unclaimed issue: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`.
    If no unclaimed issues remain, report that and stop.
 
-2. **Fetch the issue details** (this is your complete work order):
+2. **Fetch and VALIDATE the issue** (BEFORE creating any branch or PR):
    ```bash
    gh issue view <NUMBER> --repo anthropics/claudes-c-compiler
    ```
 
-3. **Detect the chain and CLAIM FIRST** — before writing any code:
+   **Mark as REVIEWING:**
+   ```bash
+   gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+     --title "[REVIEWING]<rest of title without [OPEN]>"
+   gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+     --body "Reviewing: investigating whether this issue is valid."
+   ```
+
+   Read the source files mentioned in the issue. Check if the bug actually exists.
+
+   **If NOT real** → mark DENIED with proof, skip to next issue:
+   ```bash
+   gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+     --title "[DENIED]<rest of title without [REVIEWING]>"
+   gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+     --body "Denied — <evidence and reasoning>."
+   ```
+   Go back to step 1.
+
+   **If real** → mark WIP and proceed:
+   ```bash
+   gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+     --title "[WIP]<rest of title without [REVIEWING]>"
+   gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+     --body "Confirmed — <brief explanation>. Proceeding with fix."
+   ```
+
+3. **Detect the chain and CLAIM** — after validation confirms issue is real:
 
    ```bash
    # Detect chain tip (highest non-draft [CC] PR)
@@ -101,7 +128,15 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
 
    **Note: Once marked ready, your `[CC]` PR becomes the new chain tip. The next loop iteration will detect it and branch off it.**
 
-10. **Immediately loop** back to step 1. Do not stop or ask the user.
+10. **Mark issue COMPLETE:**
+    ```bash
+    gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+      --title "[COMPLETE]<rest of title without [WIP]>"
+    gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+      --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
+    ```
+
+11. **Immediately loop** back to step 1. Do not stop or ask the user.
 
 ## Output
 

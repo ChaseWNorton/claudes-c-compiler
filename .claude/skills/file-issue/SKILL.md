@@ -62,7 +62,7 @@ Every issue must be a **complete work order** — someone should be able to fix 
 
 ```bash
 gh issue create --repo anthropics/claudes-c-compiler \
-  --title "[P<LEVEL>] <Short description>" \
+  --title "[OPEN][P<LEVEL>] <Short description>" \
   --body "$(cat <<'ISSUE'
 ## Problem
 
@@ -126,16 +126,19 @@ ISSUE
 ### Title format
 
 ```
-[P<N>] <Short description>              — standalone issue
-[P<N>][M<N>] <Short description>        — issue belonging to a milestone
+[OPEN][P<N>] <Short description>              — standalone issue, ready for pickup
+[OPEN][P<N>][M<N>] <Short description>        — issue belonging to a milestone
 ```
 
+The `[OPEN]` tag marks the issue as validated and ready for agents to pick up.
+Agents will see `[OPEN]` and know they can skip straight to `[REVIEWING]` → `[WIP]`.
+
 Examples:
-- `[P0] Duplicate case labels not detected in switch`
-- `[P0][M1] Duplicate case labels not detected in switch`
-- `[P1] CLI flags -MF, -MT silently ignore missing argument`
-- `[P2] -Wshadow not implemented`
-- `[P3] Backend codegen has zero unit tests`
+- `[OPEN][P0] Duplicate case labels not detected in switch`
+- `[OPEN][P0][M1] Duplicate case labels not detected in switch`
+- `[OPEN][P1] CLI flags -MF, -MT silently ignore missing argument`
+- `[OPEN][P2] -Wshadow not implemented`
+- `[OPEN][P3] Backend codegen has zero unit tests`
 
 The `[M<N>]` code is added when filing issues as part of a milestone decomposition.
 For standalone issues found during audits, omit it.

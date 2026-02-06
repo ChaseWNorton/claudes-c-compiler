@@ -11,12 +11,98 @@ All `git push` goes to `origin`. All PRs go from `origin` to `upstream`.
 
 ## Contents
 
-- State model
+- Issue lifecycle
+- State model (PR claims)
 - PR chain
 - Claim protocol (step by step)
 - Release and abandonment
 - Race conditions and conflict resolution
 - Stale claim detection
+
+## Issue Lifecycle
+
+Every issue has a lifecycle state tag as the **first** code in its title. Every state
+change requires a title update AND a comment explaining the transition.
+
+| State | Tag | Meaning | Who sets it |
+|-------|-----|---------|-------------|
+| **Open** | `[OPEN]` | Ready for pickup | `/decompose`, `/file-issue`, triage |
+| **Reviewing** | `[REVIEWING]` | Agent investigating validity | FIX workflow, before draft PR |
+| **Work in progress** | `[WIP]` | Confirmed real, draft PR created | FIX workflow, after validation |
+| **Denied** | `[DENIED]` | Not a real bug | FIX workflow, with proof in comment |
+| **Complete** | `[COMPLETE]` | Fix shipped, PR marked ready | FIX workflow, after PR ready |
+| *(none)* | *(no tag)* | External issue, needs review first | External contributors |
+
+### Flow
+
+```
+External issue (no tag) → [REVIEWING] → [WIP] + draft PR → [COMPLETE]
+                                      └→ [DENIED] + proof comment
+
+[OPEN] from decompose → [REVIEWING] → [WIP] + draft PR → [COMPLETE]
+                                     └→ [DENIED] + proof comment
+```
+
+### State change commands
+
+**Mark as REVIEWING** (before any code work):
+```bash
+# Update title — prepend [REVIEWING], remove [OPEN] if present
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[REVIEWING]<rest of title without [OPEN]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "Reviewing: investigating whether this issue is valid. Checking the code now."
+```
+
+**Mark as WIP** (confirmed real, creating draft PR):
+```bash
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[WIP]<rest of title without [REVIEWING]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "Confirmed — <brief explanation of why it's real>. Creating draft PR to claim."
+```
+
+**Mark as DENIED** (not a real issue):
+```bash
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[DENIED]<rest of title without [REVIEWING]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "$(cat <<'EOF'
+Denied — this is not a valid issue.
+
+## Evidence
+<code references, test output, reasoning>
+
+## Recommendation
+Close this issue. <or: refile as a different issue if the underlying concern is valid>
+EOF
+)"
+```
+
+**Mark as COMPLETE** (fix shipped, PR marked ready):
+```bash
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[COMPLETE]<rest of title without [WIP]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
+```
+
+### Rules
+
+1. **BEFORE creating a draft PR**, the agent MUST:
+   - Read the issue body completely
+   - Verify the bug exists (check the code, run a test if possible)
+   - Update title to `[REVIEWING]` + comment
+   - If confirmed real → `[WIP]` + comment + draft PR
+   - If not real → `[DENIED]` + comment with proof, NO PR
+
+2. **Every state change** = title update + comment. No silent transitions.
+
+3. **Issues without a state tag** are from external contributors — treat as unreviewed.
+   Start with `[REVIEWING]` before doing anything.
+
+4. **`[DENIED]` requires proof** — code references, test output, or reasoning.
+   Never deny without evidence.
 
 ## State Model
 
@@ -129,7 +215,42 @@ fi
 
 **Never branch off another worker's fix branch directly** — always go through chain detection.
 
-### Step 3: Create branch
+### Step 3: Validate the issue (BEFORE creating any branch or PR)
+
+```bash
+# Read the issue body — this is the work order
+gh issue view <NUMBER> --repo anthropics/claudes-c-compiler
+```
+
+**Mark as REVIEWING:**
+```bash
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[REVIEWING]<rest of title without [OPEN]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "Reviewing: investigating whether this issue is valid."
+```
+
+Read the source files mentioned in the issue. Check if the bug actually exists.
+Run a quick test if possible.
+
+**If the issue is NOT real:**
+```bash
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[DENIED]<rest of title without [REVIEWING]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "Denied — <evidence and reasoning>. Recommend closing."
+```
+Skip this issue and go back to Step 1. Do NOT create a branch or PR.
+
+**If the issue IS real**, proceed to Step 4:
+```bash
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[WIP]<rest of title without [REVIEWING]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "Confirmed — <brief explanation>. Proceeding with fix."
+```
+
+### Step 4: Create branch
 
 ```bash
 git switch -c fix/issue-<NUMBER>
@@ -137,7 +258,7 @@ git switch -c fix/issue-<NUMBER>
 
 Branch naming convention: `fix/issue-<NUMBER>`. This makes it easy to identify which issue a branch belongs to.
 
-### Step 4: Create draft PR (= the claim)
+### Step 5: Create draft PR (= the claim)
 
 ```bash
 git commit --allow-empty -m "WIP: claiming issue #<NUMBER>"
@@ -178,11 +299,11 @@ gh pr create --repo anthropics/claudes-c-compiler \
 
 The moment this PR exists, other workers will see `[Fix #<NUMBER>]` in the title and skip this issue.
 
-### Step 5: Do the work
+### Step 6: Do the work
 
 Read the issue body, read the source files, implement the fix, write tests. See [CODEBASE_PATTERNS.md](CODEBASE_PATTERNS.md) for per-category guidance.
 
-### Step 6: Verify
+### Step 7: Verify
 
 ```bash
 cargo build --release && cargo test --lib
@@ -190,7 +311,7 @@ cargo build --release && cargo test --lib
 
 Both must pass with zero failures before proceeding.
 
-### Step 7: Commit, push, finalize
+### Step 8: Commit, push, finalize
 
 ```bash
 git add <specific-files>
@@ -198,12 +319,20 @@ git commit -m "Fix #<NUMBER>: <short description>"
 git push origin fix/issue-<NUMBER>
 ```
 
-### Step 8: CRITICAL — Mark PR ready and write the body
+### Step 9: CRITICAL — Mark PR ready, update issue to COMPLETE, write body
 
 **DO NOT SKIP THIS. A draft PR is invisible to reviewers. The fix is NOT done until you run this:**
 
 ```bash
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
+```
+
+**Update the issue to COMPLETE:**
+```bash
+gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
+  --title "[COMPLETE]<rest of title without [WIP]>"
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
 ```
 
 Then **write the PR body**. This is as important as the code itself.

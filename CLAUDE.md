@@ -44,12 +44,39 @@ GitHub Issues and PRs are the shared state — no external tools needed.
 All project state is readable from titles alone:
 
 ```
-[P0] Description                    — standalone issue, priority 0
-[P2][M1] Description                — issue belonging to milestone M1
+[OPEN][P0] Description              — issue: ready for pickup, priority 0
+[OPEN][P2][M1] Description          — issue: ready, milestone M1
+[REVIEWING][P0] Description         — issue: agent investigating validity
+[WIP][P1] Description               — issue: confirmed real, work in progress
+[DENIED][P2] Description            — issue: not a real bug (proof in comment)
 [MILESTONE] M1: Description         — milestone definition
 [Fix #20] Description               — PR: claims issue #20
 [CC][Fix #20] Description           — PR: chain member + claims issue #20
 ```
+
+### Issue lifecycle
+
+Every issue has a lifecycle state tag as the **first** code in its title. Every state
+change requires a title update AND a comment explaining why.
+
+| State | Tag | Meaning | Who sets it |
+|-------|-----|---------|-------------|
+| **Open** | `[OPEN]` | Ready for pickup | `/decompose`, `/file-issue`, triage |
+| **Reviewing** | `[REVIEWING]` | Agent investigating validity | FIX workflow, before draft PR |
+| **Work in progress** | `[WIP]` | Confirmed real, draft PR created | FIX workflow, after validation |
+| **Denied** | `[DENIED]` | Not a real bug | FIX workflow, with proof in comment |
+| **Complete** | `[COMPLETE]` | Fix shipped, PR marked ready | FIX workflow, after PR ready |
+| *(none)* | *(no tag)* | External issue, needs review | External contributors |
+
+```
+[OPEN] ──→ [REVIEWING] ──→ [WIP] + draft PR ──→ [COMPLETE] + PR ready
+                        └──→ [DENIED] + proof comment
+```
+
+**CRITICAL: An agent MUST validate an issue BEFORE creating a draft PR.**
+Read the issue, check the code, confirm the bug exists. Only then claim it.
+
+### PR claim states
 
 | State | How it looks on GitHub |
 |-------|----------------------|
