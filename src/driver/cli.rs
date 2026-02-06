@@ -45,7 +45,7 @@ impl Driver {
         // Response files contain additional command-line arguments, one per line
         // or whitespace-separated. Build systems like Meson use them when the
         // command line would exceed OS limits.
-        let expanded_args = Self::expand_response_files(&args[1..]);
+        let expanded_args = Self::expand_response_files(&args[1..])?;
         self.parse_main_args(&expanded_args)?;
 
         // Store raw args for GCC -m16 passthrough. We keep everything except
@@ -168,24 +168,27 @@ impl Driver {
     /// Expand `@file` response file arguments.
     /// Each `@path` argument is replaced by the contents of the file at `path`,
     /// split on whitespace. Non-`@` arguments are passed through unchanged.
-    fn expand_response_files(args: &[String]) -> Vec<String> {
+    /// Returns an error if a response file cannot be read (C11 §5.1.1.2).
+    fn expand_response_files(args: &[String]) -> Result<Vec<String>, String> {
         let mut result = Vec::new();
         for arg in args {
             if let Some(path) = arg.strip_prefix('@') {
-                if let Ok(contents) = std::fs::read_to_string(path) {
-                    // Split on whitespace, respecting simple quoting
-                    for token in Self::split_response_file(&contents) {
-                        result.push(token);
+                match std::fs::read_to_string(path) {
+                    Ok(contents) => {
+                        // Split on whitespace, respecting simple quoting
+                        for token in Self::split_response_file(&contents) {
+                            result.push(token);
+                        }
                     }
-                } else {
-                    // If the file can't be read, pass the arg through unchanged
-                    result.push(arg.clone());
+                    Err(e) => {
+                        return Err(format!("@{}: {}", path, e));
+                    }
                 }
             } else {
                 result.push(arg.clone());
             }
         }
-        result
+        Ok(result)
     }
 
     /// Split response file contents into tokens, handling simple quoting.
@@ -805,5 +808,12 @@ mod tests {
     fn valid_xlinker_argument() {
         let result = parse(&["ccc", "-Xlinker", "--as-needed"]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn missing_response_file() {
+        let result = parse(&["ccc", "@/nonexistent/file.txt"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("nonexistent"));
     }
 }
