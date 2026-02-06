@@ -325,6 +325,8 @@ impl Driver {
                     i += 1;
                     if i < args.len() {
                         self.linker_ordered_items.push(format!("-Wl,{}", args[i]));
+                    } else {
+                        return Err("-Xlinker requires an argument".to_string());
                     }
                 }
 
@@ -420,6 +422,8 @@ impl Driver {
                     i += 1;
                     if i < args.len() {
                         self.linker_paths.push(args[i].clone());
+                    } else {
+                        return Err("-L requires an argument".to_string());
                     }
                 }
                 arg if arg.starts_with("-L") => {
@@ -436,6 +440,8 @@ impl Driver {
                     i += 1;
                     if i < args.len() {
                         self.undef_macros.push(args[i].clone());
+                    } else {
+                        return Err("-U requires an argument".to_string());
                     }
                 }
                 arg if arg.starts_with("-U") => {
@@ -624,12 +630,17 @@ impl Driver {
                     i += 1;
                     if i < args.len() {
                         self.dep_file = Some(args[i].clone());
+                    } else {
+                        return Err("-MF requires an argument".to_string());
                     }
                 }
                 "-MT" | "-MQ" => {
+                    let flag = args[i].clone();
                     i += 1;
                     if i < args.len() {
                         self.dep_target = Some(args[i].clone());
+                    } else {
+                        return Err(format!("{} requires an argument", flag));
                     }
                 }
 
@@ -729,5 +740,70 @@ impl Driver {
     /// Add a -I include path from command line.
     pub fn add_include_path(&mut self, path: &str) {
         self.include_paths.push(path.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<bool, String> {
+        let mut driver = Driver::default();
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        driver.parse_cli_args(&args)
+    }
+
+    #[test]
+    fn missing_mf_argument() {
+        let result = parse(&["ccc", "-MF"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-MF"));
+    }
+
+    #[test]
+    fn missing_mt_argument() {
+        let result = parse(&["ccc", "-MT"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-MT"));
+    }
+
+    #[test]
+    fn missing_mq_argument() {
+        let result = parse(&["ccc", "-MQ"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-MQ"));
+    }
+
+    #[test]
+    fn missing_xlinker_argument() {
+        let result = parse(&["ccc", "-Xlinker"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-Xlinker"));
+    }
+
+    #[test]
+    fn missing_l_path_argument() {
+        let result = parse(&["ccc", "-L"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-L"));
+    }
+
+    #[test]
+    fn missing_u_argument() {
+        let result = parse(&["ccc", "-U"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-U"));
+    }
+
+    #[test]
+    fn valid_mf_argument() {
+        let result = parse(&["ccc", "-MF", "deps.d", "-E"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn valid_xlinker_argument() {
+        let result = parse(&["ccc", "-Xlinker", "--as-needed"]);
+        assert!(result.is_ok());
     }
 }
