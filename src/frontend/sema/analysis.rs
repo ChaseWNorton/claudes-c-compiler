@@ -917,7 +917,18 @@ impl SemanticAnalyzer {
                     }
                 }
             }
-            Stmt::Return(None, _) => {}
+            Stmt::Return(None, span) => {
+                // C11 §6.8.6.4p1: return without expression in non-void function
+                if let Some(ret_ty) = &self.current_return_type {
+                    if !matches!(ret_ty, CType::Void) {
+                        self.diagnostics.borrow_mut().warning_with_kind(
+                            &format!("'return' with no value, in function returning '{}'", ret_ty),
+                            *span,
+                            crate::common::error::WarningKind::ReturnType,
+                        );
+                    }
+                }
+            }
             Stmt::If(cond, then_br, else_br, _) => {
                 self.analyze_expr(cond);
                 self.analyze_stmt(then_br);
@@ -3023,5 +3034,19 @@ mod tests {
     fn return_null_from_pointer_function_ok() {
         let (_, w) = sema_counts("int *f(void) { return 0; }");
         assert_eq!(w, 0, "returning null pointer constant should not warn");
+    }
+
+    // ---- empty return in non-void function ----
+
+    #[test]
+    fn empty_return_in_nonvoid_function() {
+        let (_, w) = sema_counts("int f(int x) { if (x) return; return 0; }");
+        assert!(w > 0, "empty return in int function should warn");
+    }
+
+    #[test]
+    fn empty_return_in_void_function_ok() {
+        let (_, w) = sema_counts("void f(void) { return; }");
+        assert_eq!(w, 0, "empty return in void function should not warn");
     }
 }
