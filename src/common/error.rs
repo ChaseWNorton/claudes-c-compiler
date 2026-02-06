@@ -115,15 +115,12 @@ pub enum WarningKind {
     /// Shift count >= width of type.
     /// GCC flag: -Wshift-count-overflow
     ShiftCountOverflow,
-    // Future categories (add as warnings are implemented):
-    // UnusedVariable,         // -Wunused-variable
-    // UnusedFunction,         // -Wunused-function
-    // UnusedParameter,        // -Wunused-parameter
-    // UninitializedVariable,  // -Wuninitialized
-    // ImplicitConversion,     // -Wimplicit-int-conversion
-    // SignCompare,            // -Wsign-compare
-    // Parentheses,            // -Wparentheses
-    // Pointer,                // -Wpointer-sign
+    /// Implicit conversion between pointer and integer types.
+    /// GCC flag: -Wint-conversion
+    IntConversion,
+    /// Assignment from incompatible pointer types.
+    /// GCC flag: -Wincompatible-pointer-types
+    IncompatiblePointerTypes,
 }
 
 impl WarningKind {
@@ -138,6 +135,8 @@ impl WarningKind {
             WarningKind::Overflow => "overflow",
             WarningKind::DivByZero => "div-by-zero",
             WarningKind::ShiftCountOverflow => "shift-count-overflow",
+            WarningKind::IntConversion => "int-conversion",
+            WarningKind::IncompatiblePointerTypes => "incompatible-pointer-types",
         }
     }
 
@@ -154,6 +153,8 @@ impl WarningKind {
             "overflow" => Some(WarningKind::Overflow),
             "div-by-zero" => Some(WarningKind::DivByZero),
             "shift-count-overflow" => Some(WarningKind::ShiftCountOverflow),
+            "int-conversion" => Some(WarningKind::IntConversion),
+            "incompatible-pointer-types" => Some(WarningKind::IncompatiblePointerTypes),
             _ => None,
         }
     }
@@ -168,6 +169,8 @@ impl WarningKind {
             WarningKind::Overflow,
             WarningKind::DivByZero,
             WarningKind::ShiftCountOverflow,
+            WarningKind::IntConversion,
+            WarningKind::IncompatiblePointerTypes,
             // WarningKind::Undeclared is now a hard error, not a warning
         ]
     }
@@ -189,6 +192,8 @@ impl WarningKind {
             WarningKind::Overflow,
             WarningKind::DivByZero,
             WarningKind::ShiftCountOverflow,
+            WarningKind::IntConversion,
+            WarningKind::IncompatiblePointerTypes,
         ]
     }
 }

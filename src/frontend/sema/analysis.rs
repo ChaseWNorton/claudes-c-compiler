@@ -530,6 +530,9 @@ impl SemanticAnalyzer {
                             self.check_pointer_float_conversion(
                                 &init_ty, &var_ty, init_expr.span(),
                             );
+                            self.check_implicit_conversion(
+                                &var_ty, &init_ty, init_expr, init_expr.span(),
+                            );
                         }
                     }
                 }
@@ -1421,6 +1424,7 @@ impl SemanticAnalyzer {
                     checker.infer_expr_ctype(rhs),
                 ) {
                     self.check_pointer_float_conversion(&rhs_ty, &lhs_ty, *span);
+                    self.check_implicit_conversion(&lhs_ty, &rhs_ty, rhs, *span);
                 }
             }
             Expr::CompoundAssign(_, lhs, rhs, _) => {
@@ -1822,6 +1826,77 @@ impl SemanticAnalyzer {
                 ),
                 span,
             );
+        }
+    }
+
+    /// Check for implicit conversions between pointer and integer types
+    /// (C11 6.5.16.1p1) and between incompatible pointer types (C11 6.5.16.1p3).
+    ///
+    /// - pointer <-> integer (excluding null pointer constants): -Wint-conversion
+    /// - pointer -> different pointer (excluding void*): -Wincompatible-pointer-types
+    fn check_implicit_conversion(
+        &self,
+        target_ty: &CType,
+        source_ty: &CType,
+        source_expr: &Expr,
+        span: Span,
+    ) {
+        let target_is_ptr = target_ty.is_pointer_like()
+            || matches!(target_ty, CType::Function(_));
+        let source_is_ptr = source_ty.is_pointer_like()
+            || matches!(source_ty, CType::Function(_));
+        let target_is_int = target_ty.is_integer();
+        let source_is_int = source_ty.is_integer();
+
+        // pointer <-> integer conversion (excluding null pointer constants)
+        if (target_is_ptr && source_is_int) || (target_is_int && source_is_ptr) {
+            // int *p = 0; and int *p = (void*)0; are valid null pointer constants
+            if target_is_ptr
+                && source_is_int
+                && crate::common::const_arith::is_null_pointer_constant(source_expr)
+            {
+                return;
+            }
+            self.diagnostics.borrow_mut().warning_with_kind(
+                format!(
+                    "incompatible integer to pointer conversion (have '{}' but expected '{}')",
+                    source_ty, target_ty
+                ),
+                span,
+                crate::common::error::WarningKind::IntConversion,
+            );
+            return;
+        }
+
+        // incompatible pointer types
+        if target_is_ptr && source_is_ptr {
+            let target_pointee = match target_ty {
+                CType::Pointer(inner, _) => Some(inner.as_ref()),
+                CType::Array(inner, _) => Some(inner.as_ref()),
+                _ => None,
+            };
+            let source_pointee = match source_ty {
+                CType::Pointer(inner, _) => Some(inner.as_ref()),
+                CType::Array(inner, _) => Some(inner.as_ref()),
+                _ => None,
+            };
+
+            if let (Some(tp), Some(sp)) = (target_pointee, source_pointee) {
+                // void* is compatible with any pointer type (C11 6.3.2.3p1)
+                if matches!(tp, CType::Void) || matches!(sp, CType::Void) {
+                    return;
+                }
+                if !Self::pointee_types_compatible(tp, sp) {
+                    self.diagnostics.borrow_mut().warning_with_kind(
+                        format!(
+                            "incompatible pointer types (have '{}' but expected '{}')",
+                            source_ty, target_ty
+                        ),
+                        span,
+                        crate::common::error::WarningKind::IncompatiblePointerTypes,
+                    );
+                }
+            }
         }
     }
 
@@ -2280,5 +2355,125 @@ mod tests {
     fn shift_31_valid_clean() {
         let (_, w) = sema_counts("int main(void) { int x = 1 << 31; return x; }");
         assert_eq!(w, 0, "shift by 31 (max valid for int) should not warn");
+    }
+
+    fn sema_warnings(src: &str) -> usize {
+        sema_counts(src).1
+    }
+
+    // ---- -Wint-conversion: pointer <-> integer ----
+
+    #[test]
+    fn int_to_pointer_warns() {
+        // int assigned to int* → warning
+        assert!(sema_warnings("int main(void) { int x = 42; int *p = x; return 0; }") > 0);
+    }
+
+    #[test]
+    fn pointer_to_int_warns() {
+        // int* assigned to int → warning
+        assert!(sema_warnings("int main(void) { int *p = (int*)0; int x = p; return x; }") > 0);
+    }
+
+    #[test]
+    fn int_to_pointer_assign_warns() {
+        // assignment (not init): int → int*
+        assert!(sema_warnings("int main(void) { int *p; int x = 42; p = x; return 0; }") > 0);
+    }
+
+    #[test]
+    fn pointer_to_int_assign_warns() {
+        // assignment: int* → int
+        assert!(sema_warnings("int main(void) { int *p = (int*)0; int x; x = p; return x; }") > 0);
+    }
+
+    #[test]
+    fn null_pointer_constant_zero_no_warn() {
+        // int *p = 0; is a valid null pointer constant — no warning
+        assert_eq!(sema_warnings("int main(void) { int *p = 0; return 0; }"), 0);
+    }
+
+    #[test]
+    fn null_pointer_constant_void_cast_no_warn() {
+        // int *p = (void*)0; is a valid null pointer constant — no warning
+        assert_eq!(sema_warnings("int main(void) { int *p = (void*)0; return 0; }"), 0);
+    }
+
+    #[test]
+    fn nonzero_int_to_pointer_warns() {
+        // int *p = 1; is NOT a null pointer constant → warning
+        assert!(sema_warnings("int main(void) { int *p = 1; return 0; }") > 0);
+    }
+
+    // ---- -Wincompatible-pointer-types ----
+
+    #[test]
+    fn incompatible_pointer_types_warns() {
+        // float* assigned to int* → warning
+        assert!(sema_warnings(
+            "int main(void) { float f = 1.0f; int *p = &f; return 0; }"
+        ) > 0);
+    }
+
+    #[test]
+    fn incompatible_pointer_assign_warns() {
+        // assignment: float* → int*
+        assert!(sema_warnings(
+            "int main(void) { float f = 1.0f; int *p; p = &f; return 0; }"
+        ) > 0);
+    }
+
+    #[test]
+    fn compatible_pointer_types_no_warn() {
+        // int* assigned to int* → no warning
+        assert_eq!(
+            sema_warnings("int main(void) { int x = 42; int *p = &x; return *p; }"),
+            0
+        );
+    }
+
+    #[test]
+    fn void_pointer_compatible_no_warn() {
+        // void* ↔ int* — no warning (C11 6.3.2.3p1)
+        assert_eq!(
+            sema_warnings("int main(void) { int x = 42; void *p = &x; return 0; }"),
+            0
+        );
+    }
+
+    #[test]
+    fn pointer_from_void_no_warn() {
+        // int* = void* — no warning
+        assert_eq!(
+            sema_warnings("int main(void) { void *v = (void*)0; int *p = v; return 0; }"),
+            0
+        );
+    }
+
+    // ---- no false positives on normal code ----
+
+    #[test]
+    fn normal_int_assignment_no_warn() {
+        assert_eq!(sema_warnings("int main(void) { int x = 42; int y = x; return y; }"), 0);
+    }
+
+    #[test]
+    fn normal_pointer_deref_no_warn() {
+        assert_eq!(
+            sema_warnings("int main(void) { int x = 42; int *p = &x; int y = *p; return y; }"),
+            0
+        );
+    }
+
+    // ---- global scope ----
+
+    #[test]
+    fn global_int_to_pointer_warns() {
+        assert!(sema_warnings("int *p = 1; int main(void) { return 0; }") > 0);
+    }
+
+    #[test]
+    fn global_null_pointer_no_warn() {
+        assert_eq!(sema_warnings("int *p = 0; int main(void) { return 0; }"), 0);
     }
 }
