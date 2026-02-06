@@ -545,7 +545,9 @@ impl Driver {
                 }
                 "-mno-relax" => self.riscv_no_relax = true,
                 arg if arg.starts_with("-mregparm=") => {
-                    let n: u8 = arg["-mregparm=".len()..].parse().unwrap_or(0);
+                    let val_str = &arg["-mregparm=".len()..];
+                    let n: u8 = val_str.parse()
+                        .map_err(|_| format!("invalid argument '{}' to '-mregparm='", val_str))?;
                     self.regparm = n.min(3);
                 }
                 arg if arg.starts_with("-m") => {}
@@ -558,8 +560,12 @@ impl Driver {
                 arg if arg.starts_with("-fpatchable-function-entry=") => {
                     let val = &arg["-fpatchable-function-entry=".len()..];
                     let parts: Vec<&str> = val.split(',').collect();
-                    let total: u32 = parts[0].parse().unwrap_or(0);
-                    let before: u32 = if parts.len() > 1 { parts[1].parse().unwrap_or(0) } else { 0 };
+                    let total: u32 = parts[0].parse()
+                        .map_err(|_| format!("invalid argument '{}' to '-fpatchable-function-entry='", parts[0]))?;
+                    let before: u32 = if parts.len() > 1 {
+                        parts[1].parse()
+                            .map_err(|_| format!("invalid argument '{}' to '-fpatchable-function-entry='", parts[1]))?
+                    } else { 0 };
                     self.patchable_function_entry = Some((total, before));
                 }
                 "-fomit-frame-pointer" => self.omit_frame_pointer = true,
@@ -815,5 +821,31 @@ mod tests {
         let result = parse(&["ccc", "@/nonexistent/file.txt"]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("nonexistent"));
+    }
+
+    #[test]
+    fn invalid_mregparm() {
+        let result = parse(&["ccc", "-mregparm=abc", "test.c"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-mregparm="));
+    }
+
+    #[test]
+    fn valid_mregparm() {
+        let result = parse(&["ccc", "-mregparm=3", "test.c"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn invalid_patchable_function_entry() {
+        let result = parse(&["ccc", "-fpatchable-function-entry=xyz", "test.c"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-fpatchable-function-entry="));
+    }
+
+    #[test]
+    fn valid_patchable_function_entry() {
+        let result = parse(&["ccc", "-fpatchable-function-entry=4,2", "test.c"]);
+        assert!(result.is_ok());
     }
 }
