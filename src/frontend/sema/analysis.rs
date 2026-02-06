@@ -2861,6 +2861,19 @@ mod tests {
         assert_eq!(sema_errors("int arr[10]; int arr[10]; int main(void) { return arr[0]; }"), 0);
     }
 
+    // ---- enum underlying type (C11 §6.7.2.2) ----
+
+    #[test]
+    fn enum_with_large_unsigned_values() {
+        // Enum with value > INT_MAX compiles without errors
+        assert_eq!(sema_errors("enum E { V = 0xFFFFFFFFU }; int main(void) { return 0; }"), 0);
+    }
+
+    #[test]
+    fn enum_with_negative_values() {
+        assert_eq!(sema_errors("enum E { A = -1, B = 0, C = 1 }; int main(void) { return 0; }"), 0);
+    }
+
     // ---- const assignment: direct variable ----
 
     #[test]

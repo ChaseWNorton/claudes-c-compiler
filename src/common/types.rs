@@ -250,6 +250,25 @@ pub struct EnumType {
 }
 
 impl EnumType {
+    /// Whether this enum's underlying type is unsigned.
+    /// An enum is unsigned when all values are non-negative and at least one
+    /// value exceeds signed int range (GCC behavior). For packed enums, it's
+    /// unsigned when all values are non-negative.
+    pub fn is_unsigned(&self) -> bool {
+        let has_negative = self.variants.iter().any(|(_, v)| *v < 0);
+        if has_negative {
+            return false;
+        }
+        if self.is_packed {
+            // Packed: unsigned when all values >= 0
+            return true;
+        }
+        // Non-packed 4-byte: unsigned when any value exceeds i32::MAX
+        // Non-packed 8-byte: unsigned when no negative values (checked above)
+        let exceeds_i32 = self.variants.iter().any(|(_, v)| *v > i32::MAX as i64);
+        exceeds_i32 || self.variants.iter().any(|(_, v)| *v > u32::MAX as i64 || *v < i32::MIN as i64)
+    }
+
     /// Returns the size (and alignment) in bytes for this enum.
     /// Non-packed enums are always 4 bytes (int). Packed enums use the
     /// smallest integer type that can represent all variant values.
@@ -1404,7 +1423,11 @@ impl CType {
     }
 
     pub fn is_signed(&self) -> bool {
-        matches!(self, CType::Char | CType::Short | CType::Int | CType::Long | CType::LongLong | CType::Int128)
+        match self {
+            CType::Char | CType::Short | CType::Int | CType::Long | CType::LongLong | CType::Int128 => true,
+            CType::Enum(e) => !e.is_unsigned(),
+            _ => false,
+        }
     }
 
     /// Whether this is a complex type (_Complex float/double/long double).
@@ -1469,8 +1492,12 @@ impl CType {
     /// Whether this is an unsigned integer type.
     /// Used by usual arithmetic conversions (C11 6.3.1.8).
     pub fn is_unsigned(&self) -> bool {
-        matches!(self, CType::Bool | CType::UChar | CType::UShort | CType::UInt
-            | CType::ULong | CType::ULongLong | CType::UInt128)
+        match self {
+            CType::Bool | CType::UChar | CType::UShort | CType::UInt
+                | CType::ULong | CType::ULongLong | CType::UInt128 => true,
+            CType::Enum(e) => e.is_unsigned(),
+            _ => false,
+        }
     }
 
     /// Integer conversion rank for C types (C11 6.3.1.1).
@@ -1844,28 +1871,13 @@ impl IrType {
             CType::UShort => IrType::U16,
             CType::Int => IrType::I32,
             CType::Enum(e) => {
-                // Map enum to IR type based on its computed size.
-                // For non-packed enums with 64-bit values, packed_size() returns 8.
+                // Map enum to IR type based on its computed size and signedness.
+                let unsigned = e.is_unsigned();
                 match e.packed_size() {
-                    1 => IrType::I8,
-                    2 => IrType::I16,
-                    8 => {
-                        // 64-bit enums: check signedness
-                        if e.variants.iter().any(|(_, v)| *v < 0) {
-                            IrType::I64
-                        } else {
-                            IrType::U64
-                        }
-                    }
-                    _ => {
-                        // 4-byte enum: unsigned if any value exceeds i32 range
-                        // (e.g., 1U << 31 = 0x80000000 fits in u32 but not i32)
-                        if e.variants.iter().any(|(_, v)| *v > i32::MAX as i64) {
-                            IrType::U32
-                        } else {
-                            IrType::I32
-                        }
-                    }
+                    1 => if unsigned { IrType::U8 } else { IrType::I8 },
+                    2 => if unsigned { IrType::U16 } else { IrType::I16 },
+                    8 => if unsigned { IrType::U64 } else { IrType::I64 },
+                    _ => if unsigned { IrType::U32 } else { IrType::I32 },
                 }
             }
             CType::UInt => IrType::U32,
@@ -1886,5 +1898,106 @@ impl IrType {
             // Vectors are treated as aggregate types (pointer to stack slot)
             CType::Vector(_, _) => IrType::Ptr,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_enum(variants: &[(&str, i64)], packed: bool) -> EnumType {
+        EnumType {
+            name: Some("E".to_string()),
+            variants: variants.iter().map(|(n, v)| (n.to_string(), *v)).collect(),
+            is_packed: packed,
+        }
+    }
+
+    #[test]
+    fn enum_small_values_is_signed() {
+        // All values fit in signed int → signed
+        let e = make_enum(&[("A", 0), ("B", 1), ("C", 100)], false);
+        assert!(!e.is_unsigned());
+        let ct = CType::Enum(e);
+        assert!(ct.is_signed());
+        assert!(!ct.is_unsigned());
+    }
+
+    #[test]
+    fn enum_negative_values_is_signed() {
+        let e = make_enum(&[("A", -1), ("B", 0), ("C", 1)], false);
+        assert!(!e.is_unsigned());
+        let ct = CType::Enum(e);
+        assert!(ct.is_signed());
+    }
+
+    #[test]
+    fn enum_large_positive_is_unsigned() {
+        // Value 0x80000000 exceeds i32::MAX → unsigned int
+        let e = make_enum(&[("A", 0), ("B", 0x80000000)], false);
+        assert!(e.is_unsigned());
+        let ct = CType::Enum(e);
+        assert!(ct.is_unsigned());
+        assert!(!ct.is_signed());
+    }
+
+    #[test]
+    fn enum_max_u32_is_unsigned() {
+        let e = make_enum(&[("A", 0xFFFFFFFF)], false);
+        assert!(e.is_unsigned());
+        let ct = CType::Enum(e.clone());
+        assert!(ct.is_unsigned());
+        assert_eq!(e.packed_size(), 4); // fits in u32
+    }
+
+    #[test]
+    fn enum_beyond_u32_is_8_bytes() {
+        let e = make_enum(&[("A", 0x1_0000_0000)], false);
+        assert!(e.is_unsigned()); // no negative values
+        assert_eq!(e.packed_size(), 8);
+    }
+
+    #[test]
+    fn enum_ir_type_unsigned_4byte() {
+        let e = make_enum(&[("A", 0), ("B", 0x80000000)], false);
+        let ct = CType::Enum(e);
+        assert_eq!(IrType::from_ctype(&ct), IrType::U32);
+    }
+
+    #[test]
+    fn enum_ir_type_signed_4byte() {
+        let e = make_enum(&[("A", 0), ("B", 100)], false);
+        let ct = CType::Enum(e);
+        assert_eq!(IrType::from_ctype(&ct), IrType::I32);
+    }
+
+    #[test]
+    fn enum_ir_type_unsigned_8byte() {
+        let e = make_enum(&[("A", 0x1_0000_0000)], false);
+        let ct = CType::Enum(e);
+        assert_eq!(IrType::from_ctype(&ct), IrType::U64);
+    }
+
+    #[test]
+    fn enum_ir_type_signed_8byte() {
+        let e = make_enum(&[("A", -1), ("B", 0x1_0000_0000)], false);
+        let ct = CType::Enum(e);
+        assert_eq!(IrType::from_ctype(&ct), IrType::I64);
+    }
+
+    #[test]
+    fn packed_enum_unsigned_1byte() {
+        let e = make_enum(&[("A", 0), ("B", 200)], true);
+        assert!(e.is_unsigned());
+        let ct = CType::Enum(e);
+        assert_eq!(IrType::from_ctype(&ct), IrType::U8);
+    }
+
+    #[test]
+    fn packed_enum_signed_1byte() {
+        let e = make_enum(&[("A", -1), ("B", 50)], true);
+        assert!(!e.is_unsigned());
+        let ct = CType::Enum(e);
+        assert_eq!(IrType::from_ctype(&ct), IrType::I8);
     }
 }
