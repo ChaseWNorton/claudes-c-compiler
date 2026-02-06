@@ -145,7 +145,7 @@ impl Lowerer {
                 CType::Array(elem_ty, Some(arr_size)) if has_nested_designator => {
                     self.emit_field_array_designated(
                         item, items, &mut item_idx, base_alloca,
-                        elem_ty, *arr_size, field_offset,
+                        elem_ty, (*arr_size, field_offset),
                     );
                 }
                 CType::Struct(key) | CType::Union(key) => {
@@ -157,7 +157,7 @@ impl Lowerer {
                 CType::Array(elem_ty, Some(arr_size)) => {
                     self.emit_field_array(
                         item, items, &mut item_idx, base_alloca,
-                        elem_ty, *arr_size, field_offset, array_start_idx,
+                        elem_ty, (*arr_size, field_offset, array_start_idx),
                     );
                 }
                 CType::ComplexFloat | CType::ComplexDouble | CType::ComplexLongDouble => {
@@ -167,7 +167,7 @@ impl Lowerer {
                 CType::Vector(ref elem_ty, total_size) => {
                     self.emit_field_vector(
                         item, items, &mut item_idx, base_alloca,
-                        elem_ty, *total_size, field_offset,
+                        elem_ty, (*total_size, field_offset),
                     );
                 }
                 _ => {
@@ -252,9 +252,9 @@ impl Lowerer {
         item_idx: &mut usize,
         base_alloca: Value,
         elem_ty: &CType,
-        arr_size: usize,
-        field_offset: usize,
+        target: (usize, usize), // (arr_size, field_offset)
     ) {
+        let (arr_size, field_offset) = target;
         let elem_size = self.resolve_ctype_size(elem_ty);
         let elem_ir_ty = IrType::from_ctype(elem_ty);
 
@@ -481,10 +481,9 @@ impl Lowerer {
         item_idx: &mut usize,
         base_alloca: Value,
         elem_ty: &CType,
-        arr_size: usize,
-        field_offset: usize,
-        array_start_idx: Option<usize>,
+        target: (usize, usize, Option<usize>), // (arr_size, field_offset, array_start_idx)
     ) {
+        let (arr_size, field_offset, array_start_idx) = target;
         let elem_size = self.resolve_ctype_size(elem_ty);
         match &item.init {
             Initializer::List(sub_items) => {
@@ -496,7 +495,7 @@ impl Lowerer {
             Initializer::Expr(e) => {
                 self.emit_array_field_expr_init(
                     e, items, item_idx, base_alloca,
-                    elem_ty, arr_size, field_offset, elem_size, array_start_idx,
+                    elem_ty, (arr_size, field_offset, elem_size, array_start_idx),
                 );
             }
         }
@@ -695,11 +694,9 @@ impl Lowerer {
         item_idx: &mut usize,
         base_alloca: Value,
         elem_ty: &CType,
-        arr_size: usize,
-        field_offset: usize,
-        elem_size: usize,
-        array_start_idx: Option<usize>,
+        array_info: (usize, usize, usize, Option<usize>), // (arr_size, field_offset, elem_size, array_start_idx)
     ) {
+        let (arr_size, field_offset, elem_size, array_start_idx) = array_info;
         // String literal for char array field
         if let Expr::StringLiteral(s, _) = e {
             if matches!(elem_ty, CType::Char | CType::UChar) {
@@ -817,9 +814,9 @@ impl Lowerer {
         item_idx: &mut usize,
         base_alloca: Value,
         elem_ty: &CType,
-        total_size: usize,
-        field_offset: usize,
+        target: (usize, usize), // (total_size, field_offset)
     ) {
+        let (total_size, field_offset) = target;
         let elem_size = elem_ty.size();
         let num_elems = if elem_size > 0 { total_size / elem_size } else { 0 };
         let elem_ir_ty = IrType::from_ctype(elem_ty);

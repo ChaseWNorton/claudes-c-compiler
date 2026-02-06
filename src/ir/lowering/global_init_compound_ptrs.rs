@@ -21,6 +21,13 @@ use crate::common::types::{AddressSpace, IrType, CType, InitFieldResolution};
 use super::lower::Lowerer;
 use super::global_init_helpers as h;
 
+struct PtrFillBuf<'a> {
+    bytes: &'a mut [u8],
+    ptr_ranges: &'a mut Vec<(usize, GlobalInit)>,
+    base_offset: usize,
+    region_size: usize,
+}
+
 impl Lowerer {
     /// Lower a (possibly multi-dimensional) array of structs where some fields are pointers.
     /// Handles multi-dimensional arrays by recursing through dimension strides.
@@ -37,7 +44,7 @@ impl Lowerer {
 
         self.fill_multidim_struct_array_with_ptrs(
             items, layout, struct_size, array_dim_strides,
-            &mut bytes, &mut ptr_ranges, 0, total_size,
+            &mut PtrFillBuf { bytes: &mut bytes, ptr_ranges: &mut ptr_ranges, base_offset: 0, region_size: total_size },
         );
 
         Self::build_compound_from_bytes_and_ptrs(bytes, ptr_ranges, total_size)
@@ -51,11 +58,10 @@ impl Lowerer {
         layout: &crate::common::types::StructLayout,
         struct_size: usize,
         array_dim_strides: &[usize],
-        bytes: &mut [u8],
-        ptr_ranges: &mut Vec<(usize, GlobalInit)>,
-        base_offset: usize,
-        region_size: usize,
+        buf: &mut PtrFillBuf<'_>,
     ) {
+        let (bytes, ptr_ranges, base_offset, region_size) =
+            (&mut *buf.bytes, &mut *buf.ptr_ranges, buf.base_offset, buf.region_size);
         if struct_size == 0 { return; }
 
         let (this_stride, remaining_strides) = if array_dim_strides.len() > 1 {
@@ -70,7 +76,7 @@ impl Lowerer {
 
         if h::has_array_field_designators(items) && this_stride == struct_size {
             self.fill_array_field_designator_items(
-                items, layout, struct_size, num_elems, base_offset, bytes, ptr_ranges,
+                items, layout, (struct_size, num_elems, base_offset), bytes, ptr_ranges,
             );
         } else {
             // Sequential items: each item maps to one element at this_stride
@@ -91,7 +97,7 @@ impl Lowerer {
                             // Sub-array dimension: recurse
                             self.fill_multidim_struct_array_with_ptrs(
                                 sub_items, layout, struct_size, remaining_strides,
-                                bytes, ptr_ranges, elem_offset, this_stride,
+                                &mut PtrFillBuf { bytes, ptr_ranges, base_offset: elem_offset, region_size: this_stride },
                             );
                         } else {
                             // Single struct element: fill its fields
@@ -107,7 +113,7 @@ impl Lowerer {
                             let field_offset = elem_offset + field.offset;
                             self.write_expr_to_bytes_or_ptrs(
                                 expr, &field.ty, field_offset,
-                                field.bit_offset, field.bit_width,
+                                (field.bit_offset, field.bit_width),
                                 bytes, ptr_ranges,
                             );
                         }
@@ -141,7 +147,7 @@ impl Lowerer {
         if h::has_array_field_designators(items) {
             // Handle [N].field = value pattern (e.g., postgres mcxt_methods[]).
             self.fill_array_field_designator_items(
-                items, layout, struct_size, num_elems, 0, &mut bytes, &mut ptr_ranges,
+                items, layout, (struct_size, num_elems, 0), &mut bytes, &mut ptr_ranges,
             );
         } else {
             // Original path: items correspond 1-to-1 to array elements (no [N].field designators).
@@ -299,7 +305,7 @@ impl Lowerer {
             };
             self.write_expr_to_bytes_or_ptrs(
                 expr, effective_ty, field_offset,
-                field.bit_offset, field.bit_width,
+                (field.bit_offset, field.bit_width),
                 bytes, ptr_ranges,
             );
         } else if let Initializer::List(ref inner_items) = item.init {
@@ -324,7 +330,7 @@ impl Lowerer {
                     let elem_offset = field_offset + ai * ptr_size;
                     if let Initializer::Expr(ref expr) = inner_item.init {
                         self.write_expr_to_bytes_or_ptrs(
-                            expr, &ptr_ty, elem_offset, None, None, bytes, ptr_ranges,
+                            expr, &ptr_ty, elem_offset, (None, None), bytes, ptr_ranges,
                         );
                     }
                     ai += 1;
@@ -438,12 +444,11 @@ impl Lowerer {
         &mut self,
         items: &[InitializerItem],
         layout: &crate::common::types::StructLayout,
-        struct_size: usize,
-        num_elems: usize,
-        array_base_offset: usize,
+        array_desc: (usize, usize, usize), // (struct_size, num_elems, array_base_offset)
         bytes: &mut [u8],
         ptr_ranges: &mut Vec<(usize, GlobalInit)>,
     ) {
+        let (struct_size, num_elems, array_base_offset) = array_desc;
         let mut current_elem_idx = 0usize;
         let mut current_field_idx = 0usize;
         for item in items {
@@ -533,7 +538,7 @@ impl Lowerer {
             Initializer::Expr(expr) => {
                 self.write_expr_to_bytes_or_ptrs(
                     expr, &current_ty, sub_offset,
-                    drill.bit_offset, drill.bit_width,
+                    (drill.bit_offset, drill.bit_width),
                     bytes, ptr_ranges,
                 );
             }
@@ -601,7 +606,7 @@ impl Lowerer {
                         if let Initializer::Expr(ref expr) = inner_item.init {
                             self.write_expr_to_bytes_or_ptrs(
                                 expr, &drill.target_ty, sub_offset,
-                                drill.bit_offset, drill.bit_width,
+                                (drill.bit_offset, drill.bit_width),
                                 bytes, ptr_ranges,
                             );
                         }
@@ -637,7 +642,7 @@ impl Lowerer {
             if let Initializer::Expr(ref expr) = inner_item.init {
                 self.write_expr_to_bytes_or_ptrs(
                     expr, &field.ty, field_abs_offset,
-                    field.bit_offset, field.bit_width,
+                    (field.bit_offset, field.bit_width),
                     bytes, ptr_ranges,
                 );
             } else if let Initializer::List(ref nested_items) = inner_item.init {
@@ -659,11 +664,11 @@ impl Lowerer {
         expr: &Expr,
         ty: &CType,
         offset: usize,
-        bit_offset: Option<u32>,
-        bit_width: Option<u32>,
+        bitfield: (Option<u32>, Option<u32>), // (bit_offset, bit_width)
         bytes: &mut [u8],
         ptr_ranges: &mut Vec<(usize, GlobalInit)>,
     ) {
+        let (bit_offset, bit_width) = bitfield;
         let is_ptr = matches!(ty, CType::Pointer(_, _) | CType::Function(_));
         if is_ptr {
             if let Some(addr_init) = self.resolve_ptr_field_init(expr) {
@@ -724,13 +729,13 @@ impl Lowerer {
                         let f = &elem_layout.fields[0];
                         self.write_expr_to_bytes_or_ptrs(
                             expr, &f.ty, elem_offset + f.offset,
-                            f.bit_offset, f.bit_width,
+                            (f.bit_offset, f.bit_width),
                             bytes, ptr_ranges,
                         );
                     }
                 } else {
                     self.write_expr_to_bytes_or_ptrs(
-                        expr, elem_ty, elem_offset, None, None, bytes, ptr_ranges,
+                        expr, elem_ty, elem_offset, (None, None), bytes, ptr_ranges,
                     );
                 }
             } else if let Initializer::List(ref sub_items) = item.init {
@@ -769,7 +774,7 @@ impl Lowerer {
             if let Initializer::Expr(ref expr) = item.init {
                 if has_ptrs {
                     self.write_expr_to_bytes_or_ptrs(
-                        expr, elem_ty, elem_offset, None, None, bytes, ptr_ranges,
+                        expr, elem_ty, elem_offset, (None, None), bytes, ptr_ranges,
                     );
                 } else if let Some(val) = self.eval_const_expr(expr) {
                     self.write_const_to_bytes(bytes, elem_offset, &val, elem_ir_ty);
@@ -816,7 +821,7 @@ impl Lowerer {
                                     let field_offset = elem_offset + field.offset;
                                     self.write_expr_to_bytes_or_ptrs(
                                         expr, &field.ty, field_offset,
-                                        field.bit_offset, field.bit_width,
+                                        (field.bit_offset, field.bit_width),
                                         bytes, ptr_ranges,
                                     );
                                 }
@@ -855,7 +860,7 @@ impl Lowerer {
                 // Multi-dimensional array of scalars (e.g., unsigned char hash[2][4]):
                 // each item is a braced list for one row of the outer dimension.
                 let elem_size = self.resolve_ctype_size(elem_ty);
-                self.fill_multidim_array_field(items, inner_elem, *inner_size, items.len(), elem_size, bytes, offset);
+                self.fill_multidim_array_field(items, inner_elem, (*inner_size, items.len(), elem_size), bytes, offset);
             } else {
                 // Array of non-composite elements (scalars, pointers, etc.)
                 self.fill_scalar_array_with_ptrs(items, elem_ty, offset, bytes, ptr_ranges);
@@ -968,7 +973,7 @@ impl Lowerer {
             if let Initializer::Expr(ref expr) = inner_item.init {
                 self.write_expr_to_bytes_or_ptrs(
                     expr, &field.ty, field_abs_offset,
-                    field.bit_offset, field.bit_width,
+                    (field.bit_offset, field.bit_width),
                     bytes, ptr_ranges,
                 );
             } else if let Initializer::List(ref nested_items) = inner_item.init {

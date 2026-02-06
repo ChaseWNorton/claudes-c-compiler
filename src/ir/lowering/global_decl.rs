@@ -18,6 +18,7 @@ use crate::ir::reexports::{GlobalInit, IrGlobal};
 use crate::common::types::{IrType, CType};
 use super::lower::Lowerer;
 use super::definitions::{GlobalInfo, DeclAnalysis};
+use super::global_init::GlobalInitCtx;
 
 enum RedeclResult {
     Skip,
@@ -80,8 +81,8 @@ impl Lowerer {
                 continue;
             }
 
-            self.emit_ir_global(decl, declarator, &da, init, align, has_explicit_align,
-                                is_extern_decl, prior_was_weak);
+            self.emit_ir_global(decl, declarator, &da, init, align,
+                                (has_explicit_align, is_extern_decl, prior_was_weak));
         }
     }
 
@@ -304,7 +305,14 @@ impl Lowerer {
             } else {
                 da.base_ty
             };
-            self.lower_global_init(initializer, &decl.type_spec, init_base_ty, da.is_array, da.elem_size, da.actual_alloc_size, &da.struct_layout, &da.array_dim_strides)
+            let ctx = GlobalInitCtx {
+                type_spec: &decl.type_spec, base_ty: init_base_ty, is_array: da.is_array,
+                elem_size: da.elem_size, total_size: da.actual_alloc_size,
+                struct_layout: &da.struct_layout, array_dim_strides: &da.array_dim_strides,
+                is_long_double_target: self.is_type_spec_long_double(&decl.type_spec),
+                is_bool_target: self.is_type_bool(&decl.type_spec),
+            };
+            self.lower_global_init(initializer, &ctx)
         } else {
             GlobalInit::Zero
         }
@@ -334,9 +342,10 @@ impl Lowerer {
 
     fn emit_ir_global(
         &mut self, decl: &Declaration, declarator: &InitDeclarator,
-        da: &DeclAnalysis, init: GlobalInit, align: usize, has_explicit_align: bool,
-        is_extern_decl: bool, prior_was_weak: bool,
+        da: &DeclAnalysis, init: GlobalInit, align: usize,
+        flags: (bool, bool, bool), // (has_explicit_align, is_extern_decl, prior_was_weak)
     ) {
+        let (has_explicit_align, is_extern_decl, prior_was_weak) = flags;
         let global_ty = da.resolve_global_ty(&init);
         let final_size = match &init {
             GlobalInit::Array(vals) if da.is_struct && vals.len() > da.actual_alloc_size => vals.len(),

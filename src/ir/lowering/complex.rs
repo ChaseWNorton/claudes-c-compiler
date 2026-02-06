@@ -24,6 +24,15 @@ use crate::ir::reexports::{
 use crate::common::types::{AddressSpace, IrType, CType};
 use super::lower::Lowerer;
 
+/// Mutable accumulator for call argument vectors during argument preparation.
+pub(super) struct CallArgAccum<'a> {
+    pub arg_vals: &'a mut Vec<Operand>,
+    pub arg_types: &'a mut Vec<IrType>,
+    pub struct_arg_sizes: &'a mut Vec<Option<usize>>,
+    pub struct_arg_aligns: &'a mut Vec<Option<usize>>,
+    pub struct_arg_classes: &'a mut Vec<Vec<crate::common::types::EightbyteClass>>,
+}
+
 impl Lowerer {
     /// Get the IR float type for a complex type's component.
     pub(super) fn complex_component_ir_type(ctype: &CType) -> IrType {
@@ -820,11 +829,7 @@ impl Lowerer {
     /// - _Complex long double: keep as pointer (passed on stack)
     pub(super) fn decompose_complex_call_args(
         &mut self,
-        arg_vals: &mut Vec<Operand>,
-        arg_types: &mut Vec<IrType>,
-        struct_arg_sizes: &mut Vec<Option<usize>>,
-        struct_arg_aligns: &mut Vec<Option<usize>>,
-        struct_arg_classes: &mut Vec<Vec<crate::common::types::EightbyteClass>>,
+        accum: &mut CallArgAccum,
         param_ctypes: &Option<Vec<CType>>,
         args: &[Expr],
         is_variadic_call: bool,
@@ -840,13 +845,13 @@ impl Lowerer {
 
         let uses_packed_cf = self.uses_packed_complex_float();
         let packs_cf_variadic = self.packs_complex_float_variadic();
-        let mut new_vals = Vec::with_capacity(arg_vals.len() * 2);
-        let mut new_types = Vec::with_capacity(arg_types.len() * 2);
-        let mut new_struct_sizes = Vec::with_capacity(struct_arg_sizes.len() * 2);
-        let mut new_struct_aligns = Vec::with_capacity(struct_arg_aligns.len() * 2);
-        let mut new_struct_classes: Vec<Vec<crate::common::types::EightbyteClass>> = Vec::with_capacity(struct_arg_classes.len() * 2);
+        let mut new_vals = Vec::with_capacity(accum.arg_vals.len() * 2);
+        let mut new_types = Vec::with_capacity(accum.arg_types.len() * 2);
+        let mut new_struct_sizes = Vec::with_capacity(accum.struct_arg_sizes.len() * 2);
+        let mut new_struct_aligns = Vec::with_capacity(accum.struct_arg_aligns.len() * 2);
+        let mut new_struct_classes: Vec<Vec<crate::common::types::EightbyteClass>> = Vec::with_capacity(accum.struct_arg_classes.len() * 2);
 
-        for (i, (val, ty)) in arg_vals.iter().zip(arg_types.iter()).enumerate() {
+        for (i, (val, ty)) in accum.arg_vals.iter().zip(accum.arg_types.iter()).enumerate() {
             let ctype = pctypes.get(i);
             // Is this arg beyond the fixed params (i.e., a variadic argument)?
             let is_variadic_arg = is_variadic_call && i >= n_fixed_params;
@@ -948,16 +953,16 @@ impl Lowerer {
             } else {
                 new_vals.push(*val);
                 new_types.push(*ty);
-                new_struct_sizes.push(struct_arg_sizes.get(i).copied().flatten());
-                new_struct_aligns.push(struct_arg_aligns.get(i).copied().flatten());
-                new_struct_classes.push(struct_arg_classes.get(i).cloned().unwrap_or_default());
+                new_struct_sizes.push(accum.struct_arg_sizes.get(i).copied().flatten());
+                new_struct_aligns.push(accum.struct_arg_aligns.get(i).copied().flatten());
+                new_struct_classes.push(accum.struct_arg_classes.get(i).cloned().unwrap_or_default());
             }
         }
 
-        *arg_vals = new_vals;
-        *arg_types = new_types;
-        *struct_arg_sizes = new_struct_sizes;
-        *struct_arg_aligns = new_struct_aligns;
-        *struct_arg_classes = new_struct_classes;
+        *accum.arg_vals = new_vals;
+        *accum.arg_types = new_types;
+        *accum.struct_arg_sizes = new_struct_sizes;
+        *accum.struct_arg_aligns = new_struct_aligns;
+        *accum.struct_arg_classes = new_struct_classes;
     }
 }

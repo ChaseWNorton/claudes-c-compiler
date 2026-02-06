@@ -24,6 +24,7 @@ use crate::ir::reexports::{
 use crate::common::types::{AddressSpace, IrType, CType, StructLayout, target_int_ir_type};
 use super::lower::Lowerer;
 use super::definitions::{LocalInfo, GlobalInfo, DeclAnalysis, FuncSig};
+use super::global_init::GlobalInitCtx;
 use crate::frontend::sema::type_context::extract_fptr_typedef_info;
 
 impl Lowerer {
@@ -145,11 +146,11 @@ impl Lowerer {
                 )
             };
 
-            self.register_local_var(decl, declarator, type_spec, &da, alloca, alloca_align, vla_size);
+            self.register_local_var(decl, declarator, type_spec, &da, alloca, (alloca_align, vla_size));
             self.track_fptr_sig(declarator, type_spec);
 
             if let Some(ref init) = declarator.init {
-                self.lower_local_var_init(init, decl, declarator, &da, alloca, is_complex, &complex_elem_ctype);
+                self.lower_local_var_init(init, decl, declarator, &da, alloca, (is_complex, &complex_elem_ctype));
             }
         }
     }
@@ -306,8 +307,9 @@ impl Lowerer {
     fn register_local_var(
         &mut self, decl: &Declaration, declarator: &InitDeclarator,
         type_spec: &TypeSpecifier, da: &DeclAnalysis, alloca: Value,
-        explicit_align: usize, vla_size: Option<Value>,
+        extras: (usize, Option<Value>), // (explicit_align, vla_size)
     ) {
+        let (explicit_align, vla_size) = extras;
         let mut local_info = LocalInfo::from_analysis(da, alloca, decl.is_const());
         local_info.var.address_space = decl.address_space;
         local_info.var.is_atomic = decl.is_atomic();
@@ -360,8 +362,10 @@ impl Lowerer {
 
     fn lower_local_var_init(
         &mut self, init: &Initializer, decl: &Declaration, declarator: &InitDeclarator,
-        da: &DeclAnalysis, alloca: Value, is_complex: bool, complex_elem_ctype: &Option<CType>,
+        da: &DeclAnalysis, alloca: Value,
+        complex_info: (bool, &Option<CType>), // (is_complex, complex_elem_ctype)
     ) {
+        let (is_complex, complex_elem_ctype) = complex_info;
         match init {
             Initializer::Expr(expr) => {
                 if decl.is_const() && !da.is_pointer && !da.is_array && !da.is_struct && !is_complex {
@@ -375,7 +379,7 @@ impl Lowerer {
             }
             Initializer::List(items) => {
                 self.lower_local_init_list(
-                    items, alloca, da, is_complex, complex_elem_ctype,
+                    items, alloca, da, (is_complex, complex_elem_ctype),
                     decl, &declarator.name,
                 );
             }
@@ -415,10 +419,14 @@ impl Lowerer {
             } else {
                 da.base_ty
             };
-            self.lower_global_init(
-                initializer, type_spec, init_base_ty, da.is_array,
-                da.elem_size, da.actual_alloc_size, &da.struct_layout, &da.array_dim_strides,
-            )
+            let ctx = GlobalInitCtx {
+                type_spec, base_ty: init_base_ty, is_array: da.is_array,
+                elem_size: da.elem_size, total_size: da.actual_alloc_size,
+                struct_layout: &da.struct_layout, array_dim_strides: &da.array_dim_strides,
+                is_long_double_target: self.is_type_spec_long_double(type_spec),
+                is_bool_target: self.is_type_bool(type_spec),
+            };
+            self.lower_global_init(initializer, &ctx)
         } else {
             GlobalInit::Zero
         };

@@ -18,7 +18,23 @@ use crate::ir::reexports::{
     Value,
 };
 use crate::common::types::{AddressSpace, IrType, CType, target_int_ir_type};
+use super::complex::CallArgAccum;
 use super::lower::Lowerer;
+
+/// Bundled arguments for `emit_call_instruction`.
+pub(super) struct CallEmitArgs {
+    pub arg_vals: Vec<Operand>,
+    pub arg_types: Vec<IrType>,
+    pub struct_arg_sizes: Vec<Option<usize>>,
+    pub struct_arg_aligns: Vec<Option<usize>>,
+    pub struct_arg_classes: Vec<Vec<crate::common::types::EightbyteClass>>,
+    pub struct_arg_riscv_float_classes: Vec<Option<crate::common::types::RiscvFloatClass>>,
+    pub is_variadic: bool,
+    pub num_fixed_args: usize,
+    pub two_reg_size: Option<usize>,
+    pub sret_size: Option<usize>,
+    pub call_ret_classes: Vec<crate::common::types::EightbyteClass>,
+}
 
 /// Collected argument information from `lower_call_arguments`.
 pub(super) struct CallArgInfo {
@@ -231,7 +247,16 @@ impl Lowerer {
         } else {
             None
         };
-        self.decompose_complex_call_args(&mut arg_vals, &mut arg_types, &mut struct_arg_sizes, &mut struct_arg_aligns, &mut struct_arg_classes, &param_ctypes_for_decompose, args, call_is_variadic);
+        {
+            let mut call_accum = CallArgAccum {
+                arg_vals: &mut arg_vals,
+                arg_types: &mut arg_types,
+                struct_arg_sizes: &mut struct_arg_sizes,
+                struct_arg_aligns: &mut struct_arg_aligns,
+                struct_arg_classes: &mut struct_arg_classes,
+            };
+            self.decompose_complex_call_args(&mut call_accum, &param_ctypes_for_decompose, args, call_is_variadic);
+        }
 
         let dest = self.fresh_value();
 
@@ -291,7 +316,11 @@ impl Lowerer {
         };
 
         // Dispatch: direct call, function pointer call, or indirect call
-        let call_ret_ty = self.emit_call_instruction(effective_func, dest, arg_vals, arg_types, struct_arg_sizes, struct_arg_aligns, struct_arg_classes, struct_arg_riscv_float_classes, call_variadic, num_fixed_args, two_reg_size, sret_size, call_ret_classes);
+        let call_ret_ty = self.emit_call_instruction(effective_func, dest, CallEmitArgs {
+            arg_vals, arg_types, struct_arg_sizes, struct_arg_aligns,
+            struct_arg_classes, struct_arg_riscv_float_classes,
+            is_variadic: call_variadic, num_fixed_args, two_reg_size, sret_size, call_ret_classes,
+        });
 
         // After call to noreturn function, emit unreachable and start dead block.
         // Unlike error_functions (which skip the call entirely), noreturn functions
@@ -747,18 +776,13 @@ impl Lowerer {
         &mut self,
         func: &Expr,
         dest: Value,
-        arg_vals: Vec<Operand>,
-        arg_types: Vec<IrType>,
-        struct_arg_sizes: Vec<Option<usize>>,
-        struct_arg_aligns: Vec<Option<usize>>,
-        struct_arg_classes: Vec<Vec<crate::common::types::EightbyteClass>>,
-        struct_arg_riscv_float_classes: Vec<Option<crate::common::types::RiscvFloatClass>>,
-        is_variadic: bool,
-        num_fixed_args: usize,
-        two_reg_size: Option<usize>,
-        sret_size: Option<usize>,
-        call_ret_classes: Vec<crate::common::types::EightbyteClass>,
+        ca: CallEmitArgs,
     ) -> IrType {
+        let CallEmitArgs {
+            arg_vals, arg_types, struct_arg_sizes, struct_arg_aligns,
+            struct_arg_classes, struct_arg_riscv_float_classes,
+            is_variadic, num_fixed_args, two_reg_size, sret_size, call_ret_classes,
+        } = ca;
         let mut indirect_ret_ty = self.get_func_ptr_return_ir_type(func);
         if two_reg_size.is_some() {
             indirect_ret_ty = IrType::I128;

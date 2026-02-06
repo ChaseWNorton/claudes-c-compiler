@@ -535,7 +535,7 @@ impl Lowerer {
             if let ExternalDecl::FunctionDef(func) = decl {
                 self.register_function_meta(
                     &func.name, &func.return_type, 0,
-                    &func.params, func.variadic, func.attrs.is_static(), func.is_kr,
+                    &func.params, func.variadic, (func.attrs.is_static(), func.is_kr),
                 );
             }
             if let ExternalDecl::Declaration(decl) = decl {
@@ -575,7 +575,7 @@ impl Lowerer {
                     if let Some((params, variadic)) = func_info {
                         self.register_function_meta(
                             &declarator.name, &decl.type_spec, ptr_count,
-                            &params, variadic, decl.is_static(), false,
+                            &params, variadic, (decl.is_static(), false),
                         );
                         // C99 6.7.4p7: Track function declarations that would make
                         // an inline definition provide an external definition.
@@ -596,7 +596,7 @@ impl Lowerer {
                             if let Some(fti) = self.types.function_typedefs.get(tname).cloned() {
                                 self.register_function_meta(
                                     &declarator.name, &fti.return_type, 0,
-                                    &fti.params, fti.variadic, false, false,
+                                    &fti.params, fti.variadic, (false, false),
                                 );
                             }
                         }
@@ -768,9 +768,9 @@ impl Lowerer {
         ptr_count: usize,
         params: &[ParamDecl],
         variadic: bool,
-        is_static: bool,
-        is_kr: bool,
+        flags: (bool, bool), // (is_static, is_kr)
     ) {
+        let (is_static, is_kr) = flags;
         self.known_functions.insert(name.to_string());
         if is_static {
             self.static_functions.insert(name.to_string());

@@ -32,6 +32,28 @@ use crate::common::types::{IrType, StructLayout, RcLayout, CType};
 use super::lower::Lowerer;
 use super::global_init_helpers as h;
 
+/// Context for global initializer lowering. Groups the type/layout parameters
+/// that are threaded through the `lower_global_init*` call chain.
+pub(super) struct GlobalInitCtx<'a> {
+    pub type_spec: &'a TypeSpecifier,
+    pub base_ty: IrType,
+    pub is_array: bool,
+    pub elem_size: usize,
+    pub total_size: usize,
+    pub struct_layout: &'a Option<RcLayout>,
+    pub array_dim_strides: &'a [usize],
+    pub is_long_double_target: bool,
+    pub is_bool_target: bool,
+}
+
+/// Context for multi-dimensional array flattening helpers.
+struct FlattenCtx<'a> {
+    pub array_dim_strides: &'a [usize],
+    pub base_ty: IrType,
+    pub sub_elem_count: usize,
+    pub is_bool_target: bool,
+}
+
 // =============================================================================
 // Top-level entry point
 // =============================================================================
@@ -44,27 +66,11 @@ impl Lowerer {
     pub(super) fn lower_global_init(
         &mut self,
         init: &Initializer,
-        type_spec: &TypeSpecifier,
-        base_ty: IrType,
-        is_array: bool,
-        elem_size: usize,
-        total_size: usize,
-        struct_layout: &Option<RcLayout>,
-        array_dim_strides: &[usize],
+        ctx: &GlobalInitCtx,
     ) -> GlobalInit {
-        let is_long_double_target = self.is_type_spec_long_double(type_spec);
-        let is_bool_target = self.is_type_bool(type_spec);
-
         match init {
-            Initializer::Expr(expr) => self.lower_global_init_expr(
-                expr, type_spec, base_ty, is_array, struct_layout,
-                is_long_double_target, is_bool_target,
-            ),
-            Initializer::List(items) => self.lower_global_init_list(
-                items, type_spec, base_ty, is_array, elem_size, total_size,
-                struct_layout, array_dim_strides,
-                is_long_double_target, is_bool_target,
-            ),
+            Initializer::Expr(expr) => self.lower_global_init_expr(expr, ctx),
+            Initializer::List(items) => self.lower_global_init_list(items, ctx),
         }
     }
 }
@@ -79,29 +85,21 @@ impl Lowerer {
     fn lower_global_init_expr(
         &mut self,
         expr: &Expr,
-        type_spec: &TypeSpecifier,
-        base_ty: IrType,
-        is_array: bool,
-        _struct_layout: &Option<RcLayout>,
-        is_long_double_target: bool,
-        is_bool_target: bool,
+        ctx: &GlobalInitCtx,
     ) -> GlobalInit {
         // Resolve _Generic selections: unwrap to the selected expression before
         // any other processing, so all downstream logic (const eval, string
         // literals, address expressions, etc.) sees the resolved expression.
         if let Expr::GenericSelection(ref controlling, ref associations, _) = expr {
             if let Some(selected) = self.resolve_generic_selection_expr(controlling, associations) {
-                return self.lower_global_init_expr(
-                    selected, type_spec, base_ty, is_array, _struct_layout,
-                    is_long_double_target, is_bool_target,
-                );
+                return self.lower_global_init_expr(selected, ctx);
             }
         }
 
         // Complex types: handle before scalar evaluation to prevent misinterpretation
         // of scalar values (e.g., `_Complex float g = 1.0f;`).
         {
-            let ctype = self.type_spec_to_ctype(type_spec);
+            let ctype = self.type_spec_to_ctype(ctx.type_spec);
             if ctype.is_complex() {
                 if let Some(init) = self.eval_complex_global_init(expr, &ctype) {
                     return init;
@@ -112,12 +110,12 @@ impl Lowerer {
         // Scalar constant
         if let Some(val) = self.eval_const_expr(expr) {
             return GlobalInit::Scalar(
-                self.coerce_scalar_const(val, expr, base_ty, is_long_double_target, is_bool_target)
+                self.coerce_scalar_const(val, expr, ctx.base_ty, ctx.is_long_double_target, ctx.is_bool_target)
             );
         }
 
         // String literal (narrow, wide, or char16)
-        if let Some(init) = self.lower_string_literal_init(expr, base_ty, is_array) {
+        if let Some(init) = self.lower_string_literal_init(expr, ctx.base_ty, ctx.is_array) {
             return init;
         }
 
@@ -148,7 +146,7 @@ impl Lowerer {
         // Compound literal used directly as initializer value
         if let Expr::CompoundLiteral(ref cl_type_spec, ref cl_init, _) = expr {
             return self.lower_compound_literal_init(
-                cl_type_spec, cl_init, base_ty, is_array,
+                cl_type_spec, cl_init, ctx.base_ty, ctx.is_array,
             );
         }
 
@@ -171,7 +169,7 @@ impl Lowerer {
         }
 
         // Label difference: &&lab1 - &&lab2 (computed goto dispatch tables)
-        if let Some(label_diff) = self.eval_label_diff_expr(expr, base_ty.size().max(4)) {
+        if let Some(label_diff) = self.eval_label_diff_expr(expr, ctx.base_ty.size().max(4)) {
             return label_diff;
         }
 
@@ -372,10 +370,14 @@ impl Lowerer {
         let cl_size = cl_layout.as_ref()
             .map_or_else(|| self.sizeof_type(cl_type_spec), |l| l.size);
         let cl_is_array = matches!(cl_ctype, CType::Array(..));
-        self.lower_global_init(
-            cl_init, cl_type_spec, cl_base_ty, cl_is_array,
-            0, cl_size, &cl_layout, &[],
-        )
+        let ctx = GlobalInitCtx {
+            type_spec: cl_type_spec, base_ty: cl_base_ty, is_array: cl_is_array,
+            elem_size: 0, total_size: cl_size, struct_layout: &cl_layout,
+            array_dim_strides: &[],
+            is_long_double_target: self.is_type_spec_long_double(cl_type_spec),
+            is_bool_target: self.is_type_bool(cl_type_spec),
+        };
+        self.lower_global_init(cl_init, &ctx)
     }
 }
 
@@ -391,61 +393,49 @@ impl Lowerer {
     fn lower_global_init_list(
         &mut self,
         items: &[InitializerItem],
-        type_spec: &TypeSpecifier,
-        base_ty: IrType,
-        is_array: bool,
-        elem_size: usize,
-        total_size: usize,
-        struct_layout: &Option<RcLayout>,
-        array_dim_strides: &[usize],
-        is_long_double_target: bool,
-        is_bool_target: bool,
+        ctx: &GlobalInitCtx,
     ) -> GlobalInit {
         // Brace-wrapped string literal: char c[] = {"hello"}
-        let is_char_not_ptr_array = elem_size <= base_ty.size().max(1);
-        if is_array && is_char_not_ptr_array {
-            if let Some(init) = self.try_brace_wrapped_string(items, base_ty) {
+        let is_char_not_ptr_array = ctx.elem_size <= ctx.base_ty.size().max(1);
+        if ctx.is_array && is_char_not_ptr_array {
+            if let Some(init) = self.try_brace_wrapped_string(items, ctx.base_ty) {
                 return init;
             }
         }
 
         // Complex array: double _Complex arr[] = { ... }
-        let complex_ctype = self.type_spec_to_ctype(type_spec);
-        if is_array && complex_ctype.is_complex() {
-            return self.lower_complex_array_init(items, &complex_ctype, total_size, elem_size);
+        let complex_ctype = self.type_spec_to_ctype(ctx.type_spec);
+        if ctx.is_array && complex_ctype.is_complex() {
+            return self.lower_complex_array_init(items, &complex_ctype, ctx.total_size, ctx.elem_size);
         }
 
         // Array with elements
-        if is_array && elem_size > 0 {
-            return self.lower_array_init(
-                items, type_spec, base_ty, elem_size, total_size,
-                struct_layout, array_dim_strides,
-                is_long_double_target, is_bool_target,
-            );
+        if ctx.is_array && ctx.elem_size > 0 {
+            return self.lower_array_init(items, ctx);
         }
 
         // Struct/union initializer list
-        if let Some(ref layout) = struct_layout {
+        if let Some(ref layout) = ctx.struct_layout {
             return self.lower_struct_global_init(items, layout);
         }
 
         // Vector initializer list: __attribute__((vector_size(N)))
         {
-            let ctype = self.type_spec_to_ctype(type_spec);
+            let ctype = self.type_spec_to_ctype(ctx.type_spec);
             if let Some((elem_ct, num_elems)) = ctype.vector_info() {
                 return self.lower_vector_init(items, elem_ct, num_elems);
             }
         }
 
         // Scalar with braces: int x = { 1 }; or int x = {{{1}}};
-        if !is_array && !items.is_empty() {
-            if let Some(init) = self.lower_scalar_with_braces(items, base_ty) {
+        if !ctx.is_array && !items.is_empty() {
+            if let Some(init) = self.lower_scalar_with_braces(items, ctx.base_ty) {
                 return init;
             }
         }
 
         // Fallback: array of constants coerced to base_ty
-        self.lower_fallback_array(items, base_ty)
+        self.lower_fallback_array(items, ctx.base_ty)
     }
 
     /// Try to extract a brace-wrapped string literal: `{"hello"}` for char/wchar_t/char16_t arrays.
@@ -511,36 +501,29 @@ impl Lowerer {
     fn lower_array_init(
         &mut self,
         items: &[InitializerItem],
-        type_spec: &TypeSpecifier,
-        base_ty: IrType,
-        elem_size: usize,
-        total_size: usize,
-        struct_layout: &Option<RcLayout>,
-        array_dim_strides: &[usize],
-        is_long_double_target: bool,
-        is_bool_target: bool,
+        ctx: &GlobalInitCtx,
     ) -> GlobalInit {
         let num_elems = self.compute_num_elems(
-            base_ty, elem_size, total_size, struct_layout, is_long_double_target,
+            ctx.base_ty, ctx.elem_size, ctx.total_size, ctx.struct_layout, ctx.is_long_double_target,
         );
 
         // Struct array (byte-serialized or compound for pointer fields)
-        if let Some(ref layout) = struct_layout {
+        if let Some(ref layout) = ctx.struct_layout {
             return self.lower_struct_array_init(
-                items, layout, num_elems, total_size, array_dim_strides,
+                items, layout, num_elems, ctx.total_size, ctx.array_dim_strides,
             );
         }
 
         // Pointer array or array with address expressions (needs .quad directives)
-        if self.array_needs_compound_init(items, base_ty, elem_size, array_dim_strides) {
+        if self.array_needs_compound_init(items, ctx.base_ty, ctx.elem_size, ctx.array_dim_strides) {
             return self.lower_pointer_array_init(
-                items, base_ty, elem_size, total_size, array_dim_strides,
+                items, ctx.base_ty, ctx.elem_size, ctx.total_size, ctx.array_dim_strides,
             );
         }
 
         // Vector array: e.g., __attribute__((vector_size(16))) arr[]
         {
-            let ctype = self.type_spec_to_ctype(type_spec);
+            let ctype = self.type_spec_to_ctype(ctx.type_spec);
             if let Some((elem_ct, vec_num_elems)) = ctype.vector_info() {
                 return self.lower_vector_array_init(
                     items, elem_ct, vec_num_elems, num_elems,
@@ -549,10 +532,7 @@ impl Lowerer {
         }
 
         // Plain scalar array (possibly multi-dimensional)
-        self.lower_scalar_array_init(
-            items, base_ty, num_elems, total_size, array_dim_strides,
-            is_long_double_target, is_bool_target,
-        )
+        self.lower_scalar_array_init(items, ctx, num_elems)
     }
 
     /// Compute the number of elements in the array.
@@ -599,8 +579,8 @@ impl Lowerer {
         let struct_size = layout.size;
         let mut bytes = vec![0u8; total_size];
         self.fill_multidim_struct_array_bytes(
-            items, layout, struct_size, array_dim_strides,
-            &mut bytes, 0, total_size,
+            items, layout, array_dim_strides,
+            &mut bytes, (struct_size, 0, total_size),
         );
         let values: Vec<IrConst> = bytes.iter().map(|&b| IrConst::I8(b as i8)).collect();
         GlobalInit::Array(values)
@@ -956,30 +936,26 @@ impl Lowerer {
     fn lower_scalar_array_init(
         &mut self,
         items: &[InitializerItem],
-        base_ty: IrType,
+        ctx: &GlobalInitCtx,
         num_elems: usize,
-        total_size: usize,
-        array_dim_strides: &[usize],
-        is_long_double_target: bool,
-        is_bool_target: bool,
     ) -> GlobalInit {
-        let zero_val = self.typed_zero_const(base_ty, is_long_double_target);
+        let zero_val = self.typed_zero_const(ctx.base_ty, ctx.is_long_double_target);
 
-        if array_dim_strides.len() > 1 {
+        if ctx.array_dim_strides.len() > 1 {
             // Multi-dimensional array: flatten nested init lists
-            let innermost_stride = array_dim_strides.last().copied().unwrap_or(1).max(1);
-            let total_scalar_elems = total_size / innermost_stride;
+            let innermost_stride = ctx.array_dim_strides.last().copied().unwrap_or(1).max(1);
+            let total_scalar_elems = ctx.total_size / innermost_stride;
             let mut values_flat = vec![
-                self.typed_zero_const(base_ty, is_long_double_target);
+                self.typed_zero_const(ctx.base_ty, ctx.is_long_double_target);
                 total_scalar_elems
             ];
             let mut flat = Vec::with_capacity(total_scalar_elems);
             self.flatten_global_array_init_bool(
-                items, array_dim_strides, base_ty, &mut flat, is_bool_target,
+                items, ctx.array_dim_strides, ctx.base_ty, &mut flat, ctx.is_bool_target,
             );
             for (i, v) in flat.into_iter().enumerate() {
                 if i < total_scalar_elems {
-                    values_flat[i] = Self::maybe_promote_long_double(v, is_long_double_target);
+                    values_flat[i] = Self::maybe_promote_long_double(v, ctx.is_long_double_target);
                 }
             }
             GlobalInit::Array(values_flat)
@@ -994,8 +970,8 @@ impl Lowerer {
                     }
                 }
                 if current_idx < num_elems {
-                    let val = self.eval_array_element(&item.init, base_ty, is_bool_target);
-                    values[current_idx] = Self::maybe_promote_long_double(val, is_long_double_target);
+                    let val = self.eval_array_element(&item.init, ctx.base_ty, ctx.is_bool_target);
+                    values[current_idx] = Self::maybe_promote_long_double(val, ctx.is_long_double_target);
                 }
                 current_idx += 1;
             }
@@ -1174,9 +1150,13 @@ impl Lowerer {
         let align = struct_layout.as_ref()
             .map_or(base_ty.align(), |l| l.align.max(base_ty.align()));
 
-        let global_init = self.lower_global_init(
-            init, type_spec, base_ty, is_array, elem_size, alloc_size, &struct_layout, &[],
-        );
+        let gi_ctx = GlobalInitCtx {
+            type_spec, base_ty, is_array, elem_size, total_size: alloc_size,
+            struct_layout: &struct_layout, array_dim_strides: &[],
+            is_long_double_target: self.is_type_spec_long_double(type_spec),
+            is_bool_target: self.is_type_bool(type_spec),
+        };
+        let global_init = self.lower_global_init(init, &gi_ctx);
 
         let global_ty = if matches!(&global_init, GlobalInit::Array(vals) if !vals.is_empty() && matches!(vals[0], IrConst::I8(_)))
             || (struct_layout.is_some() && matches!(global_init, GlobalInit::Array(_)))
@@ -1543,6 +1523,12 @@ impl Lowerer {
         } else {
             1
         };
+        let fctx = FlattenCtx {
+            array_dim_strides,
+            base_ty,
+            sub_elem_count,
+            is_bool_target,
+        };
         let start_len = values.len();
         let mut current_outer_idx = 0usize;
 
@@ -1557,8 +1543,7 @@ impl Lowerer {
 
             if !index_designators.is_empty() {
                 self.flatten_designated_item(
-                    item, &index_designators, array_dim_strides, base_ty,
-                    base_type_size, sub_elem_count, values, is_bool_target,
+                    item, &index_designators, &fctx, base_type_size, values,
                 );
                 current_outer_idx = index_designators[0] + 1;
                 continue;
@@ -1566,8 +1551,7 @@ impl Lowerer {
 
             // Sequential processing (no designator)
             self.flatten_sequential_item(
-                item, array_dim_strides, base_ty, sub_elem_count,
-                start_len, &mut current_outer_idx, values, is_bool_target,
+                item, &fctx, start_len, &mut current_outer_idx, values,
             );
         }
     }
@@ -1612,61 +1596,52 @@ impl Lowerer {
         &self,
         item: &InitializerItem,
         index_designators: &[usize],
-        array_dim_strides: &[usize],
-        base_ty: IrType,
+        fctx: &FlattenCtx,
         base_type_size: usize,
-        sub_elem_count: usize,
         values: &mut Vec<IrConst>,
-        is_bool_target: bool,
     ) {
         let flat_idx = self.compute_flat_index_from_designators(
-            index_designators, array_dim_strides, base_type_size
+            index_designators, fctx.array_dim_strides, base_type_size
         );
         // Pad up to flat_idx if needed
         while values.len() <= flat_idx {
-            values.push(self.zero_const(base_ty));
+            values.push(self.zero_const(fctx.base_ty));
         }
 
-        let zero_fn = || self.zero_const(base_ty);
+        let zero_fn = || self.zero_const(fctx.base_ty);
         match &item.init {
             Initializer::List(sub_items) => {
-                let remaining_dims = array_dim_strides.len().saturating_sub(index_designators.len());
-                let sub_strides = &array_dim_strides[array_dim_strides.len() - remaining_dims..];
+                let remaining_dims = fctx.array_dim_strides.len().saturating_sub(index_designators.len());
+                let sub_strides = &fctx.array_dim_strides[fctx.array_dim_strides.len() - remaining_dims..];
                 let mut tmp = Vec::new();
                 if sub_strides.is_empty() || remaining_dims == 0 {
-                    self.flatten_global_init_item_bool(&item.init, base_ty, &mut tmp, is_bool_target);
+                    self.flatten_global_init_item_bool(&item.init, fctx.base_ty, &mut tmp, fctx.is_bool_target);
                 } else {
-                    self.flatten_global_array_init_bool(sub_items, sub_strides, base_ty, &mut tmp, is_bool_target);
+                    self.flatten_global_array_init_bool(sub_items, sub_strides, fctx.base_ty, &mut tmp, fctx.is_bool_target);
                 }
                 Self::overwrite_or_extend_values(values, flat_idx, tmp, &zero_fn);
             }
             Initializer::Expr(expr) => {
                 if let Expr::StringLiteral(s, _) = expr {
-                    // For designated string literal in a multi-dim char array:
-                    // e.g., char arr[2][5] = { [0] = "ABCD" }
-                    // index_designators = [0], array_dim_strides = [5, 1]
-                    // We need to fill 5 chars (the inner array size).
-                    // Use the stride at the designator level (strides[0] = 5), not after it.
                     let string_sub_count = if !index_designators.is_empty()
-                        && index_designators.len() < array_dim_strides.len()
+                        && index_designators.len() < fctx.array_dim_strides.len()
                         && base_type_size > 0
                     {
-                        // Stride at the last designator level gives the size of the target element
-                        array_dim_strides[index_designators.len() - 1] / base_type_size
-                    } else if index_designators.len() < array_dim_strides.len() {
-                        sub_elem_count
+                        fctx.array_dim_strides[index_designators.len() - 1] / base_type_size
+                    } else if index_designators.len() < fctx.array_dim_strides.len() {
+                        fctx.sub_elem_count
                     } else {
                         1
                     };
                     let mut tmp = Vec::new();
-                    self.inline_string_to_values(s, string_sub_count, base_ty, &mut tmp);
+                    self.inline_string_to_values(s, string_sub_count, fctx.base_ty, &mut tmp);
                     Self::overwrite_or_extend_values(values, flat_idx, tmp, &zero_fn);
                 } else if let Some(val) = self.eval_const_expr(expr) {
-                    values[flat_idx] = if is_bool_target {
+                    values[flat_idx] = if fctx.is_bool_target {
                         val.bool_normalize()
                     } else {
                         let expr_ty = self.get_expr_type(expr);
-                        self.coerce_const_to_type_with_src(val, base_ty, expr_ty)
+                        self.coerce_const_to_type_with_src(val, fctx.base_ty, expr_ty)
                     };
                 }
             }
@@ -1677,62 +1652,59 @@ impl Lowerer {
     fn flatten_sequential_item(
         &self,
         item: &InitializerItem,
-        array_dim_strides: &[usize],
-        base_ty: IrType,
-        sub_elem_count: usize,
+        fctx: &FlattenCtx,
         start_len: usize,
         current_outer_idx: &mut usize,
         values: &mut Vec<IrConst>,
-        is_bool_target: bool,
     ) {
         match &item.init {
             Initializer::List(sub_items) => {
-                let target_start = start_len + *current_outer_idx * sub_elem_count;
+                let target_start = start_len + *current_outer_idx * fctx.sub_elem_count;
                 while values.len() < target_start {
-                    values.push(self.zero_const(base_ty));
+                    values.push(self.zero_const(fctx.base_ty));
                 }
                 // Check for braced string literal initializing a char sub-array
                 if sub_items.len() == 1 {
                     if let Initializer::Expr(Expr::StringLiteral(s, _)) = &sub_items[0].init {
-                        self.inline_string_to_values(s, sub_elem_count, base_ty, values);
+                        self.inline_string_to_values(s, fctx.sub_elem_count, fctx.base_ty, values);
                         *current_outer_idx += 1;
                         return;
                     }
                 }
-                let mut sub_values = Vec::with_capacity(sub_elem_count);
+                let mut sub_values = Vec::with_capacity(fctx.sub_elem_count);
                 self.flatten_global_array_init_bool(
-                    sub_items, &array_dim_strides[1..], base_ty, &mut sub_values, is_bool_target,
+                    sub_items, &fctx.array_dim_strides[1..], fctx.base_ty, &mut sub_values, fctx.is_bool_target,
                 );
-                while sub_values.len() < sub_elem_count {
-                    sub_values.push(self.zero_const(base_ty));
+                while sub_values.len() < fctx.sub_elem_count {
+                    sub_values.push(self.zero_const(fctx.base_ty));
                 }
-                values.extend(sub_values.into_iter().take(sub_elem_count));
+                values.extend(sub_values.into_iter().take(fctx.sub_elem_count));
                 *current_outer_idx += 1;
             }
             Initializer::Expr(expr) => {
                 if let Expr::StringLiteral(s, _) = expr {
-                    let target_start = start_len + *current_outer_idx * sub_elem_count;
+                    let target_start = start_len + *current_outer_idx * fctx.sub_elem_count;
                     while values.len() < target_start {
-                        values.push(self.zero_const(base_ty));
+                        values.push(self.zero_const(fctx.base_ty));
                     }
-                    self.inline_string_to_values(s, sub_elem_count, base_ty, values);
+                    self.inline_string_to_values(s, fctx.sub_elem_count, fctx.base_ty, values);
                     *current_outer_idx += 1;
                 } else if let Some(val) = self.eval_const_expr(expr) {
-                    values.push(if is_bool_target {
+                    values.push(if fctx.is_bool_target {
                         val.bool_normalize()
                     } else {
                         let expr_ty = self.get_expr_type(expr);
-                        self.coerce_const_to_type_with_src(val, base_ty, expr_ty)
+                        self.coerce_const_to_type_with_src(val, fctx.base_ty, expr_ty)
                     });
                     let relative_pos = values.len() - start_len;
-                    if sub_elem_count > 0 {
-                        *current_outer_idx = relative_pos.div_ceil(sub_elem_count);
+                    if fctx.sub_elem_count > 0 {
+                        *current_outer_idx = relative_pos.div_ceil(fctx.sub_elem_count);
                     }
                 } else {
-                    values.push(self.zero_const(base_ty));
+                    values.push(self.zero_const(fctx.base_ty));
                     let relative_pos = values.len() - start_len;
-                    if sub_elem_count > 0 {
-                        *current_outer_idx = relative_pos.div_ceil(sub_elem_count);
+                    if fctx.sub_elem_count > 0 {
+                        *current_outer_idx = relative_pos.div_ceil(fctx.sub_elem_count);
                     }
                 }
             }

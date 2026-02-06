@@ -24,6 +24,13 @@ use crate::ir::reexports::{
 use crate::common::types::{AddressSpace, IrType};
 use super::lower::Lowerer;
 
+struct CmpxchgOperands {
+    ptr: Operand,
+    expected_ptr_op: Operand,
+    expected: Value,
+    desired: Operand,
+}
+
 impl Lowerer {
     /// Try to lower a GCC atomic builtin (__atomic_* or __sync_*).
     ///
@@ -109,8 +116,8 @@ impl Lowerer {
             let expected = self.load_through_ptr(expected_ptr_op, val_ty);
             let desired = self.lower_expr(&args[2]);
             return Some(self.emit_cmpxchg_with_writeback(
-                ptr, expected_ptr_op, expected, desired, val_ty,
-                Self::parse_ordering(&args[4]), Self::parse_ordering(&args[5]),
+                CmpxchgOperands { ptr, expected_ptr_op, expected, desired },
+                val_ty, Self::parse_ordering(&args[4]), Self::parse_ordering(&args[5]),
             ));
         }
         if name == "__atomic_compare_exchange" && args.len() >= 6 {
@@ -120,8 +127,8 @@ impl Lowerer {
             let expected = self.load_through_ptr(expected_ptr_op, val_ty);
             let desired = self.load_through_ptr(desired_ptr_op, val_ty);
             return Some(self.emit_cmpxchg_with_writeback(
-                ptr, expected_ptr_op, expected, Operand::Value(desired), val_ty,
-                Self::parse_ordering(&args[4]), Self::parse_ordering(&args[5]),
+                CmpxchgOperands { ptr, expected_ptr_op, expected, desired: Operand::Value(desired) },
+                val_ty, Self::parse_ordering(&args[4]), Self::parse_ordering(&args[5]),
             ));
         }
 
@@ -322,21 +329,18 @@ impl Lowerer {
     /// Emit a compare-exchange with writeback to expected_ptr and equality comparison.
     fn emit_cmpxchg_with_writeback(
         &mut self,
-        ptr: Operand,
-        expected_ptr_op: Operand,
-        expected: Value,
-        desired: Operand,
+        ops: CmpxchgOperands,
         ty: IrType,
         success_ordering: AtomicOrdering,
         failure_ordering: AtomicOrdering,
     ) -> Operand {
         let old_val = self.fresh_value();
         self.emit(Instruction::AtomicCmpxchg {
-            dest: old_val, ptr, expected: Operand::Value(expected), desired,
+            dest: old_val, ptr: ops.ptr, expected: Operand::Value(ops.expected), desired: ops.desired,
             ty, success_ordering, failure_ordering, returns_bool: false,
         });
-        self.store_through_ptr(expected_ptr_op, Operand::Value(old_val), ty);
-        let result = self.emit_cmp_val(IrCmpOp::Eq, Operand::Value(old_val), Operand::Value(expected), ty);
+        self.store_through_ptr(ops.expected_ptr_op, Operand::Value(old_val), ty);
+        let result = self.emit_cmp_val(IrCmpOp::Eq, Operand::Value(old_val), Operand::Value(ops.expected), ty);
         Operand::Value(result)
     }
 

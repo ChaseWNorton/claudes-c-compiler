@@ -609,7 +609,7 @@ impl Lowerer {
                         // Multi-dimensional array (e.g., unsigned char hash[2][24]):
                         // each sub-item is a braced list for one element of the outer dimension.
                         let elem_size = self.resolve_ctype_size(inner_ty);
-                        self.fill_multidim_array_field(nested_items, inner_elem, *inner_size, arr_size, elem_size, &mut bytes, 0);
+                        self.fill_multidim_array_field(nested_items, inner_elem, (*inner_size, arr_size, elem_size), &mut bytes, 0);
                     } else {
                         self.fill_scalar_list_to_bytes(nested_items, inner_ty, field_size, &mut bytes);
                     }

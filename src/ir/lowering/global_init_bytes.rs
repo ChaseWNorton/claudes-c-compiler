@@ -140,8 +140,8 @@ impl Lowerer {
                 // Fixed-size array field
                 CType::Array(elem_ty, Some(arr_size)) => {
                     let advanced = self.fill_array_field(
-                        items, item_idx, elem_ty, *arr_size,
-                        bytes, field_offset, array_start_idx,
+                        items, item_idx, elem_ty,
+                        bytes, (*arr_size, field_offset, array_start_idx),
                     );
                     if advanced.skip_update {
                         item_idx = advanced.new_item_idx;
@@ -527,11 +527,10 @@ impl Lowerer {
         items: &[InitializerItem],
         item_idx: usize,
         elem_ty: &CType,
-        arr_size: usize,
         bytes: &mut [u8],
-        field_offset: usize,
-        array_start_idx: Option<usize>,
+        target: (usize, usize, Option<usize>), // (arr_size, field_offset, array_start_idx)
     ) -> ArrayFillResult {
+        let (arr_size, field_offset, array_start_idx) = target;
         let item = &items[item_idx];
         let elem_size = self.resolve_ctype_size(elem_ty);
         let elem_ir_ty = IrType::from_ctype(elem_ty);
@@ -548,7 +547,7 @@ impl Lowerer {
                     // Multi-dimensional array field (e.g., int a[2][3] or struct S a[2][2][2]).
                     // Each sub-item is a brace group for one element of the outer dimension.
                     self.fill_multidim_array_field(
-                        sub_items, inner_elem, *inner_size, arr_size, elem_size,
+                        sub_items, inner_elem, (*inner_size, arr_size, elem_size),
                         bytes, field_offset,
                     );
                 } else if elem_ty.is_complex() {
@@ -574,8 +573,8 @@ impl Lowerer {
                 let leaf_composite = Self::leaf_composite_type(elem_ty);
                 let new_idx = if matches!(elem_ty, CType::Struct(_) | CType::Union(_)) {
                     self.fill_flat_array_of_composites(
-                        items, item_idx, elem_ty, arr_size, elem_size, elem_ir_ty,
-                        bytes, field_offset, start_ai,
+                        items, item_idx, elem_ty, elem_ir_ty,
+                        bytes, (arr_size, elem_size, field_offset, start_ai),
                     )
                 } else if let Some(composite_ty) = leaf_composite {
                     // Multi-dimensional array of structs/unions: flat init fills composites
@@ -583,8 +582,8 @@ impl Lowerer {
                     let composite_ir_ty = IrType::from_ctype(composite_ty);
                     let total_composites = if composite_size > 0 { (arr_size * elem_size) / composite_size } else { 0 };
                     self.fill_flat_array_of_composites(
-                        items, item_idx, composite_ty, total_composites, composite_size, composite_ir_ty,
-                        bytes, field_offset, start_ai,
+                        items, item_idx, composite_ty, composite_ir_ty,
+                        bytes, (total_composites, composite_size, field_offset, start_ai),
                     )
                 } else if matches!(elem_ty, CType::Array(_, _)) {
                     // Multi-dimensional array of scalars: use leaf element size
@@ -592,18 +591,18 @@ impl Lowerer {
                     let leaf_ir_ty = Self::leaf_ir_type(elem_ty);
                     let total_scalars = if leaf_size > 0 { (arr_size * elem_size) / leaf_size } else { 0 };
                     self.fill_flat_array_of_scalars(
-                        items, item_idx, total_scalars, leaf_size, leaf_ir_ty,
-                        bytes, field_offset, start_ai,
+                        items, item_idx, leaf_ir_ty,
+                        bytes, (total_scalars, leaf_size, field_offset, start_ai),
                     )
                 } else if elem_ty.is_complex() {
                     self.fill_flat_array_of_complex(
-                        items, item_idx, elem_ty, arr_size, elem_size,
-                        bytes, field_offset, start_ai,
+                        items, item_idx, elem_ty,
+                        bytes, (arr_size, elem_size, field_offset, start_ai),
                     )
                 } else {
                     self.fill_flat_array_of_scalars(
-                        items, item_idx, arr_size, elem_size, elem_ir_ty,
-                        bytes, field_offset, start_ai,
+                        items, item_idx, elem_ir_ty,
+                        bytes, (arr_size, elem_size, field_offset, start_ai),
                     )
                 };
                 ArrayFillResult { new_item_idx: new_idx, skip_update: true }
@@ -618,12 +617,11 @@ impl Lowerer {
         &self,
         sub_items: &[InitializerItem],
         inner_elem_ty: &CType,
-        inner_arr_size: usize,
-        outer_arr_size: usize,
-        outer_elem_size: usize,
+        dims: (usize, usize, usize), // (inner_arr_size, outer_arr_size, outer_elem_size)
         bytes: &mut [u8],
         field_offset: usize,
     ) {
+        let (inner_arr_size, outer_arr_size, outer_elem_size) = dims;
         let mut sub_idx = 0usize;
         let mut ai = 0usize;
         while ai < outer_arr_size && sub_idx < sub_items.len() {
@@ -703,7 +701,7 @@ impl Lowerer {
         if let CType::Array(inner_elem, Some(inner_size)) = elem_ty {
             // Still multi-dimensional: recurse
             self.fill_multidim_array_field(
-                items, inner_elem, *inner_size, arr_size, elem_size,
+                items, inner_elem, (*inner_size, arr_size, elem_size),
                 bytes, field_offset,
             );
         } else if matches!(elem_ty, CType::Struct(_) | CType::Union(_)) {
@@ -917,9 +915,11 @@ impl Lowerer {
     /// Each item initializes one complex element. Returns the new item_idx.
     pub(super) fn fill_flat_array_of_complex(
         &self, items: &[InitializerItem], item_idx: usize,
-        complex_ctype: &CType, arr_size: usize, elem_size: usize,
-        bytes: &mut [u8], field_offset: usize, start_ai: usize,
+        complex_ctype: &CType,
+        bytes: &mut [u8],
+        layout: (usize, usize, usize, usize), // (arr_size, elem_size, field_offset, start_ai)
     ) -> usize {
+        let (arr_size, elem_size, field_offset, start_ai) = layout;
         let mut consumed = 0usize;
         let mut ai = start_ai;
         while ai < arr_size && (item_idx + consumed) < items.len() {
@@ -937,9 +937,11 @@ impl Lowerer {
     /// Returns the new item_idx.
     pub(super) fn fill_flat_array_of_composites(
         &self, items: &[InitializerItem], mut item_idx: usize,
-        elem_ty: &CType, arr_size: usize, elem_size: usize, elem_ir_ty: IrType,
-        bytes: &mut [u8], field_offset: usize, start_ai: usize,
+        elem_ty: &CType, elem_ir_ty: IrType,
+        bytes: &mut [u8],
+        layout: (usize, usize, usize, usize), // (arr_size, elem_size, field_offset, start_ai)
     ) -> usize {
+        let (arr_size, elem_size, field_offset, start_ai) = layout;
         let sub_layout = self.get_composite_layout(elem_ty);
         if matches!(elem_ty, CType::Struct(_)) {
             for ai in start_ai..arr_size {
@@ -967,9 +969,11 @@ impl Lowerer {
     /// Returns the new item_idx.
     pub(super) fn fill_flat_array_of_scalars(
         &self, items: &[InitializerItem], item_idx: usize,
-        arr_size: usize, elem_size: usize, elem_ir_ty: IrType,
-        bytes: &mut [u8], field_offset: usize, start_ai: usize,
+        elem_ir_ty: IrType,
+        bytes: &mut [u8],
+        layout: (usize, usize, usize, usize), // (arr_size, elem_size, field_offset, start_ai)
     ) -> usize {
+        let (arr_size, elem_size, field_offset, start_ai) = layout;
         let mut consumed = 0usize;
         let mut ai = start_ai;
         while ai < arr_size && (item_idx + consumed) < items.len() {
@@ -1002,12 +1006,11 @@ impl Lowerer {
         &self,
         items: &[InitializerItem],
         layout: &StructLayout,
-        struct_size: usize,
         array_dim_strides: &[usize],
         bytes: &mut [u8],
-        base_offset: usize,
-        region_size: usize,
+        region: (usize, usize, usize), // (struct_size, base_offset, region_size)
     ) {
+        let (struct_size, base_offset, region_size) = region;
         if struct_size == 0 { return; }
 
         // Determine the stride for elements at this brace level.
@@ -1092,8 +1095,8 @@ impl Lowerer {
                             let write_offset = elem_offset + sub_byte_offset;
                             if !sub_strides.is_empty() && sub_strides[0] > struct_size {
                                 self.fill_multidim_struct_array_bytes(
-                                    sub_items, layout, struct_size, sub_strides,
-                                    bytes, write_offset, sub_strides[0],
+                                    sub_items, layout, sub_strides,
+                                    bytes, (struct_size, write_offset, sub_strides[0]),
                                 );
                             } else {
                                 self.fill_struct_global_bytes(sub_items, layout, bytes, write_offset);
@@ -1131,8 +1134,8 @@ impl Lowerer {
                         // This brace group represents a sub-array (not a single struct).
                         // Recurse with the next dimension's strides.
                         self.fill_multidim_struct_array_bytes(
-                            sub_items, layout, struct_size, remaining_strides,
-                            bytes, elem_offset, this_stride,
+                            sub_items, layout, remaining_strides,
+                            bytes, (struct_size, elem_offset, this_stride),
                         );
                     } else {
                         // This brace group represents a single struct initializer.

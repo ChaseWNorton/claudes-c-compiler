@@ -555,11 +555,11 @@ impl Lowerer {
         items: &[InitializerItem],
         alloca: Value,
         da: &DeclAnalysis,
-        is_complex: bool,
-        complex_elem_ctype: &Option<CType>,
+        complex_info: (bool, &Option<CType>), // (is_complex, complex_elem_ctype)
         decl: &Declaration,
         declarator_name: &str,
     ) {
+        let (is_complex, complex_elem_ctype) = complex_info;
         if is_complex {
             self.lower_complex_init_list(items, alloca, decl);
         } else if da.is_struct {
