@@ -20,22 +20,14 @@ cargo clippy --all-targets # lint check
 This repo uses a multiplayer coordination system built on skills. Multiple Claude Code
 instances can work on different issues simultaneously without conflicts.
 
-### Quick start (single issue)
+### Quick start
 
 1. Fork the repo and clone your fork
-2. Run `/pick-issue` to see available issues (shows what's claimed vs open)
-3. Run `/fix-issue <number>` to claim and fix a specific issue
-4. Your draft PR is the claim — other workers will see it and skip that issue
+2. Run **`/ccc`**
 
-### Auto-cycle mode (fix everything)
+That's it. Claude checks your access level, shows the project state, and asks what you want to do. Pick one and the full workflow runs end-to-end. The menu adapts — contributors see what contributors can do, maintainers see the full set.
 
-Run `/fix-next` to enter auto-cycle mode. Claude Code will:
-1. Find the highest-priority unclaimed issue
-2. Claim it (draft PR)
-3. Implement the fix and write tests
-4. Mark PR ready for review
-5. Move to the next unclaimed issue
-6. Repeat until no work remains
+You never need to memorize individual commands. `/ccc` is the only entry point.
 
 ### Coordination protocol
 
@@ -59,6 +51,12 @@ Every role in the product lifecycle is a command backed by a skill.
 ```
 
 ### Commands
+
+**Start here:**
+
+| Command | What it does |
+|---------|-------------|
+| **`/ccc`** | **The entry point.** Shows project state, asks what you want to do, runs the workflow. |
 
 **Planning (upstream):**
 
