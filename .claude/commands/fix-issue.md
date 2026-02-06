@@ -103,28 +103,23 @@ If `CHAIN_TIP_NUMBER` is empty, no chain exists — base off `main`.
    ```
    **A draft PR that stays draft is invisible to reviewers. The fix is NOT done until the PR is marked ready.**
 
-10. **Update PR body:**
-    ```bash
-    gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
-    ## Summary
-    <what was wrong and why>
+10. **Write the PR body** — this is as important as the code. Read [PR_BODY_GUIDE.md](../skills/fix-next/PR_BODY_GUIDE.md) for the full quality standard.
 
-    ## Changes
-    <what you changed>
+    Before writing, re-read your diff and the issue body. Then write a body with these four sections:
 
-    ## Test plan
-    - [x] `cargo build --release` passes
-    - [x] `cargo test --lib` passes
-    - [x] New tests added
+    - **Problem** — What was broken, why it matters, C11 reference if applicable, what GCC does
+    - **Approach** — Technical decisions, why this approach, alternatives considered
+    - **Changes** — Files modified with specific descriptions
+    - **Test plan** — One checkbox per behavior verified (not just "tests pass")
 
-    Fixes #$ARGUMENTS
-    EOF
-    )"
-    ```
+    End with `Fixes #$ARGUMENTS` and the milestone link if applicable.
+
+    **A body that just says "Added check" or "Fixed the bug" is not acceptable. Write for a reviewer who hasn't read the issue.**
 
 ## PR requirements
 
 - Title: `[CC][Fix #$ARGUMENTS] <description>` (if chain) or `[Fix #$ARGUMENTS] <description>` (if no chain)
+- Body has four sections: Problem, Approach, Changes, Test plan (see [PR_BODY_GUIDE.md](../skills/fix-next/PR_BODY_GUIDE.md))
 - Body ends with: `Fixes #$ARGUMENTS`
 - All existing tests pass + new tests for the fix
 - Clean build with no new warnings

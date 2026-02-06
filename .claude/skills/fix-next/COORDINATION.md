@@ -191,7 +191,7 @@ git commit -m "Fix #<NUMBER>: <short description>"
 git push origin fix/issue-<NUMBER>
 ```
 
-### Step 8: CRITICAL — Mark PR ready for review
+### Step 8: CRITICAL — Mark PR ready and write the body
 
 **DO NOT SKIP THIS. A draft PR is invisible to reviewers. The fix is NOT done until you run this:**
 
@@ -199,25 +199,21 @@ git push origin fix/issue-<NUMBER>
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
 ```
 
-Then update the body:
+Then **write the PR body**. This is as important as the code itself.
 
-```bash
-gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
-## Summary
-<what was wrong and why — reference C11 section if applicable>
+Re-read your diff and the issue body. Then write a body with four sections:
 
-## Changes
-<what you changed, file by file>
+1. **Problem** — What was broken, why it matters, C11 reference if applicable, what GCC does
+2. **Approach** — Technical decisions you made, why this approach, alternatives considered
+3. **Changes** — Files modified with specific descriptions of what changed in each
+4. **Test plan** — One checkbox per behavior verified, plus build/test confirmation
 
-## Test plan
-- [x] `cargo build --release` — clean build
-- [x] `cargo test --lib` — all tests pass
-- [x] New tests added for the fix
+End with `Fixes #<NUMBER>` and the milestone link if applicable.
 
-Fixes #<NUMBER>
-EOF
-)"
-```
+See [PR_BODY_GUIDE.md](PR_BODY_GUIDE.md) for the full quality standard with good/bad examples.
+
+**A body that just says "Added check" or lists bullet points without context is not acceptable.
+Write for a reviewer who hasn't read the issue.**
 
 ## Release and Abandonment
 

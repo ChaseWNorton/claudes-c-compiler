@@ -83,7 +83,17 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    ```bash
    gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
    ```
-   Then update the PR body with Summary, Changes, and Test plan sections. End body with `Fixes #<NUMBER>`.
+
+   Then **write the PR body**. Re-read your diff and the issue body, then write four sections:
+   - **Problem** — What was broken, why it matters, C11 reference if applicable, what GCC does
+   - **Approach** — Technical decisions, why this approach, alternatives considered
+   - **Changes** — Files modified with specific descriptions
+   - **Test plan** — One checkbox per behavior verified (not just "tests pass")
+
+   End with `Fixes #<NUMBER>` and milestone link if applicable.
+   See [PR_BODY_GUIDE.md](../skills/fix-next/PR_BODY_GUIDE.md) for the full quality standard with good/bad examples.
+
+   **A body that just says "Added check" or lists bullet points is not acceptable.**
    **A draft PR that stays draft is invisible to reviewers. The fix is NOT done until the PR is marked ready.**
 
    **Note: Once marked ready, your `[CC]` PR becomes the new chain tip. The next loop iteration will detect it and branch off it.**

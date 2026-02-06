@@ -69,3 +69,4 @@ These add test helpers or test suites.
 - [ ] No unrelated changes in the diff
 - [ ] No new external dependencies added
 - [ ] PR references the correct issue number
+- [ ] PR body has four substantive sections: **Problem** (what's broken + why it matters), **Approach** (technical decisions + rationale), **Changes** (file-by-file), **Test plan** (one checkbox per behavior, not just "tests pass")

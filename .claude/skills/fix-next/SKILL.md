@@ -102,7 +102,8 @@ git push origin fix/issue-<NUMBER>
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
 ```
 
-Then update PR body with Summary, Changes, Test plan. End with `Fixes #<NUMBER>`.
+Then write the PR body with four sections: Problem, Approach, Changes, Test plan.
+See [PR_BODY_GUIDE.md](PR_BODY_GUIDE.md) for the quality standard. End with `Fixes #<NUMBER>`.
 
 ## Implementation Rules
 
@@ -117,6 +118,7 @@ Then update PR body with Summary, Changes, Test plan. End with `Fixes #<NUMBER>`
 
 - **[COORDINATION.md](COORDINATION.md)** — Detailed claim/release protocol, race conditions, stale claim handling
 - **[CODEBASE_PATTERNS.md](CODEBASE_PATTERNS.md)** — How to fix each issue category (diagnostics, CLI, backend, tests)
+- **[PR_BODY_GUIDE.md](PR_BODY_GUIDE.md)** — PR body quality standard: 4-section structure, good/bad examples, category guidance
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Build failures, test failures, claim conflicts, recovery
 
 ## Error Recovery

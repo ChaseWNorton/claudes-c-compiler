@@ -51,8 +51,11 @@ For each item, mark PASS or FAIL:
 - [ ] Test cases match what the issue specified
 
 **PR hygiene:**
-- [ ] PR title follows format: `Fix #N: <short description>`
-- [ ] PR body has Summary, Changes, and Test plan sections
+- [ ] PR title follows format: `[CC][Fix #N] <description>` (chain) or `[Fix #N] <description>` (no chain)
+- [ ] PR body has four sections: Problem, Approach, Changes, Test plan — each with substantive content
+- [ ] Problem section explains impact, not just "added X" — includes spec references / GCC behavior where applicable
+- [ ] Approach section explains technical decisions, not just what was done
+- [ ] Test plan has one checkbox per behavior verified, not just "tests pass"
 - [ ] PR body ends with `Fixes #N`
 - [ ] Single commit (or clean commit history)
 
