@@ -17,17 +17,52 @@ cargo clippy --all-targets # lint check
 
 ## Contributing with Claude Code
 
+This repo uses a multiplayer coordination system. Multiple Claude Code instances
+can work on different issues simultaneously without conflicts.
+
+### Quick start (single issue)
+
 1. Fork the repo and clone your fork
-2. Run `/pick-issue` to see available issues sorted by priority
-3. Run `/fix-issue <number>` to start working on one
-4. Submit a PR — CI will validate your changes
+2. Run `/pick-issue` to see available issues (shows what's claimed vs open)
+3. Run `/fix-issue <number>` to claim and fix a specific issue
+4. Your draft PR is the claim — other workers will see it and skip that issue
+
+### Auto-cycle mode (multiple issues)
+
+Run `/fix-next` to enter auto-cycle mode. Claude Code will:
+1. Find the highest-priority unclaimed issue
+2. Claim it (draft PR)
+3. Implement the fix and write tests
+4. Mark PR ready for review
+5. Move to the next unclaimed issue
+6. Repeat until no work remains
+
+### Coordination protocol
+
+GitHub Issues and PRs are the shared state — no external tools needed.
+
+| State | How it looks on GitHub |
+|-------|----------------------|
+| **Available** | Open issue, no open PR references it |
+| **Claimed** | Open draft PR with `Fixes #N` in the body |
+| **Done** | PR merged, issue auto-closed |
+| **Abandoned** | Close the draft PR to release the claim |
+
+### Commands
+
+| Command | What it does |
+|---------|-------------|
+| `/pick-issue` | Browse issues, see what's available vs claimed |
+| `/fix-issue <N>` | Claim and fix a specific issue |
+| `/fix-next` | Auto-cycle: claim → fix → PR → next → repeat |
+| `/issue-status` | Dashboard: claimed, available, completed |
 
 ## Code conventions
 
 - Tests go in `#[cfg(test)] mod tests` at the bottom of each file
 - Use existing test helpers for frontend tests:
-  - `sema_errors("C code")` — returns error count from semantic analysis
-  - `sema_warnings("C code")` — returns warning count
+  - `sema_error_count("C code")` — returns error count from semantic analysis
+  - `sema_warning_count("C code")` — returns warning count
   - `compile_to_ir("C code")` — returns `IrModule` for IR-level inspection
   - `compile_at_opt_level("C code", N)` — compiles through full pipeline at given opt level
 - Follow existing patterns: look at nearby code before adding new abstractions
@@ -64,7 +99,7 @@ src/
 2. Wire it into `flag_name()`, `from_flag_name()`, `wall_set()`, and `all()`
 3. Add the check in `src/frontend/sema/analysis.rs`
 4. Emit via `self.diagnostics.borrow_mut().warning_with_kind(msg, span, kind)` or `.error(msg, span)`
-5. Write tests using `sema_errors()` / `sema_warnings()` helpers
+5. Write tests using `sema_error_count()` / `sema_warning_count()` helpers
 
 **Adding a new optimization pass:**
 1. Create the pass in `src/passes/`
