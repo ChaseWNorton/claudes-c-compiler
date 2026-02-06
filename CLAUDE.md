@@ -48,17 +48,43 @@ GitHub Issues and PRs are the shared state — no external tools needed.
 | **Done** | PR merged, issue auto-closed |
 | **Abandoned** | Close the draft PR to release the claim |
 
+### The Product Lifecycle
+
+Every role in the product lifecycle is a command backed by a skill.
+
+```
+/roadmap → /decompose → Issues → /fix-next → /review-fix → /release
+    ^                                                          |
+    └──────────────────────────────────────────────────────────┘
+```
+
 ### Commands
+
+**Planning (upstream):**
+
+| Command | What it does |
+|---------|-------------|
+| `/roadmap` | Analyze the compiler, create strategic milestones |
+| `/decompose <milestone>` | Break a milestone into concrete issues |
+| `/audit [path]` | Deep-dive a module, find every gap, file issues |
+| `/file-issue [path]` | File a single well-structured issue |
+
+**Execution:**
 
 | Command | What it does |
 |---------|-------------|
 | `/pick-issue` | Browse issues, see what's available vs claimed |
 | `/fix-issue <N>` | Claim and fix a specific issue |
 | `/fix-next` | Auto-cycle: claim, fix, PR, next, repeat |
-| `/issue-status` | Dashboard: claimed, available, completed |
+
+**Review & release (downstream):**
+
+| Command | What it does |
+|---------|-------------|
 | `/review-fix <PR>` | Review a PR against its issue's acceptance criteria |
-| `/file-issue [path]` | Audit code and file new well-structured issues |
-| `/triage` | Analyze and manage the issue backlog |
+| `/release` | Cut a release — changelog, tag, GitHub release |
+| `/triage` | Backlog health, stale claims, prioritization |
+| `/issue-status` | Dashboard: claimed, available, completed |
 
 ### Skills
 
@@ -66,10 +92,25 @@ Skills provide deep context for each workflow. Claude Code loads them automatica
 
 | Skill | Purpose | Reference files |
 |-------|---------|----------------|
+| `roadmap` | Strategic vision and milestone creation | STANDARDS.md, BENCHMARKS.md |
+| `decompose` | Break milestones into actionable issues | — |
+| `audit` | Systematic codebase analysis | AUDIT_AREAS.md |
+| `file-issue` | Bug discovery and issue creation | TEMPLATES.md |
 | `fix-next` | Auto-cycle issue fixing | COORDINATION.md, CODEBASE_PATTERNS.md, TROUBLESHOOTING.md |
 | `review-fix` | PR review against acceptance criteria | CHECKLIST.md |
-| `file-issue` | Bug discovery and issue creation | TEMPLATES.md |
+| `release` | Cut releases from merged work | — |
 | `triage` | Backlog health and prioritization | — |
+
+### Milestones
+
+Milestones are GitHub issues with `[MILESTONE]` prefix and checklists. GitHub auto-checks
+boxes when linked issues close. No special permissions needed — anyone can create them.
+
+```
+[MILESTONE] M1: Core Diagnostic Coverage
+  - [ ] #20 Duplicate case labels
+  - [x] #25 Fix sema TODO comment    ← auto-checked when #25 closes
+```
 
 ## Code conventions
 
