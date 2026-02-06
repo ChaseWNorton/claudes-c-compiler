@@ -36,6 +36,20 @@ const BASE_ADDR: u64 = 0x10000;
 
 const INTERP: &[u8] = b"/lib/ld-linux-riscv64-lp64d.so.1\0";
 
+pub struct ExecGotInfo<'a> {
+    pub got_symbols: &'a [String],
+    pub tls_got_symbols: &'a HashSet<String>,
+    pub local_got_sym_info: &'a HashMap<String, (usize, usize, i64)>,
+}
+
+pub struct ExecLinkInfo<'a> {
+    pub sec_mapping: &'a HashMap<(usize, usize), (usize, u64)>,
+    pub plt_symbols: &'a [String],
+    pub copy_symbols: &'a [(String, u64)],
+    pub sec_indices: &'a [usize],
+    pub actual_needed_libs: &'a [String],
+}
+
 /// Emit a RISC-V ELF executable from pre-resolved linking state.
 ///
 /// `input_objs`: parsed ELF objects (CRT + user + archive members)
@@ -55,18 +69,20 @@ pub fn emit_executable(
     input_objs: &[(String, ElfObject)],
     merged_sections: &mut Vec<MergedSection>,
     merged_map: &mut HashMap<String, usize>,
-    sec_mapping: &HashMap<(usize, usize), (usize, u64)>,
     global_syms: &mut HashMap<String, GlobalSym>,
-    got_symbols: &[String],
-    tls_got_symbols: &HashSet<String>,
-    local_got_sym_info: &HashMap<String, (usize, usize, i64)>,
-    plt_symbols: &[String],
-    copy_symbols: &[(String, u64)],
-    sec_indices: &[usize],
-    actual_needed_libs: &[String],
-    is_static: bool,
-    output_path: &str,
+    got_info: &ExecGotInfo,
+    link_info: &ExecLinkInfo,
+    output_opts: (bool, &str), // (is_static, output_path)
 ) -> Result<(), String> {
+    let got_symbols = got_info.got_symbols;
+    let tls_got_symbols = got_info.tls_got_symbols;
+    let local_got_sym_info = got_info.local_got_sym_info;
+    let sec_mapping = link_info.sec_mapping;
+    let plt_symbols = link_info.plt_symbols;
+    let copy_symbols = link_info.copy_symbols;
+    let sec_indices = link_info.sec_indices;
+    let actual_needed_libs = link_info.actual_needed_libs;
+    let (is_static, output_path) = output_opts;
     // ── Phase 4: Compute generated section sizes and layout ────────────
 
     let plt_entry_size: u64 = 16;

@@ -98,9 +98,9 @@ pub fn apply_relocations(
                 let off = offset as usize;
 
                 apply_one_reloc(
-                    reloc.rela_type, data, off, s, a, p,
-                    sym, sym_idx, obj_idx, obj, sec_idx, sec_offset,
-                    obj_name, ctx, &mut result,
+                    (reloc.rela_type, s, a, p), data, off,
+                    sym, (obj_idx, obj, sec_idx, sec_offset, obj_name),
+                    ctx, &mut result,
                 )?;
             }
         }
@@ -177,22 +177,16 @@ fn lookup_got_entry(
 
 /// Apply a single relocation to the merged section data.
 fn apply_one_reloc(
-    rela_type: u32,
+    reloc_vals: (u32, u64, i64, u64), // (rela_type, s, a, p)
     data: &mut [u8],
     off: usize,
-    s: u64,
-    a: i64,
-    p: u64,
     sym: &super::elf_read::Symbol,
-    _sym_idx: usize,
-    obj_idx: usize,
-    obj: &super::elf_read::ElfObject,
-    sec_idx: usize,
-    sec_offset: u64,
-    obj_name: &str,
+    obj_info: (usize, &super::elf_read::ElfObject, usize, u64, &str), // (obj_idx, obj, sec_idx, sec_offset, obj_name)
     ctx: &RelocContext,
     result: &mut RelocResult,
 ) -> Result<(), String> {
+    let (rela_type, s, a, p) = reloc_vals;
+    let (obj_idx, obj, sec_idx, sec_offset, obj_name) = obj_info;
     match rela_type {
         R_RISCV_RELAX | R_RISCV_ALIGN => { /* hints, skip */ }
 
@@ -465,18 +459,20 @@ fn find_hi20_value_for_reloc(
     auipc_addr: u64,
     sec_offset: u64,
 ) -> i64 {
+    let sym_ctx = super::relocations::SymResolveCtx {
+        sec_mapping: ctx.sec_mapping, section_vaddrs: ctx.section_vaddrs,
+        local_sym_vaddrs: ctx.local_sym_vaddrs, global_syms: ctx.global_syms,
+    };
     if ctx.collect_relatives {
         super::relocations::find_hi20_value_shared(
-            obj, obj_idx, sec_idx, ctx.sec_mapping, ctx.section_vaddrs,
-            ctx.local_sym_vaddrs, ctx.global_syms, auipc_addr,
-            sec_offset, ctx.got_vaddr, ctx.got_symbols,
+            obj, obj_idx, sec_idx, &sym_ctx,
+            (auipc_addr, sec_offset), (ctx.got_vaddr, ctx.got_symbols),
         )
     } else {
         super::relocations::find_hi20_value(
-            obj, obj_idx, sec_idx, ctx.sec_mapping, ctx.section_vaddrs,
-            ctx.local_sym_vaddrs, ctx.global_syms, auipc_addr,
-            sec_offset, ctx.got_vaddr, ctx.got_symbols, ctx.got_plt_vaddr,
-            ctx.gd_tls_relax_info, ctx.tls_vaddr,
+            obj, obj_idx, sec_idx, &sym_ctx,
+            (auipc_addr, sec_offset), (ctx.got_vaddr, ctx.got_symbols, ctx.got_plt_vaddr),
+            (ctx.gd_tls_relax_info, ctx.tls_vaddr),
         )
     }
 }
@@ -559,9 +555,11 @@ pub fn collect_gd_tls_relax_info(
                     let offset = sec_offset + reloc.offset;
                     let auipc_vaddr = ms_vaddr + offset;
                     let sym = &obj.symbols[reloc.sym_idx as usize];
-                    let sym_val = resolve_symbol_value(
-                        sym, reloc.sym_idx as usize, obj, obj_idx,
+                    let rsctx = super::relocations::SymResolveCtx {
                         sec_mapping, section_vaddrs, local_sym_vaddrs, global_syms,
+                    };
+                    let sym_val = resolve_symbol_value(
+                        sym, reloc.sym_idx as usize, obj, obj_idx, &rsctx,
                     );
                     gd_tls_relax_info.insert(auipc_vaddr, (sym_val, reloc.addend));
 

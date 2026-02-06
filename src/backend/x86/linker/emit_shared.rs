@@ -15,8 +15,9 @@ pub(super) fn emit_shared_library(
     output_sections: &mut [OutputSection],
     section_map: &HashMap<(usize, usize), (usize, u64)>,
     needed_sonames: &[String], output_path: &str,
-    soname: Option<String>, rpath_entries: &[String], use_runpath: bool,
+    lib_opts: (Option<String>, &[String], bool), // (soname, rpath_entries, use_runpath)
 ) -> Result<(), String> {
+    let (soname, rpath_entries, use_runpath) = lib_opts;
     let base_addr: u64 = 0;
 
     let mut dynstr = DynStrTab::new();

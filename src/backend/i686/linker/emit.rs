@@ -14,22 +14,15 @@ use crate::backend::linker_common;
 pub(super) fn emit_executable(
     inputs: &[InputObject],
     output_sections: &mut Vec<OutputSection>,
-    section_name_to_idx: &HashMap<String, usize>,
-    section_map: &SectionMap,
+    section_info: (&HashMap<String, usize>, &SectionMap), // (section_name_to_idx, section_map)
     global_symbols: &mut HashMap<String, LinkerSymbol>,
-    _sym_resolution: &HashMap<(usize, usize), String>,
-    _dynlib_syms: &HashMap<String, DynLibSym>,
-    plt_symbols: &[String],
-    got_dyn_symbols: &[String],
-    got_local_symbols: &[String],
-    num_plt: usize,
-    _num_got_total: usize,
+    plt_got: (&[String], &[String], &[String], usize, usize), // (plt_symbols, got_dyn_symbols, got_local_symbols, num_plt, _num_got_total)
     ifunc_symbols: &[String],
-    is_static: bool,
-    is_nostdlib: bool,
-    _needed_libs_param: &[&str],
-    output_path: &str,
+    output_opts: (bool, bool, &str), // (is_static, is_nostdlib, output_path)
 ) -> Result<(), String> {
+    let (section_name_to_idx, section_map) = section_info;
+    let (plt_symbols, got_dyn_symbols, got_local_symbols, num_plt, _num_got_total) = plt_got;
+    let (is_static, is_nostdlib, output_path) = output_opts;
     let num_ifunc = ifunc_symbols.len();
 
     // ── Build dynamic symbol/string tables ────────────────────────────────
@@ -534,9 +527,8 @@ pub(super) fn emit_executable(
     let dynamic_offset = file_offset;
     let dynamic_vaddr = vaddr;
     let num_dynamic_entries = count_dynamic_entries(
-        &needed_libs, init_vaddr, init_size, fini_vaddr, fini_size,
-        init_array_size, fini_array_size, num_plt, num_rel_dyn, verneed_size,
-        num_text_relocs,
+        &needed_libs, (init_vaddr, init_size, fini_vaddr, fini_size, init_array_size, fini_array_size),
+        (num_plt, num_rel_dyn, verneed_size, num_text_relocs),
     );
     let dynamic_size = num_dynamic_entries * 8;
     if !is_static { file_offset += dynamic_size; vaddr += dynamic_size; }
@@ -624,11 +616,10 @@ pub(super) fn emit_executable(
     // ── Assign symbol addresses ──────────────────────────────────────────
     assign_symbol_addresses(
         global_symbols, output_sections, got_base,
-        plt_vaddr, plt_header_size, plt_entry_size,
-        bss_vaddr, data_seg_vaddr_end, data_seg_vaddr_start,
-        text_seg_vaddr_end, dynamic_vaddr, is_static,
-        init_array_vaddr, init_array_size, fini_array_vaddr, fini_array_size,
-        rel_iplt_vaddr, rel_iplt_size,
+        (plt_vaddr, plt_header_size, plt_entry_size),
+        (bss_vaddr, data_seg_vaddr_end, data_seg_vaddr_start, text_seg_vaddr_end, dynamic_vaddr, is_static),
+        (init_array_vaddr, init_array_size, fini_array_vaddr, fini_array_size),
+        (rel_iplt_vaddr, rel_iplt_size),
     );
 
     // Override IFUNC symbol addresses to point to IPLT entries
@@ -1085,12 +1076,11 @@ pub(super) fn layout_tls(
 
 fn count_dynamic_entries(
     needed_libs: &[String],
-    init_vaddr: u32, init_size: u32,
-    fini_vaddr: u32, fini_size: u32,
-    init_array_size: u32, fini_array_size: u32,
-    num_plt: usize, num_rel_dyn: usize, verneed_size: u32,
-    num_text_relocs: usize,
+    init_fini: (u32, u32, u32, u32, u32, u32), // (init_vaddr, init_size, fini_vaddr, fini_size, init_array_size, fini_array_size)
+    reloc_info: (usize, usize, u32, usize), // (num_plt, num_rel_dyn, verneed_size, num_text_relocs)
 ) -> u32 {
+    let (init_vaddr, init_size, fini_vaddr, fini_size, init_array_size, fini_array_size) = init_fini;
+    let (num_plt, num_rel_dyn, verneed_size, num_text_relocs) = reloc_info;
     let mut n: u32 = needed_libs.len() as u32;
     n += 5; // GNU_HASH, STRTAB, SYMTAB, STRSZ, SYMENT
     if init_vaddr != 0 && init_size > 0 { n += 1; }
@@ -1110,13 +1100,15 @@ fn assign_symbol_addresses(
     global_symbols: &mut HashMap<String, LinkerSymbol>,
     output_sections: &[OutputSection],
     got_base: u32,
-    plt_vaddr: u32, plt_header_size: u32, plt_entry_size: u32,
-    bss_vaddr: u32, data_seg_vaddr_end: u32, data_seg_vaddr_start: u32,
-    text_seg_vaddr_end: u32, dynamic_vaddr: u32, is_static: bool,
-    init_array_vaddr: u32, init_array_size: u32,
-    fini_array_vaddr: u32, fini_array_size: u32,
-    rel_iplt_vaddr: u32, rel_iplt_size: u32,
+    plt_info: (u32, u32, u32), // (plt_vaddr, plt_header_size, plt_entry_size)
+    seg_addrs: (u32, u32, u32, u32, u32, bool), // (bss_vaddr, data_seg_vaddr_end, data_seg_vaddr_start, text_seg_vaddr_end, dynamic_vaddr, is_static)
+    init_fini_arrays: (u32, u32, u32, u32), // (init_array_vaddr, init_array_size, fini_array_vaddr, fini_array_size)
+    rel_iplt: (u32, u32), // (rel_iplt_vaddr, rel_iplt_size)
 ) {
+    let (plt_vaddr, plt_header_size, plt_entry_size) = plt_info;
+    let (bss_vaddr, data_seg_vaddr_end, data_seg_vaddr_start, text_seg_vaddr_end, dynamic_vaddr, is_static) = seg_addrs;
+    let (init_array_vaddr, init_array_size, fini_array_vaddr, fini_array_size) = init_fini_arrays;
+    let (rel_iplt_vaddr, rel_iplt_size) = rel_iplt;
     global_symbols.entry("_GLOBAL_OFFSET_TABLE_".to_string()).or_insert(LinkerSymbol {
         address: got_base, size: 0, sym_type: STT_OBJECT, binding: STB_LOCAL,
         visibility: STV_DEFAULT, is_defined: true, needs_plt: false, needs_got: false,

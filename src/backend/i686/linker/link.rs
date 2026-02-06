@@ -58,7 +58,7 @@ pub fn link_builtin(
     let (mut output_sections, mut section_name_to_idx, section_map) = merge_sections(&inputs);
 
     // Phase 6: Resolve symbols
-    let (mut global_symbols, sym_resolution) = resolve_symbols(
+    let (mut global_symbols, _sym_resolution) = resolve_symbols(
         &inputs, &output_sections, &section_map, &dynlib_syms,
     );
 
@@ -100,12 +100,10 @@ pub fn link_builtin(
 
     // Phase 10: Layout + emit
     emit_executable(
-        &inputs, &mut output_sections, &section_name_to_idx, &section_map,
-        &mut global_symbols, &sym_resolution,
-        &dynlib_syms, &plt_symbols, &got_dyn_symbols, &got_local_symbols,
-        num_plt, num_got_total, &ifunc_symbols,
-        is_static, is_nostdlib, needed_libs_param,
-        output_path,
+        &inputs, &mut output_sections, (&section_name_to_idx, &section_map),
+        &mut global_symbols,
+        (&plt_symbols, &got_dyn_symbols, &got_local_symbols, num_plt, num_got_total),
+        &ifunc_symbols, (is_static, is_nostdlib, output_path),
     )
 }
 
@@ -211,6 +209,6 @@ pub fn link_shared(
     emit_shared_library_32(
         &inputs, &mut global_symbols, &mut output_sections,
         &section_name_to_idx, &section_map,
-        &needed_sonames, output_path, soname,
+        &needed_sonames, (output_path, soname),
     )
 }

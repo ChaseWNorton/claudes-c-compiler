@@ -91,9 +91,9 @@ pub(super) fn emit_shared_library_32(
     section_name_to_idx: &HashMap<String, usize>,
     section_map: &SectionMap,
     needed_sonames: &[String],
-    output_path: &str,
-    soname: Option<String>,
+    output_opts: (&str, Option<String>), // (output_path, soname)
 ) -> Result<(), String> {
+    let (output_path, soname) = output_opts;
     let base_addr: u32 = 0;
 
     // ── Build dynamic string table ────────────────────────────────────────

@@ -57,8 +57,8 @@ pub(super) fn apply_relocations(
 
             for &(rel_offset, rel_type, sym_idx, addend) in &sec.relocations {
                 let tr = apply_one_reloc(
-                    obj_idx, obj, sec, out_sec_idx, sec_base_offset,
-                    rel_offset, rel_type, sym_idx, addend,
+                    obj_idx, obj, sec, out_sec_idx,
+                    (sec_base_offset, rel_offset, rel_type, sym_idx, addend),
                     ctx,
                 )?;
                 if let Some(t) = tr {
@@ -77,13 +77,10 @@ fn apply_one_reloc(
     obj: &InputObject,
     _sec: &InputSection,
     out_sec_idx: usize,
-    sec_base_offset: u32,
-    rel_offset: u32,
-    rel_type: u32,
-    sym_idx: u32,
-    addend: i32,
+    rel_data: (u32, u32, u32, u32, i32), // (sec_base_offset, rel_offset, rel_type, sym_idx, addend)
     ctx: &mut RelocContext,
 ) -> Result<Option<(u32, String)>, String> {
+    let (sec_base_offset, rel_offset, rel_type, sym_idx, addend) = rel_data;
     let patch_offset = sec_base_offset + rel_offset;
     let patch_addr = ctx.output_sections[out_sec_idx].addr + patch_offset;
 

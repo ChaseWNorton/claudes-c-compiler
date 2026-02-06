@@ -193,11 +193,9 @@ pub fn resolve_symbol_value(
     sym_idx: usize,
     obj: &ElfObject,
     obj_idx: usize,
-    sec_mapping: &HashMap<(usize, usize), (usize, u64)>,
-    section_vaddrs: &[u64],
-    local_sym_vaddrs: &[Vec<u64>],
-    global_syms: &HashMap<String, GlobalSym>,
+    ctx: &SymResolveCtx,
 ) -> u64 {
+    let SymResolveCtx { sec_mapping, section_vaddrs, local_sym_vaddrs, global_syms } = ctx;
     if sym.sym_type() == STT_SECTION {
         if (sym.shndx as usize) < obj.sections.len() {
             if let Some(&(mi, mo)) = sec_mapping.get(&(obj_idx, sym.shndx as usize)) {
@@ -243,18 +241,14 @@ pub fn find_hi20_value(
     obj: &ElfObject,
     obj_idx: usize,
     sec_idx: usize,
-    sec_mapping: &HashMap<(usize, usize), (usize, u64)>,
-    section_vaddrs: &[u64],
-    local_sym_vaddrs: &[Vec<u64>],
-    global_syms: &HashMap<String, GlobalSym>,
-    auipc_vaddr: u64,
-    sec_offset: u64,
-    got_vaddr: u64,
-    got_symbols: &[String],
-    got_plt_vaddr: u64,
-    gd_tls_relax_info: &HashMap<u64, (u64, i64)>,
-    tls_vaddr: u64,
+    ctx: &SymResolveCtx,
+    reloc_pos: (u64, u64), // (auipc_vaddr, sec_offset)
+    got_info: (u64, &[String], u64), // (got_vaddr, got_symbols, got_plt_vaddr)
+    tls_info: (&HashMap<u64, (u64, i64)>, u64), // (gd_tls_relax_info, tls_vaddr)
 ) -> i64 {
+    let (auipc_vaddr, _) = reloc_pos;
+    let (got_vaddr, got_symbols, got_plt_vaddr) = got_info;
+    let (gd_tls_relax_info, tls_vaddr) = tls_info;
     // Check if this references a GD->LE relaxed auipc (now a lui)
     if let Some(&(sym_val, addend)) = gd_tls_relax_info.get(&auipc_vaddr) {
         let tprel = (sym_val as i64 + addend - tls_vaddr as i64) as u32;
@@ -262,9 +256,8 @@ pub fn find_hi20_value(
     }
 
     find_hi20_value_core(
-        obj, obj_idx, sec_idx, sec_mapping, section_vaddrs,
-        local_sym_vaddrs, global_syms, auipc_vaddr, sec_offset,
-        got_vaddr, got_symbols, Some(got_plt_vaddr),
+        obj, obj_idx, sec_idx, ctx, reloc_pos,
+        (got_vaddr, got_symbols), Some(got_plt_vaddr),
     )
 }
 
@@ -276,19 +269,13 @@ pub fn find_hi20_value_shared(
     obj: &ElfObject,
     obj_idx: usize,
     sec_idx: usize,
-    sec_mapping: &HashMap<(usize, usize), (usize, u64)>,
-    section_vaddrs: &[u64],
-    local_sym_vaddrs: &[Vec<u64>],
-    global_syms: &HashMap<String, GlobalSym>,
-    auipc_vaddr: u64,
-    sec_offset: u64,
-    got_vaddr: u64,
-    got_symbols: &[String],
+    ctx: &SymResolveCtx,
+    reloc_pos: (u64, u64), // (auipc_vaddr, sec_offset)
+    got_info: (u64, &[String]), // (got_vaddr, got_symbols)
 ) -> i64 {
     find_hi20_value_core(
-        obj, obj_idx, sec_idx, sec_mapping, section_vaddrs,
-        local_sym_vaddrs, global_syms, auipc_vaddr, sec_offset,
-        got_vaddr, got_symbols, None,
+        obj, obj_idx, sec_idx, ctx, reloc_pos,
+        got_info, None,
     )
 }
 
@@ -297,16 +284,14 @@ fn find_hi20_value_core(
     obj: &ElfObject,
     obj_idx: usize,
     sec_idx: usize,
-    sec_mapping: &HashMap<(usize, usize), (usize, u64)>,
-    section_vaddrs: &[u64],
-    local_sym_vaddrs: &[Vec<u64>],
-    global_syms: &HashMap<String, GlobalSym>,
-    auipc_vaddr: u64,
-    sec_offset: u64,
-    got_vaddr: u64,
-    got_symbols: &[String],
+    ctx: &SymResolveCtx,
+    reloc_pos: (u64, u64), // (auipc_vaddr, sec_offset)
+    got_info: (u64, &[String]), // (got_vaddr, got_symbols)
     got_plt_vaddr: Option<u64>,
 ) -> i64 {
+    let SymResolveCtx { sec_mapping, section_vaddrs, global_syms, .. } = ctx;
+    let (auipc_vaddr, sec_offset) = reloc_pos;
+    let (got_vaddr, got_symbols) = got_info;
     if sec_idx >= obj.relocations.len() {
         return 0;
     }
@@ -324,8 +309,7 @@ fn find_hi20_value_core(
             R_RISCV_PCREL_HI20 => {
                 let hi_sym_idx = reloc.sym_idx as usize;
                 let sym = &obj.symbols[hi_sym_idx];
-                let s = resolve_symbol_value(sym, hi_sym_idx, obj, obj_idx, sec_mapping,
-                                             section_vaddrs, local_sym_vaddrs, global_syms);
+                let s = resolve_symbol_value(sym, hi_sym_idx, obj, obj_idx, ctx);
                 let target = s as i64 + reloc.addend;
                 return (target - auipc_vaddr as i64) & 0xFFF;
             }
@@ -366,6 +350,15 @@ fn find_hi20_value_core(
         }
     }
     0
+}
+
+/// Context for symbol resolution, bundling the mapping tables needed by
+/// `resolve_symbol_value` and `find_hi20_value*`.
+pub struct SymResolveCtx<'a> {
+    pub sec_mapping: &'a HashMap<(usize, usize), (usize, u64)>,
+    pub section_vaddrs: &'a [u64],
+    pub local_sym_vaddrs: &'a [Vec<u64>],
+    pub global_syms: &'a HashMap<String, GlobalSym>,
 }
 
 /// Represents a global symbol's definition, used by both executable and shared

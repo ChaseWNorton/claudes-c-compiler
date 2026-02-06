@@ -194,9 +194,8 @@ pub fn link_builtin(
     // Emit executable
     emit_executable(
         &objects, &mut globals, &mut output_sections, &section_map,
-        &plt_names, &got_entries, &needed_sonames, output_path,
-        export_dynamic, &rpath_entries, use_runpath, is_static,
-        &ifunc_symbols,
+        (&plt_names, &got_entries, &needed_sonames), output_path,
+        (export_dynamic, &rpath_entries, use_runpath, is_static, &ifunc_symbols),
     )
 }
 
@@ -386,6 +385,6 @@ pub fn link_shared(
     // Emit shared library
     emit_shared_library(
         &objects, &mut globals, &mut output_sections, &section_map,
-        &needed_sonames, output_path, soname, &rpath_entries, use_runpath,
+        &needed_sonames, output_path, (soname, &rpath_entries, use_runpath),
     )
 }

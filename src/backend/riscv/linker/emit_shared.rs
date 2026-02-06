@@ -62,16 +62,13 @@ struct Shdr64Entry {
 pub fn emit_shared_library(
     input_objs: &[(String, ElfObject)],
     merged_sections: &mut [MergedSection],
-    _merged_map: &mut HashMap<String, usize>,
     sec_mapping: &HashMap<(usize, usize), (usize, u64)>,
     global_syms: &mut HashMap<String, GlobalSym>,
     got_symbols: &[String],
-    _tls_got_symbols: &HashSet<String>,
-    _local_got_sym_info: &HashMap<String, (usize, usize, i64)>,
     needed_sonames: &[String],
-    soname: Option<String>,
-    output_path: &str,
+    output_opts: (Option<String>, &str), // (soname, output_path)
 ) -> Result<(), String> {
+    let (soname, output_path) = output_opts;
     // ── Phase 3c: Identify PLT entries needed for external function calls ──
     let mut plt_symbols: Vec<String> = Vec::new();
     {

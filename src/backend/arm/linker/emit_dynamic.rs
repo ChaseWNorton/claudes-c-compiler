@@ -19,10 +19,11 @@ pub(super) fn emit_dynamic_executable(
     objects: &[ElfObject], globals: &mut HashMap<String, GlobalSymbol>,
     output_sections: &mut [OutputSection],
     section_map: &HashMap<(usize, usize), (usize, u64)>,
-    plt_names: &[String], got_entries: &[(String, bool)],
-    needed_sonames: &[String], output_path: &str,
+    dyn_info: (&[String], &[(String, bool)], &[String]), // (plt_names, got_entries, needed_sonames)
+    output_path: &str,
     export_dynamic: bool,
 ) -> Result<(), String> {
+    let (plt_names, got_entries, needed_sonames) = dyn_info;
     let mut dynstr = DynStrTab::new();
     for lib in needed_sonames { dynstr.add(lib); }
 
@@ -808,17 +809,17 @@ pub(super) fn emit_dynamic_executable(
                         // Use GOT entry address for symbols with GOT-only entries
                         let gkey = sym.name.clone();
                         let tls_info = reloc::TlsInfo { tls_addr, tls_size: tls_mem_size };
-                        reloc::apply_one_reloc(&mut out, fp, rela.rela_type, s, a, p,
-                                               &sym.name, &objects[obj_idx].source_name,
-                                               &tls_info, &dyn_got_info, &gkey)?;
+                        reloc::apply_one_reloc(&mut out, fp, rela.rela_type, (s, a, p),
+                                               (&sym.name, &objects[obj_idx].source_name),
+                                               (&tls_info, &dyn_got_info), &gkey)?;
                     }
                     _ => {
                         // Delegate to the standard reloc handler for TLS etc.
                         let gkey = reloc::got_key(obj_idx, sym);
                         let tls_info = reloc::TlsInfo { tls_addr, tls_size: tls_mem_size };
-                        reloc::apply_one_reloc(&mut out, fp, rela.rela_type, s, a, p,
-                                               &sym.name, &objects[obj_idx].source_name,
-                                               &tls_info, &dyn_got_info, &gkey)?;
+                        reloc::apply_one_reloc(&mut out, fp, rela.rela_type, (s, a, p),
+                                               (&sym.name, &objects[obj_idx].source_name),
+                                               (&tls_info, &dyn_got_info), &gkey)?;
                     }
                 }
             }

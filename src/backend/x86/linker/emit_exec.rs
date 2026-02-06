@@ -14,11 +14,12 @@ pub(super) fn emit_executable(
     objects: &[ElfObject], globals: &mut HashMap<String, GlobalSymbol>,
     output_sections: &mut [OutputSection],
     section_map: &HashMap<(usize, usize), (usize, u64)>,
-    plt_names: &[String], got_entries: &[(String, bool)],
-    needed_sonames: &[String], output_path: &str,
-    export_dynamic: bool, rpath_entries: &[String], use_runpath: bool,
-    is_static: bool, ifunc_symbols: &[String],
+    dyn_info: (&[String], &[(String, bool)], &[String]), // (plt_names, got_entries, needed_sonames)
+    output_path: &str,
+    link_opts: (bool, &[String], bool, bool, &[String]), // (export_dynamic, rpath_entries, use_runpath, is_static, ifunc_symbols)
 ) -> Result<(), String> {
+    let (plt_names, got_entries, needed_sonames) = dyn_info;
+    let (export_dynamic, rpath_entries, use_runpath, is_static, ifunc_symbols) = link_opts;
     let mut dynstr = DynStrTab::new();
     for lib in needed_sonames { dynstr.add(lib); }
     let rpath_string = if rpath_entries.is_empty() { None } else {

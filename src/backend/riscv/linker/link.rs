@@ -152,21 +152,19 @@ pub fn link_builtin(
 
     // ── Phase 4+: Emit executable ───────────────────────────────────────
 
+    let got_info = super::emit_exec::ExecGotInfo {
+        got_symbols: &got_symbols, tls_got_symbols: &tls_got_symbols,
+        local_got_sym_info: &local_got_sym_info,
+    };
+    let link_info = super::emit_exec::ExecLinkInfo {
+        sec_mapping: &sec_mapping, plt_symbols: &plt_symbols,
+        copy_symbols: &copy_symbols, sec_indices: &sec_indices,
+        actual_needed_libs: &actual_needed_libs,
+    };
     super::emit_exec::emit_executable(
-        &input_objs,
-        &mut merged_sections,
-        &mut merged_map,
-        &sec_mapping,
-        &mut global_syms,
-        &got_symbols,
-        &tls_got_symbols,
-        &local_got_sym_info,
-        &plt_symbols,
-        &copy_symbols,
-        &sec_indices,
-        &actual_needed_libs,
-        is_static,
-        output_path,
+        &input_objs, &mut merged_sections, &mut merged_map,
+        &mut global_syms, &got_info, &link_info,
+        (is_static, output_path),
     )
 }
 
@@ -261,7 +259,7 @@ pub fn link_shared(
     );
 
     // Identify GOT entries needed
-    let symbols::GotEntries { got_symbols, tls_got_symbols, local_got_sym_info } =
+    let symbols::GotEntries { got_symbols, tls_got_symbols: _, local_got_sym_info: _ } =
         symbols::collect_got_entries(&input_objs);
 
     // ── Phase 4+: Emit shared library ───────────────────────────────
@@ -269,14 +267,10 @@ pub fn link_shared(
     super::emit_shared::emit_shared_library(
         &input_objs,
         &mut merged_sections,
-        &mut merged_map,
         &sec_mapping,
         &mut global_syms,
         &got_symbols,
-        &tls_got_symbols,
-        &local_got_sym_info,
         &needed_sonames,
-        soname,
-        output_path,
+        (soname, output_path),
     )
 }

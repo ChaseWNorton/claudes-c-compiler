@@ -170,8 +170,8 @@ pub fn apply_relocations(
                 let s = resolve_sym(obj_idx, sym, globals, section_map, output_sections);
                 let gkey = got_key(obj_idx, sym);
 
-                apply_one_reloc(out, fp, rela.rela_type, s, a, p, &sym.name,
-                                &obj.source_name, tls_info, got_info, &gkey)?;
+                apply_one_reloc(out, fp, rela.rela_type, (s, a, p), (&sym.name, &obj.source_name),
+                                (tls_info, got_info), &gkey)?;
             }
         }
     }
@@ -196,15 +196,14 @@ pub fn apply_one_reloc(
     out: &mut [u8],
     fp: usize,
     rtype: u32,
-    s: u64,
-    a: i64,
-    p: u64,
-    sym_name: &str,
-    source: &str,
-    tls_info: &TlsInfo,
-    got_info: &GotInfo,
+    reloc_vals: (u64, i64, u64), // (s, a, p)
+    names: (&str, &str), // (sym_name, source)
+    reloc_ctx: (&TlsInfo, &GotInfo), // (tls_info, got_info)
     got_key: &str,
 ) -> Result<(), String> {
+    let (s, a, p) = reloc_vals;
+    let (sym_name, source) = names;
+    let (tls_info, got_info) = reloc_ctx;
     match rtype {
         R_AARCH64_NONE => {}
 

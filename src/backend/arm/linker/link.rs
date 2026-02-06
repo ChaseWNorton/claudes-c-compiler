@@ -30,10 +30,9 @@ pub fn link_builtin(
     user_args: &[String],
     lib_paths: &[&str],
     needed_libs: &[&str],
-    crt_objects_before: &[&str],
-    crt_objects_after: &[&str],
-    is_static: bool,
+    crt_opts: (&[&str], &[&str], bool), // (crt_objects_before, crt_objects_after, is_static)
 ) -> Result<(), String> {
+    let (crt_objects_before, crt_objects_after, is_static) = crt_opts;
     if std::env::var("LINKER_DEBUG").is_ok() {
         eprintln!("arm linker: object_files={:?} output={} user_args={:?} static={}", object_files, output_path, user_args, is_static);
     }
@@ -242,7 +241,7 @@ pub fn link_builtin(
         // Emit dynamically-linked executable
         emit_dynamic_executable(
             &objects, &mut globals, &mut output_sections, &section_map,
-            &plt_names, &got_entries, &needed_sonames, output_path,
+            (&plt_names, &got_entries, &needed_sonames), output_path,
             export_dynamic,
         )
     } else {
