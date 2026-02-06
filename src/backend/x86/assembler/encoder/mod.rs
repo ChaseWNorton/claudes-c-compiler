@@ -13,6 +13,7 @@ mod x87_misc;
 mod avx;
 
 pub(crate) use registers::*;
+use avx::VexFields;
 
 pub(crate) use super::parser::*;
 
@@ -1183,13 +1184,13 @@ impl InstructionEncoder {
             // ---- AVX: vzeroupper ----
             "vzeroupper" => {
                 // VEX.128.0F.WIG 77
-                self.emit_vex(false, false, false, 1, 0, 0, 0, 0);
+                self.emit_vex(VexFields { r: false, x: false, b: false, mm: 1, w: 0, vvvv: 0, l: 0, pp: 0 });
                 self.bytes.push(0x77);
                 Ok(())
             }
             "vzeroall" => {
                 // VEX.256.0F.WIG 77
-                self.emit_vex(false, false, false, 1, 0, 0, 1, 0);
+                self.emit_vex(VexFields { r: false, x: false, b: false, mm: 1, w: 0, vvvv: 0, l: 1, pp: 0 });
                 self.bytes.push(0x77);
                 Ok(())
             }
@@ -1206,7 +1207,7 @@ impl InstructionEncoder {
                         let l = if is_ymm(&src.name) || is_ymm(&dst.name) { 1 } else { 0 };
                         let b = needs_vex_ext(&src.name);
                         let dst_num_full = reg_num(&dst.name).ok_or("bad register")? | (if needs_vex_ext(&dst.name) { 8 } else { 0 });
-                        self.emit_vex(false, false, b, 1, 0, dst_num_full, l, 1);
+                        self.emit_vex(VexFields { r: false, x: false, b, mm: 1, w: 0, vvvv: dst_num_full, l, pp: 1 });
                         self.bytes.push(0x73);
                         self.bytes.push(self.modrm(3, 3, src_num));
                         self.bytes.push(*imm as u8);
@@ -1223,7 +1224,7 @@ impl InstructionEncoder {
                         let l = if is_ymm(&src.name) || is_ymm(&dst.name) { 1 } else { 0 };
                         let b = needs_vex_ext(&src.name);
                         let dst_num_full = reg_num(&dst.name).ok_or("bad register")? | (if needs_vex_ext(&dst.name) { 8 } else { 0 });
-                        self.emit_vex(false, false, b, 1, 0, dst_num_full, l, 1);
+                        self.emit_vex(VexFields { r: false, x: false, b, mm: 1, w: 0, vvvv: dst_num_full, l, pp: 1 });
                         self.bytes.push(0x73);
                         self.bytes.push(self.modrm(3, 7, src_num));
                         self.bytes.push(*imm as u8);
@@ -1242,7 +1243,7 @@ impl InstructionEncoder {
                         let l = if is_ymm(&src.name) || is_ymm(&dst.name) { 1 } else { 0 };
                         let r = needs_vex_ext(&dst.name);
                         let b = needs_vex_ext(&src.name);
-                        self.emit_vex(r, false, b, 2, 0, 0, l, 1);
+                        self.emit_vex(VexFields { r, x: false, b, mm: 2, w: 0, vvvv: 0, l, pp: 1 });
                         self.bytes.push(0x17);
                         self.bytes.push(self.modrm(3, dst_num, src_num));
                         Ok(())
@@ -1259,7 +1260,7 @@ impl InstructionEncoder {
                         let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                         let r = needs_vex_ext(&src.name);
                         let b = needs_vex_ext(&dst.name);
-                        self.emit_vex(r, false, b, 3, 1, 0, 0, 1);
+                        self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 1, vvvv: 0, l: 0, pp: 1 });
                         self.bytes.push(0x16);
                         self.bytes.push(self.modrm(3, src_num, dst_num));
                         self.bytes.push(*imm as u8);
@@ -1279,7 +1280,7 @@ impl InstructionEncoder {
                         let r = needs_vex_ext(&dst.name);
                         let b = needs_vex_ext(&src.name);
                         let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                        self.emit_vex(r, false, b, 3, 1, vvvv_enc, 0, 1);
+                        self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 1, vvvv: vvvv_enc, l: 0, pp: 1 });
                         self.bytes.push(0x22);
                         self.bytes.push(self.modrm(3, dst_num, src_num));
                         self.bytes.push(*imm as u8);

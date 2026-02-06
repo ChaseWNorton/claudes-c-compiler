@@ -59,7 +59,9 @@ impl ArmCodegen {
             let slot = (space + effective_align - 1) & !(effective_align - 1);
             let new_space = slot + ((alloc_size + 7) & !7).max(8);
             (slot, new_space)
-        }, &reg_assigned, &ARM_CALLEE_SAVED, cached_liveness, false);
+        }, &reg_assigned, crate::backend::stack_layout::StackLayoutOpts {
+            callee_saved_regs: &ARM_CALLEE_SAVED, cached_liveness, lhs_first_binop: false,
+        });
 
         if func.is_variadic {
             space = (space + 7) & !7;

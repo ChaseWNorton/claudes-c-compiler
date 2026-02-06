@@ -201,17 +201,23 @@ const MAX_TRACE_RECURSION_DEPTH: u32 = 10;
 ///    budget and caller size constraints.
 ///
 /// Returns `(site, callee_inst_count, use_relaxed)` or `None` if no eligible site.
+/// Caller constraints for inline site selection.
+struct CallerState {
+    too_large: bool,
+    at_hard_cap: bool,
+    at_absolute_cap: bool,
+    has_section: bool,
+    is_recursive: bool,
+    budget_remaining: usize,
+    always_inline_budget_remaining: usize,
+}
+
 fn select_inline_site(
     call_sites: &[InlineCallSite],
     callee_map: &HashMap<String, CalleeData>,
-    caller_too_large: bool,
-    caller_at_hard_cap: bool,
-    caller_at_absolute_cap: bool,
-    caller_has_section: bool,
-    caller_is_recursive: bool,
-    budget_remaining: usize,
-    always_inline_budget_remaining: usize,
+    cs: &CallerState,
 ) -> Option<(InlineCallSite, usize, bool)> {
+    let CallerState { too_large: caller_too_large, at_hard_cap: caller_at_hard_cap, at_absolute_cap: caller_at_absolute_cap, has_section: caller_has_section, is_recursive: caller_is_recursive, budget_remaining, always_inline_budget_remaining } = *cs;
     // First pass: look for tiny/small callees anywhere in the function.
     // These are always inlined regardless of caller size because:
     // 1. They have negligible impact on code/stack size
@@ -405,13 +411,15 @@ pub fn run(module: &mut IrModule) -> usize {
             let found_site = select_inline_site(
                 &call_sites,
                 &callee_map,
-                caller_too_large,
-                caller_at_hard_cap,
-                caller_at_absolute_cap,
-                caller_has_section,
-                caller_is_recursive,
-                budget_remaining,
-                always_inline_budget_remaining,
+                &CallerState {
+                    too_large: caller_too_large,
+                    at_hard_cap: caller_at_hard_cap,
+                    at_absolute_cap: caller_at_absolute_cap,
+                    has_section: caller_has_section,
+                    is_recursive: caller_is_recursive,
+                    budget_remaining,
+                    always_inline_budget_remaining,
+                },
             );
             let (site, callee_inst_count, _use_relaxed) = match found_site {
                 Some(s) => s,

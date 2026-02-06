@@ -83,6 +83,29 @@ use super::state::{CodegenState, SlotAddr, StackSlot};
 use super::cast::{FloatOp, classify_float_binop};
 use super::generation::is_i128_type;
 
+/// Bundled arguments for inline assembly emission.
+pub struct AsmOperands<'a> {
+    pub template: &'a str,
+    pub outputs: &'a [(String, Value, Option<String>)],
+    pub inputs: &'a [(String, Operand, Option<String>)],
+    pub clobbers: &'a [String],
+    pub operand_types: &'a [IrType],
+    pub goto_labels: &'a [(String, BlockId)],
+    pub input_symbols: &'a [Option<String>],
+}
+
+/// Bundled arguments for `emit_atomic_cmpxchg_impl`.
+pub struct CmpxchgArgs<'a> {
+    pub dest: &'a Value,
+    pub ptr: &'a Operand,
+    pub expected: &'a Operand,
+    pub desired: &'a Operand,
+    pub ty: IrType,
+    pub success_ordering: AtomicOrdering,
+    pub failure_ordering: AtomicOrdering,
+    pub returns_bool: bool,
+}
+
 /// Minimum number of switch cases required to consider a jump table.
 /// Fewer cases are better served by a linear compare-and-branch chain.
 pub const MIN_JUMP_TABLE_CASES: usize = 4;
@@ -424,18 +447,19 @@ pub trait ArchCodegen {
     /// The default implementation provides the shared algorithmic skeleton that all four
     /// architectures follow: classify args → emit stack args → load register args → call → cleanup → store result.
     /// Backends override the small `emit_call_*` hook methods instead of reimplementing this entire method.
-    fn emit_call(&mut self, args: &[Operand], arg_types: &[IrType], direct_name: Option<&str>,
-                 func_ptr: Option<&Operand>, dest: Option<Value>, return_type: IrType,
-                 is_variadic: bool, _num_fixed_args: usize, struct_arg_sizes: &[Option<usize>],
-                 struct_arg_aligns: &[Option<usize>],
-                 struct_arg_classes: &[Vec<crate::common::types::EightbyteClass>],
-                 struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>],
-                 is_sret: bool,
-                 _is_fastcall: bool,
-                 ret_eightbyte_classes: &[crate::common::types::EightbyteClass]) {
+    fn emit_call(&mut self, info: &crate::ir::instruction::CallInfo, direct_name: Option<&str>,
+                 func_ptr: Option<&Operand>) {
         use super::call_abi::*;
+        let args = &info.args;
+        let arg_types = &info.arg_types;
+        let is_variadic = info.is_variadic;
+        let is_sret = info.is_sret;
+        let return_type = info.return_type;
+        let dest = info.dest;
+        let struct_arg_riscv_float_classes = &info.struct_arg_riscv_float_classes;
+        let ret_eightbyte_classes = &info.ret_eightbyte_classes;
         let config = self.call_abi_config();
-        let mut arg_classes = classify_call_args(args, arg_types, struct_arg_sizes, struct_arg_aligns, struct_arg_classes, struct_arg_riscv_float_classes, is_variadic, &config);
+        let mut arg_classes = classify_call_args(args, arg_types, &info.struct_arg_sizes, &info.struct_arg_aligns, &info.struct_arg_classes, struct_arg_riscv_float_classes, (is_variadic, &config));
 
         // AArch64 ABI: the sret pointer goes in x8 (indirect result register),
         // NOT in x0 as a regular argument.  Reclassify: mark arg[0] as ZeroSizeSkip
@@ -511,7 +535,7 @@ pub trait ArchCodegen {
         self.state().reg_cache.invalidate_acc();
 
         // Phase 3: Load register args (GP, FP, i128, struct-by-val, F128).
-        self.emit_call_reg_args(args, &arg_classes, arg_types, total_sp_adjust, f128_temp_space, stack_arg_space,
+        self.emit_call_reg_args(args, &arg_classes, arg_types, (total_sp_adjust, f128_temp_space, stack_arg_space),
                                 struct_arg_riscv_float_classes);
 
         // Phase 3.5: Set up sret pointer in dedicated register (x8 on AArch64).
@@ -564,7 +588,8 @@ pub trait ArchCodegen {
 
     /// Load arguments into registers (GP, FP, i128, struct-by-val, F128).
     fn emit_call_reg_args(&mut self, args: &[Operand], arg_classes: &[super::call_abi::CallArgClass],
-                          arg_types: &[IrType], total_sp_adjust: i64, f128_temp_space: usize, stack_arg_space: usize,
+                          arg_types: &[IrType],
+                          stack_info: (i64, usize, usize), // (total_sp_adjust, f128_temp_space, stack_arg_space)
                           struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>]);
 
     /// Emit the call/bl/jalr instruction.
@@ -829,7 +854,7 @@ pub trait ArchCodegen {
     fn emit_atomic_rmw(&mut self, dest: &Value, op: AtomicRmwOp, ptr: &Operand, val: &Operand, ty: IrType, ordering: AtomicOrdering);
 
     /// Emit an atomic compare-and-exchange operation.
-    fn emit_atomic_cmpxchg(&mut self, dest: &Value, ptr: &Operand, expected: &Operand, desired: &Operand, ty: IrType, success_ordering: AtomicOrdering, failure_ordering: AtomicOrdering, returns_bool: bool);
+    fn emit_atomic_cmpxchg(&mut self, args: CmpxchgArgs);
 
     /// Emit an atomic load.
     fn emit_atomic_load(&mut self, dest: &Value, ptr: &Operand, ty: IrType, ordering: AtomicOrdering);
@@ -841,7 +866,7 @@ pub trait ArchCodegen {
     fn emit_fence(&mut self, ordering: AtomicOrdering);
 
     /// Emit inline assembly.
-    fn emit_inline_asm(&mut self, template: &str, outputs: &[(String, Value, Option<String>)], inputs: &[(String, Operand, Option<String>)], clobbers: &[String], operand_types: &[IrType], goto_labels: &[(String, BlockId)], input_symbols: &[Option<String>]);
+    fn emit_inline_asm(&mut self, ops: AsmOperands);
 
     /// Emit raw inline assembly template for naked functions (no operand substitution).
     fn emit_raw_inline_asm(&mut self, template: &str) {
@@ -856,8 +881,8 @@ pub trait ArchCodegen {
     /// Emit inline assembly with per-operand segment overrides.
     /// Default: delegates to emit_inline_asm (ignoring segment overrides).
     /// x86 backend overrides this to apply %gs:/%fs: prefixes to memory operands.
-    fn emit_inline_asm_with_segs(&mut self, template: &str, outputs: &[(String, Value, Option<String>)], inputs: &[(String, Operand, Option<String>)], clobbers: &[String], operand_types: &[IrType], goto_labels: &[(String, BlockId)], input_symbols: &[Option<String>], _seg_overrides: &[AddressSpace]) {
-        self.emit_inline_asm(template, outputs, inputs, clobbers, operand_types, goto_labels, input_symbols);
+    fn emit_inline_asm_with_segs(&mut self, ops: AsmOperands, _seg_overrides: &[AddressSpace]) {
+        self.emit_inline_asm(ops);
     }
 
     /// Emit a return terminator.

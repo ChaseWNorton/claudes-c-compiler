@@ -83,9 +83,8 @@ impl I686Codegen {
         self.store_eax_to(dest);
     }
 
-    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, dest: &Value, ptr: &Operand, expected: &Operand,
-                           desired: &Operand, ty: IrType, _success: AtomicOrdering,
-                           _failure: AtomicOrdering, returns_bool: bool) {
+    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, args: crate::backend::traits::CmpxchgArgs) {
+        let crate::backend::traits::CmpxchgArgs { dest, ptr, expected, desired, ty, success_ordering: _, failure_ordering: _fo, returns_bool } = args;
         if self.is_atomic_wide(ty) {
             self.emit_atomic_cmpxchg_wide(dest, ptr, expected, desired, returns_bool);
             return;

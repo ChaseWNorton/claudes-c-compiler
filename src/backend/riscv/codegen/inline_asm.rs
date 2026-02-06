@@ -47,18 +47,24 @@ pub(super) fn classify_rv_constraint(constraint: &str) -> RvConstraintKind {
     }
 }
 
+pub(super) struct RvAsmOperands<'a> {
+    pub op_regs: &'a [String],
+    pub op_names: &'a [Option<String>],
+    pub op_kinds: &'a [RvConstraintKind],
+    pub op_mem_offsets: &'a [i64],
+    pub op_mem_addrs: &'a [String],
+    pub op_imm_values: &'a [Option<i64>],
+    pub op_imm_symbols: &'a [Option<String>],
+}
+
 impl RiscvCodegen {
     /// Format an operand for substitution based on its constraint kind.
     pub(super) fn format_operand(
         idx: usize,
-        op_regs: &[String],
-        op_kinds: &[RvConstraintKind],
-        op_mem_offsets: &[i64],
-        op_mem_addrs: &[String],
-        op_imm_values: &[Option<i64>],
-        op_imm_symbols: &[Option<String>],
-        use_addr_format: bool, // true for Address kind
+        ops: &RvAsmOperands,
+        use_addr_format: bool,
     ) -> String {
+        let RvAsmOperands { op_regs, op_kinds, op_mem_offsets, op_mem_addrs, op_imm_values, op_imm_symbols, .. } = ops;
         if idx >= op_kinds.len() {
             return String::new();
         }
@@ -100,15 +106,10 @@ impl RiscvCodegen {
     /// Substitute %0, %1, %[name], %z0, etc. in RISC-V asm template.
     pub(super) fn substitute_riscv_asm_operands(
         line: &str,
-        op_regs: &[String],
-        op_names: &[Option<String>],
-        op_kinds: &[RvConstraintKind],
-        op_mem_offsets: &[i64],
-        op_mem_addrs: &[String],
-        op_imm_values: &[Option<i64>],
-        op_imm_symbols: &[Option<String>],
+        ops: &RvAsmOperands,
         gcc_to_internal: &[usize],
     ) -> String {
+        let RvAsmOperands { op_regs, op_names, op_kinds: _, op_mem_offsets: _, op_mem_addrs: _, op_imm_values, op_imm_symbols: _ } = ops;
         let mut result = String::new();
         let chars: Vec<char> = line.chars().collect();
         let mut i = 0;
@@ -221,7 +222,7 @@ impl RiscvCodegen {
                     for (idx, op_name) in op_names.iter().enumerate() {
                         if let Some(ref n) = op_name {
                             if n == &name {
-                                result.push_str(&Self::format_operand(idx, op_regs, op_kinds, op_mem_offsets, op_mem_addrs, op_imm_values, op_imm_symbols, true));
+                                result.push_str(&Self::format_operand(idx, ops, true));
                                 found = true;
                                 break;
                             }
@@ -246,7 +247,7 @@ impl RiscvCodegen {
                         num
                     };
                     if internal_idx < op_regs.len() {
-                        result.push_str(&Self::format_operand(internal_idx, op_regs, op_kinds, op_mem_offsets, op_mem_addrs, op_imm_values, op_imm_symbols, true));
+                        result.push_str(&Self::format_operand(internal_idx, ops, true));
                     } else {
                         let _ = write!(result, "%{}", num);
                     }

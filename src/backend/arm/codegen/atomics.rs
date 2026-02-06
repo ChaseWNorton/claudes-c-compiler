@@ -2,6 +2,7 @@
 
 use crate::ir::reexports::{AtomicOrdering, AtomicRmwOp, Operand, Value};
 use crate::common::types::IrType;
+use crate::backend::traits::CmpxchgArgs;
 use super::emit::ArmCodegen;
 
 impl ArmCodegen {
@@ -47,7 +48,8 @@ impl ArmCodegen {
         self.store_x0_to(dest);
     }
 
-    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, dest: &Value, ptr: &Operand, expected: &Operand, desired: &Operand, ty: IrType, success_ordering: AtomicOrdering, _failure_ordering: AtomicOrdering, returns_bool: bool) {
+    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, args: CmpxchgArgs) {
+        let CmpxchgArgs { dest, ptr, expected, desired, ty, success_ordering, failure_ordering: _fo, returns_bool } = args;
         self.operand_to_x0(ptr);
         self.state.emit("    mov x1, x0");
         self.operand_to_x0(desired);

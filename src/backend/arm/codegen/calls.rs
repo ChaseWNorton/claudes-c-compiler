@@ -206,8 +206,9 @@ impl ArmCodegen {
     }
 
     pub(super) fn emit_call_reg_args_impl(&mut self, args: &[Operand], arg_classes: &[CallArgClass],
-                          arg_types: &[IrType], total_sp_adjust: i64, _f128_temp_space: usize, _stack_arg_space: usize,
+                          arg_types: &[IrType], stack_info: (i64, usize, usize),
                           _struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>]) {
+        let (total_sp_adjust, _, _) = stack_info;
         let slot_adjust = if self.state.has_dyn_alloca { 0 } else { total_sp_adjust };
         let needs_adjusted_load = total_sp_adjust > 0;
 

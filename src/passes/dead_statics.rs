@@ -38,10 +38,14 @@ pub(crate) fn eliminate_dead_static_functions(module: &mut IrModule) {
     let address_taken = build_address_taken(module, &name_to_id, next_id as usize);
 
     // Phase 4: Reachability BFS from roots, including address-taken functions.
+    let graph = ReachabilityGraph {
+        func_id: &func_id, global_id: &global_id,
+        id_func_idx: &id_func_idx, id_global_idx: &id_global_idx,
+        func_refs: &func_refs, global_refs_lists: &global_refs_lists,
+        address_taken: &address_taken,
+    };
     let reachable = compute_reachability(
-        module, &func_id, &global_id, &id_func_idx, &id_global_idx,
-        &func_refs, &global_refs_lists, &address_taken,
-        &mut name_to_id, &mut next_id,
+        module, &graph, &mut name_to_id, &mut next_id,
     );
 
     // Drop the borrow on module strings so we can mutate module below.
@@ -149,6 +153,17 @@ fn mark_reachable(id: u32, reachable: &mut Vec<bool>, worklist: &mut Vec<u32>, n
     }
 }
 
+/// Read-only reference graph and index arrays for reachability analysis.
+struct ReachabilityGraph<'a> {
+    func_id: &'a [u32],
+    global_id: &'a [u32],
+    id_func_idx: &'a [Option<usize>],
+    id_global_idx: &'a [Option<usize>],
+    func_refs: &'a [Vec<u32>],
+    global_refs_lists: &'a [Vec<u32>],
+    address_taken: &'a [bool],
+}
+
 /// Phase 4: Compute reachability from roots via BFS.
 ///
 /// Roots include: non-static functions, non-static globals, aliases, constructors,
@@ -156,12 +171,10 @@ fn mark_reachable(id: u32, reachable: &mut Vec<bool>, worklist: &mut Vec<u32>, n
 /// (which survive dead elimination because they're used as function pointers).
 fn compute_reachability<'a>(
     module: &'a IrModule,
-    func_id: &[u32], global_id: &[u32],
-    id_func_idx: &[Option<usize>], id_global_idx: &[Option<usize>],
-    func_refs: &[Vec<u32>], global_refs_lists: &[Vec<u32>],
-    address_taken: &[bool],
+    graph: &ReachabilityGraph,
     name_to_id: &mut FxHashMap<&'a str, u32>, next_id: &mut u32,
 ) -> Vec<bool> {
+    let ReachabilityGraph { func_id, global_id, id_func_idx, id_global_idx, func_refs, global_refs_lists, address_taken } = graph;
     let mut reachable = vec![false; *next_id as usize];
     let mut worklist: Vec<u32> = Vec::new();
 

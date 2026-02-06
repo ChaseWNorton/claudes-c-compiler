@@ -10,17 +10,23 @@ use std::fmt::Write;
 use crate::common::types::IrType;
 use crate::ir::reexports::BlockId;
 
+/// Bundled per-operand arrays for inline assembly operand substitution.
+pub(crate) struct AsmOperands<'a> {
+    pub op_regs: &'a [String],
+    pub op_names: &'a [Option<String>],
+    pub op_is_memory: &'a [bool],
+    pub op_mem_addrs: &'a [String],
+    pub op_types: &'a [IrType],
+    pub op_imm_values: &'a [Option<i64>],
+    pub op_imm_symbols: &'a [Option<String>],
+}
+
 /// Callback for emitting a single inline asm operand (architecture-specific).
 pub(crate) type EmitOperandFn = fn(
     result: &mut String,
     idx: usize,
     modifier: Option<char>,
-    op_regs: &[String],
-    op_is_memory: &[bool],
-    op_mem_addrs: &[String],
-    op_types: &[IrType],
-    op_imm_values: &[Option<i64>],
-    op_imm_symbols: &[Option<String>],
+    ops: &AsmOperands,
 );
 
 /// Resolve GCC inline asm dialect alternatives in a template string.
@@ -182,17 +188,12 @@ pub(crate) fn reg_to_8h<'a>(reg: &'a str) -> Cow<'a, str> {
 /// x86-64 vs. absolute addressing on i686, and different default register widths).
 pub(crate) fn substitute_x86_asm_operands(
     line: &str,
-    op_regs: &[String],
-    op_names: &[Option<String>],
-    op_is_memory: &[bool],
-    op_mem_addrs: &[String],
-    op_types: &[IrType],
+    ops: &AsmOperands,
     gcc_to_internal: &[usize],
     goto_labels: &[(String, BlockId)],
-    op_imm_values: &[Option<i64>],
-    op_imm_symbols: &[Option<String>],
     emit_operand: EmitOperandFn,
 ) -> String {
+    let AsmOperands { op_regs, op_names, .. } = ops;
     // Pre-process GCC dialect alternatives: {att_syntax|intel_syntax}
     // We always target AT&T syntax, so select the first alternative.
     let line = resolve_dialect_alternatives(line);
@@ -279,9 +280,7 @@ pub(crate) fn substitute_x86_asm_operands(
                 for (idx, op_name) in op_names.iter().enumerate() {
                     if let Some(ref n) = op_name {
                         if n == &name {
-                            emit_operand(&mut result, idx, modifier,
-                                op_regs, op_is_memory, op_mem_addrs, op_types,
-                                op_imm_values, op_imm_symbols);
+                            emit_operand(&mut result, idx, modifier, ops);
                             found = true;
                             break;
                         }
@@ -308,9 +307,7 @@ pub(crate) fn substitute_x86_asm_operands(
                     num // fallback: direct mapping
                 };
                 if internal_idx < op_regs.len() {
-                    emit_operand(&mut result, internal_idx, modifier,
-                        op_regs, op_is_memory, op_mem_addrs, op_types,
-                        op_imm_values, op_imm_symbols);
+                    emit_operand(&mut result, internal_idx, modifier, ops);
                 } else {
                     result.push('%');
                     if let Some(m) = modifier { result.push(m); }
@@ -342,12 +339,9 @@ pub(crate) fn emit_operand_common(
     result: &mut String,
     idx: usize,
     modifier: Option<char>,
-    op_regs: &[String],
-    op_is_memory: &[bool],
-    op_mem_addrs: &[String],
-    op_imm_values: &[Option<i64>],
-    op_imm_symbols: &[Option<String>],
+    ops: &AsmOperands,
 ) -> bool {
+    let AsmOperands { op_regs, op_is_memory, op_mem_addrs, op_imm_values, op_imm_symbols, .. } = ops;
     let is_raw = matches!(modifier, Some('c') | Some('P'));
     let is_neg = modifier == Some('n');
     let has_symbol = op_imm_symbols.get(idx).and_then(|s| s.as_ref());

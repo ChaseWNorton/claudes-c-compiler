@@ -516,7 +516,12 @@ impl InlineAsmEmitter for X86Codegen {
             }
         }
 
-        Self::substitute_x86_asm_operands(line, &op_regs, &op_names, &op_is_memory, &op_mem_addrs, &op_types, gcc_to_internal, goto_labels, &op_imm_values, &op_imm_symbols)
+        let ops = crate::backend::x86_common::AsmOperands {
+            op_regs: &op_regs, op_names: &op_names, op_is_memory: &op_is_memory,
+            op_mem_addrs: &op_mem_addrs, op_types: &op_types,
+            op_imm_values: &op_imm_values, op_imm_symbols: &op_imm_symbols,
+        };
+        Self::substitute_x86_asm_operands(line, &ops, gcc_to_internal, goto_labels)
     }
 
     fn store_output_from_reg(&mut self, op: &AsmOperand, ptr: &Value, _constraint: &str, _all_output_regs: &[&str]) {

@@ -481,7 +481,8 @@ impl RiscvCodegen {
         self.store_t0_to(dest);
     }
 
-    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, dest: &Value, ptr: &Operand, expected: &Operand, desired: &Operand, ty: IrType, ordering: AtomicOrdering, _failure_ordering: AtomicOrdering, returns_bool: bool) {
+    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, args: crate::backend::traits::CmpxchgArgs) {
+        let crate::backend::traits::CmpxchgArgs { dest, ptr, expected, desired, ty, success_ordering: ordering, failure_ordering: _fo, returns_bool } = args;
         self.operand_to_t0(ptr);
         self.state.emit("    mv t1, t0");
         self.operand_to_t0(desired);

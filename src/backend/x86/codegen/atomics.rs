@@ -2,6 +2,7 @@
 
 use crate::ir::reexports::{Operand, Value, AtomicRmwOp, AtomicOrdering};
 use crate::common::types::IrType;
+use crate::backend::traits::CmpxchgArgs;
 use super::emit::X86Codegen;
 
 impl X86Codegen {
@@ -45,7 +46,8 @@ impl X86Codegen {
         self.store_rax_to(dest);
     }
 
-    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, dest: &Value, ptr: &Operand, expected: &Operand, desired: &Operand, ty: IrType, _success_ordering: AtomicOrdering, _failure_ordering: AtomicOrdering, returns_bool: bool) {
+    pub(super) fn emit_atomic_cmpxchg_impl(&mut self, args: CmpxchgArgs) {
+        let CmpxchgArgs { dest, ptr, expected, desired, ty, success_ordering: _, failure_ordering: _fo, returns_bool } = args;
         self.operand_to_rax(ptr);
         self.state.emit("    movq %rax, %rcx");
         self.operand_to_rax(desired);

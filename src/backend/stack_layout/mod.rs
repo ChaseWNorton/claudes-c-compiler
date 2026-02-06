@@ -110,6 +110,13 @@ struct StackLayoutContext {
 
 // ── Main stack space calculation ──────────────────────────────────────────
 
+/// Auxiliary options for `calculate_stack_space_common`.
+pub struct StackLayoutOpts<'a> {
+    pub callee_saved_regs: &'a [PhysReg],
+    pub cached_liveness: Option<super::liveness::LivenessResult>,
+    pub lhs_first_binop: bool,
+}
+
 /// Shared stack space calculation: iterates over all instructions, assigns stack
 /// slots for allocas and value results. Arch-specific offset direction is handled
 /// by the `assign_slot` closure.
@@ -122,10 +129,9 @@ pub fn calculate_stack_space_common(
     initial_offset: i64,
     assign_slot: impl Fn(i64, i64, i64) -> (i64, i64),
     reg_assigned: &FxHashMap<u32, PhysReg>,
-    callee_saved_regs: &[PhysReg],
-    cached_liveness: Option<super::liveness::LivenessResult>,
-    lhs_first_binop: bool,
+    opts: StackLayoutOpts,
 ) -> i64 {
+    let StackLayoutOpts { callee_saved_regs, cached_liveness, lhs_first_binop } = opts;
     let num_blocks = func.blocks.len();
 
     // Enable coalescing and multi-tier allocation for any multi-block function.
@@ -143,25 +149,28 @@ pub fn calculate_stack_space_common(
     state.reg_assigned_values = reg_assigned.keys().copied().collect();
 
     // Phase 2: Classify all instructions into the three tiers.
-    let mut non_local_space = initial_offset;
-    let mut deferred_slots: Vec<DeferredSlot> = Vec::new();
-    let mut multi_block_values: Vec<MultiBlockValue> = Vec::new();
-    let mut block_local_values: Vec<BlockLocalValue> = Vec::new();
-    let mut block_space: FxHashMap<usize, i64> = FxHashMap::default();
-    let mut max_block_local_space: i64 = 0;
+    let mut class_out = slot_assignment::ClassificationOutput {
+        non_local_space: initial_offset,
+        deferred_slots: Vec::new(),
+        multi_block_values: Vec::new(),
+        block_local_values: Vec::new(),
+        block_space: FxHashMap::default(),
+        max_block_local_space: 0,
+    };
 
     slot_assignment::classify_instructions(
-        state, func, &ctx, &assign_slot, reg_assigned,
-        &mut non_local_space, &mut deferred_slots, &mut multi_block_values,
-        &mut block_local_values, &mut block_space, &mut max_block_local_space,
+        state, func, &ctx, &assign_slot, reg_assigned, &mut class_out,
     );
 
     // Phase 3: Tier 3 — block-local greedy slot reuse.
     slot_assignment::assign_tier3_block_local_slots(
-        func, &ctx, coalesce,
-        &block_local_values, &mut deferred_slots,
-        &mut block_space, &mut max_block_local_space, &assign_slot,
+        func, &ctx, coalesce, &mut class_out, &assign_slot,
     );
+
+    let slot_assignment::ClassificationOutput {
+        mut non_local_space, deferred_slots, multi_block_values,
+        block_local_values: _, block_space: _, max_block_local_space,
+    } = class_out;
 
     // Phase 4: Tier 2 — liveness-based packing for multi-block values.
     slot_assignment::assign_tier2_liveness_packed_slots(

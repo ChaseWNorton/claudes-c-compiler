@@ -1415,22 +1415,22 @@ impl ArchCodegen for I686Codegen {
     }
 
     /// Override emit_call to handle fastcall calling convention.
-    fn emit_call(&mut self, args: &[Operand], arg_types: &[IrType], direct_name: Option<&str>,
-                 func_ptr: Option<&Operand>, dest: Option<Value>, return_type: IrType,
-                 is_variadic: bool, _num_fixed_args: usize, struct_arg_sizes: &[Option<usize>],
-                 struct_arg_aligns: &[Option<usize>],
-                 struct_arg_classes: &[Vec<crate::common::types::EightbyteClass>],
-                 struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>],
-                 is_sret: bool,
-                 is_fastcall: bool,
-                 ret_eightbyte_classes: &[crate::common::types::EightbyteClass]) {
-        if is_fastcall {
+    fn emit_call(&mut self, info: &crate::ir::instruction::CallInfo, direct_name: Option<&str>,
+                 func_ptr: Option<&Operand>) {
+        let args = &info.args;
+        let arg_types = &info.arg_types;
+        let is_variadic = info.is_variadic;
+        let is_sret = info.is_sret;
+        let return_type = info.return_type;
+        let dest = info.dest;
+        let ret_eightbyte_classes = &info.ret_eightbyte_classes;
+        if info.is_fastcall {
             self.emit_fastcall(args, arg_types, direct_name, func_ptr, dest, return_type);
             return;
         }
         use crate::backend::call_abi::*;
         let config = self.call_abi_config();
-        let arg_classes_vec = classify_call_args(args, arg_types, struct_arg_sizes, struct_arg_aligns, struct_arg_classes, struct_arg_riscv_float_classes, is_variadic, &config);
+        let arg_classes_vec = classify_call_args(args, arg_types, &info.struct_arg_sizes, &info.struct_arg_aligns, &info.struct_arg_classes, &info.struct_arg_riscv_float_classes, (is_variadic, &config));
         let indirect = func_ptr.is_some() && direct_name.is_none();
         if indirect {
             self.emit_call_spill_fptr(func_ptr.expect("indirect call requires func_ptr"));
@@ -1442,7 +1442,7 @@ impl ArchCodegen for I686Codegen {
                                                         if indirect { self.emit_call_fptr_spill_size() } else { 0 },
                                                         f128_temp_space);
         self.state().reg_cache.invalidate_acc();
-        self.emit_call_reg_args(args, &arg_classes_vec, arg_types, total_sp_adjust, f128_temp_space, stack_arg_space, &[]);
+        self.emit_call_reg_args(args, &arg_classes_vec, arg_types, (total_sp_adjust, f128_temp_space, stack_arg_space), &[]);
         self.emit_call_instruction(direct_name, func_ptr, indirect, stack_arg_space);
         let callee_pops = self.callee_pops_bytes_for_sret(is_sret);
         // Account for bytes the callee pops via `ret $N` (sret pointer on i686).
@@ -1762,11 +1762,8 @@ impl ArchCodegen for I686Codegen {
         self.emit_store_result(dest);
     }
 
-    fn emit_inline_asm(&mut self, template: &str, outputs: &[(String, Value, Option<String>)],
-                       inputs: &[(String, Operand, Option<String>)], clobbers: &[String],
-                       operand_types: &[IrType], goto_labels: &[(String, BlockId)],
-                       input_symbols: &[Option<String>]) {
-        crate::backend::inline_asm::emit_inline_asm_common(self, template, outputs, inputs, clobbers, operand_types, goto_labels, input_symbols);
+    fn emit_inline_asm(&mut self, ops: crate::backend::traits::AsmOperands) {
+        crate::backend::inline_asm::emit_inline_asm_common(self, ops);
     }
 
     fn emit_intrinsic(&mut self, dest: &Option<Value>, op: &IntrinsicOp, dest_ptr: &Option<Value>, args: &[Operand]) {
@@ -1832,7 +1829,7 @@ impl ArchCodegen for I686Codegen {
         fn emit_call_f128_pre_convert(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass], arg_types: &[IrType], stack_arg_space: usize) -> usize => emit_call_f128_pre_convert_impl;
         fn emit_call_compute_stack_space(&self, arg_classes: &[call_abi::CallArgClass], arg_types: &[IrType]) -> usize => emit_call_compute_stack_space_impl;
         fn emit_call_stack_args(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass], arg_types: &[IrType], stack_arg_space: usize, fptr_spill: usize, f128_temp_space: usize) -> i64 => emit_call_stack_args_impl;
-        fn emit_call_reg_args(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass], arg_types: &[IrType], total_sp_adjust: i64, f128_temp_space: usize, stack_arg_space: usize, struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>]) => emit_call_reg_args_impl;
+        fn emit_call_reg_args(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass], arg_types: &[IrType], stack_info: (i64, usize, usize), struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>]) => emit_call_reg_args_impl;
         fn emit_call_instruction(&mut self, direct_name: Option<&str>, func_ptr: Option<&Operand>, indirect: bool, stack_arg_space: usize) => emit_call_instruction_impl;
         fn emit_call_cleanup(&mut self, stack_arg_space: usize, f128_temp_space: usize, indirect: bool) => emit_call_cleanup_impl;
         fn emit_call_store_result(&mut self, dest: &Value, return_type: IrType) => emit_call_store_result_impl;
@@ -1867,7 +1864,6 @@ impl ArchCodegen for I686Codegen {
         fn emit_set_return_f128_second(&mut self, src: &Operand) => emit_set_return_f128_second_impl;
         // atomics
         fn emit_atomic_rmw(&mut self, dest: &Value, op: AtomicRmwOp, ptr: &Operand, val: &Operand, ty: IrType, ordering: AtomicOrdering) => emit_atomic_rmw_impl;
-        fn emit_atomic_cmpxchg(&mut self, dest: &Value, ptr: &Operand, expected: &Operand, desired: &Operand, ty: IrType, success_ordering: AtomicOrdering, failure_ordering: AtomicOrdering, returns_bool: bool) => emit_atomic_cmpxchg_impl;
         fn emit_atomic_load(&mut self, dest: &Value, ptr: &Operand, ty: IrType, ordering: AtomicOrdering) => emit_atomic_load_impl;
         fn emit_atomic_store(&mut self, ptr: &Operand, val: &Operand, ty: IrType, ordering: AtomicOrdering) => emit_atomic_store_impl;
         fn emit_fence(&mut self, ordering: AtomicOrdering) => emit_fence_impl;
@@ -1904,6 +1900,10 @@ impl ArchCodegen for I686Codegen {
         fn emit_i128_cmp_eq(&mut self, is_ne: bool) => emit_i128_cmp_eq_impl;
         fn emit_i128_cmp_ordered(&mut self, op: IrCmpOp) => emit_i128_cmp_ordered_impl;
         fn emit_i128_cmp_store_result(&mut self, dest: &Value) => emit_i128_cmp_store_result_impl;
+    }
+
+    fn emit_atomic_cmpxchg(&mut self, args: crate::backend::traits::CmpxchgArgs) {
+        self.emit_atomic_cmpxchg_impl(args);
     }
 
     // ---- Segment overrides (x86-specific) ----

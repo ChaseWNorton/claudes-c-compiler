@@ -24,7 +24,7 @@ use crate::common::types::{AddressSpace, IrType};
 use crate::common::source::{Span, SourceManager};
 use crate::common::fx_hash::{FxHashMap, FxHashSet};
 use super::common;
-use super::traits::ArchCodegen;
+use super::traits::{ArchCodegen, CmpxchgArgs};
 use super::liveness::{for_each_operand_in_instruction, for_each_value_use_in_instruction, for_each_operand_in_terminator};
 
 /// Information about a GEP with a constant offset that can be folded into
@@ -1123,11 +1123,11 @@ fn generate_instruction(cg: &mut dyn ArchCodegen, inst: &Instruction, gep_fold_m
             cg.state().reg_cache.invalidate_all();
         }
         Instruction::Call { func, info } => {
-            cg.emit_call(&info.args, &info.arg_types, Some(func), None, info.dest, info.return_type, info.is_variadic, info.num_fixed_args, &info.struct_arg_sizes, &info.struct_arg_aligns, &info.struct_arg_classes, &info.struct_arg_riscv_float_classes, info.is_sret, info.is_fastcall, &info.ret_eightbyte_classes);
+            cg.emit_call(info, Some(func), None);
             cg.state().reg_cache.invalidate_all();
         }
         Instruction::CallIndirect { func_ptr, info } => {
-            cg.emit_call(&info.args, &info.arg_types, None, Some(func_ptr), info.dest, info.return_type, info.is_variadic, info.num_fixed_args, &info.struct_arg_sizes, &info.struct_arg_aligns, &info.struct_arg_classes, &info.struct_arg_riscv_float_classes, info.is_sret, info.is_fastcall, &info.ret_eightbyte_classes);
+            cg.emit_call(info, None, Some(func_ptr));
             cg.state().reg_cache.invalidate_all();
         }
         Instruction::Memcpy { dest, src, size } => {
@@ -1159,7 +1159,7 @@ fn generate_instruction(cg: &mut dyn ArchCodegen, inst: &Instruction, gep_fold_m
             cg.state().reg_cache.invalidate_all();
         }
         Instruction::AtomicCmpxchg { dest, ptr, expected, desired, ty, success_ordering, failure_ordering, returns_bool } => {
-            cg.emit_atomic_cmpxchg(dest, ptr, expected, desired, *ty, *success_ordering, *failure_ordering, *returns_bool);
+            cg.emit_atomic_cmpxchg(CmpxchgArgs { dest, ptr, expected, desired, ty: *ty, success_ordering: *success_ordering, failure_ordering: *failure_ordering, returns_bool: *returns_bool });
             cg.state().reg_cache.invalidate_all();
         }
         Instruction::AtomicLoad { dest, ptr, ty, ordering } => {
@@ -1200,7 +1200,7 @@ fn generate_instruction(cg: &mut dyn ArchCodegen, inst: &Instruction, gep_fold_m
             cg.state().reg_cache.invalidate_all();
         }
         Instruction::InlineAsm { template, outputs, inputs, clobbers, operand_types, goto_labels, input_symbols, seg_overrides } => {
-            cg.emit_inline_asm_with_segs(template, outputs, inputs, clobbers, operand_types, goto_labels, input_symbols, seg_overrides);
+            cg.emit_inline_asm_with_segs(super::traits::AsmOperands { template, outputs, inputs, clobbers, operand_types, goto_labels, input_symbols }, seg_overrides);
             cg.state().reg_cache.invalidate_all();
         }
         Instruction::Intrinsic { dest, op, dest_ptr, args } => {

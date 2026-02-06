@@ -728,8 +728,7 @@ fn link_builtin_native(
         ),
         EM_AARCH64 => arm::linker::link_builtin(
             object_files, output_path, user_args,
-            &refs.lib_paths, &refs.needed_libs, &refs.crt_before, &refs.crt_after,
-            is_static,
+            &refs.lib_paths, &refs.needed_libs, (&refs.crt_before, &refs.crt_after, is_static),
         ),
         EM_RISCV => riscv::linker::link_builtin(
             object_files, output_path, user_args,

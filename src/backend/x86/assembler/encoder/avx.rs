@@ -1,16 +1,30 @@
 use super::*;
 
+/// VEX prefix fields for AVX instruction encoding.
+/// pp: 0=none, 1=66, 2=F3, 3=F2
+/// mm: 1=0F, 2=0F38, 3=0F3A
+/// w: 0 or 1 (VEX.W)
+/// vvvv: complement of source register number (15 - reg_num, or 15 if none)
+/// l: 0=128, 1=256
+/// r, x, b: VEX extension bits (inverted from REX)
+pub(crate) struct VexFields {
+    pub r: bool, pub x: bool, pub b: bool,
+    pub mm: u8, pub w: u8, pub vvvv: u8, pub l: u8, pub pp: u8,
+}
+
+/// EVEX prefix fields for AVX-512 instruction encoding.
+pub(crate) struct EvexFields {
+    pub r: bool, pub x: bool, pub b: bool, pub r_prime: bool,
+    pub mm: u8, pub w: u8, pub vvvv: u8, pub v_prime: bool,
+    pub pp: u8, pub ll: u8, pub z: bool, pub aaa: u8,
+}
+
 impl super::InstructionEncoder {
     // ---- VEX encoding helpers for AVX ----
 
     /// Emit a 2-byte or 3-byte VEX prefix.
-    /// pp: 0=none, 1=66, 2=F3, 3=F2
-    /// mm: 1=0F, 2=0F38, 3=0F3A
-    /// w: 0 or 1 (VEX.W)
-    /// vvvv: complement of source register number (15 - reg_num, or 15 if none)
-    /// l: 0=128, 1=256
-    /// r, x, b: VEX extension bits (inverted from REX)
-    pub(crate) fn emit_vex(&mut self, r: bool, x: bool, b: bool, mm: u8, w: u8, vvvv: u8, l: u8, pp: u8) {
+    pub(crate) fn emit_vex(&mut self, v: VexFields) {
+        let VexFields { r, x, b, mm, w, vvvv, l, pp } = v;
         let r_bit = if r { 0 } else { 1 };
         let x_bit = if x { 0 } else { 1 };
         let b_bit = if b { 0 } else { 1 };
@@ -32,11 +46,8 @@ impl super::InstructionEncoder {
     }
 
     /// Emit EVEX 4-byte prefix.
-    /// Parameters match VEX but with additional EVEX-specific fields.
-    /// ll: 00=128, 01=256, 10=512
-    /// TODO: z (merge-masking) and aaa (opmask register k1-k7) are not yet used.
-    /// TODO: r_prime and v_prime are passed as false; zmm16-zmm31 won't encode correctly.
-    pub(crate) fn emit_evex(&mut self, r: bool, x: bool, b: bool, r_prime: bool, mm: u8, w: u8, vvvv: u8, v_prime: bool, pp: u8, ll: u8, _z: bool, _aaa: u8) {
+    pub(crate) fn emit_evex(&mut self, e: EvexFields) {
+        let EvexFields { r, x, b, r_prime, mm, w, vvvv, v_prime, pp, ll, z: _z, aaa: _aaa } = e;
         let r_bit = if r { 0u8 } else { 1 };
         let x_bit = if x { 0u8 } else { 1 };
         let b_bit = if b { 0u8 } else { 1 };
@@ -86,7 +97,7 @@ impl super::InstructionEncoder {
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
                 // mm=1 (0F map)
-                self.emit_evex(r, false, b, false, 1, w, vvvv_enc, false, pp, ll, false, 0);
+                self.emit_evex(EvexFields { r, x: false, b, r_prime: false, mm: 1, w, vvvv: vvvv_enc, v_prime: false, pp, ll, z: false, aaa: 0 });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -98,7 +109,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_evex(r, x, b_ext, false, 1, w, vvvv_enc, false, pp, ll, false, 0);
+                self.emit_evex(EvexFields { r, x, b: b_ext, r_prime: false, mm: 1, w, vvvv: vvvv_enc, v_prime: false, pp, ll, z: false, aaa: 0 });
                 self.bytes.push(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -124,7 +135,7 @@ impl super::InstructionEncoder {
                 let dst_ext = needs_vex_ext(&dst.name);
                 let vvvv_enc = dst_num | (if dst_ext { 8 } else { 0 });
                 // pp=1 (66), mm=1 (0F map), no R extension needed for reg field (it's a fixed /ext)
-                self.emit_evex(false, false, b, false, 1, w, vvvv_enc, false, 1, ll, false, 0);
+                self.emit_evex(EvexFields { r: false, x: false, b, r_prime: false, mm: 1, w, vvvv: vvvv_enc, v_prime: false, pp: 1, ll, z: false, aaa: 0 });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, ext, src_num));
                 self.bytes.push(*imm as u8);
@@ -158,7 +169,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(load_op);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -168,7 +179,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(load_op);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -178,7 +189,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&src.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(store_op);
                 self.encode_modrm_mem(src_num, mem)
             }
@@ -198,7 +209,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(load_op);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -208,7 +219,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(load_op);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -217,7 +228,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&src.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(store_op);
                 self.encode_modrm_mem(src_num, mem)
             }
@@ -241,7 +252,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -254,7 +265,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -281,7 +292,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 2, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 2, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -293,7 +304,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 2, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 2, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -315,7 +326,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 1, 0, vvvv_enc, l, pp); // mm=1 (0F map)
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l, pp }); // mm=1 (0F map)
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -328,7 +339,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -352,7 +363,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 2, 0, 0, l, pp);  // vvvv=0 for 2-operand
+                self.emit_vex(VexFields { r, x: false, b, mm: 2, w: 0, vvvv: 0, l, pp });  // vvvv=0 for 2-operand
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -362,7 +373,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 2, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 2, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -382,7 +393,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 0, 0, l, pp);  // mm=1 (0F), vvvv=0
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l, pp });  // mm=1 (0F), vvvv=0
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -392,7 +403,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -414,7 +425,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -427,7 +438,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -453,7 +464,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -465,7 +476,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -485,7 +496,7 @@ impl super::InstructionEncoder {
                         let r = needs_vex_ext(&dst.name);
                         let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                         let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                        self.emit_vex(r, x, b_ext, 1, 0, 0, 0, pp); // vvvv=0, L=0
+                        self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l: 0, pp }); // vvvv=0, L=0
                         self.bytes.push(load_op);
                         self.encode_modrm_mem(dst_num, mem)
                     }
@@ -494,7 +505,7 @@ impl super::InstructionEncoder {
                         let r = needs_vex_ext(&src.name);
                         let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                         let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                        self.emit_vex(r, x, b_ext, 1, 0, 0, 0, pp); // vvvv=0, L=0
+                        self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l: 0, pp }); // vvvv=0, L=0
                         self.bytes.push(store_op);
                         self.encode_modrm_mem(src_num, mem)
                     }
@@ -504,7 +515,7 @@ impl super::InstructionEncoder {
                         let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                         let r = needs_vex_ext(&dst.name);
                         let b = needs_vex_ext(&src.name);
-                        self.emit_vex(r, false, b, 1, 0, 0, 0, pp);
+                        self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l: 0, pp });
                         self.bytes.push(load_op);
                         self.bytes.push(self.modrm(3, dst_num, src_num));
                         Ok(())
@@ -533,7 +544,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 3, 0, 0, l, pp); // mm=3 (0F3A), vvvv=0
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 0, vvvv: 0, l, pp }); // mm=3 (0F3A), vvvv=0
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -544,7 +555,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 3, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 3, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -713,7 +724,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(0xC2);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(pred);
@@ -726,7 +737,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 1, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(0xC2);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -752,7 +763,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 3, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -765,7 +776,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 3, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 3, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -789,7 +800,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 // VEX.256.66.0F38 opcode /r
-                self.emit_vex(r, x, b_ext, 2, 0, 0, l, 1);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 2, w: 0, vvvv: 0, l, pp: 1 });
                 self.bytes.extend_from_slice(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -798,7 +809,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 2, 0, 0, l, 1);
+                self.emit_vex(VexFields { r, x: false, b, mm: 2, w: 0, vvvv: 0, l, pp: 1 });
                 self.bytes.extend_from_slice(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -819,7 +830,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -830,7 +841,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -854,7 +865,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 0, 0, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -873,7 +884,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 0, 0, 0, 1);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l: 0, pp: 1 });
                 self.bytes.push(0x6E);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -884,7 +895,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&src.name);
                 let b = needs_vex_ext(&dst.name);
-                self.emit_vex(r, false, b, 1, 0, 0, 0, 1);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l: 0, pp: 1 });
                 self.bytes.push(0x7E);
                 self.bytes.push(self.modrm(3, src_num, dst_num));
                 Ok(())
@@ -895,7 +906,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, 0, 1);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l: 0, pp: 1 });
                 self.bytes.push(0x6E);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -905,7 +916,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&src.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, 0, 1);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l: 0, pp: 1 });
                 self.bytes.push(0x7E);
                 self.encode_modrm_mem(src_num, mem)
             }
@@ -923,7 +934,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 1, 0, 0, 1);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 1, vvvv: 0, l: 0, pp: 1 });
                 self.bytes.push(0x6E);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -934,7 +945,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&src.name);
                 let b = needs_vex_ext(&dst.name);
-                self.emit_vex(r, false, b, 1, 1, 0, 0, 1);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 1, vvvv: 0, l: 0, pp: 1 });
                 self.bytes.push(0x7E);
                 self.bytes.push(self.modrm(3, src_num, dst_num));
                 Ok(())
@@ -945,7 +956,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 1, 0, 0, 0, 2);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: 0, l: 0, pp: 2 });
                 self.bytes.push(0x7E);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -956,7 +967,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, 0, 2);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l: 0, pp: 2 });
                 self.bytes.push(0x7E);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -966,7 +977,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&src.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 1, 0, 0, 0, 1);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 1, w: 0, vvvv: 0, l: 0, pp: 1 });
                 self.bytes.push(0xD6);
                 self.encode_modrm_mem(src_num, mem)
             }
@@ -986,7 +997,7 @@ impl super::InstructionEncoder {
                     let l = if is_ymm(&src.name) || is_ymm(&dst.name) { 1 } else { 0 };
                     let b = needs_vex_ext(&src.name);
                     let vvvv_enc = dst_num | (if needs_vex_ext(&dst.name) { 8 } else { 0 });
-                    self.emit_vex(false, false, b, 1, 0, vvvv_enc, l, pp);
+                    self.emit_vex(VexFields { r: false, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                     self.bytes.push(imm_op);
                     self.bytes.push(self.modrm(3, imm_ext, src_num));
                     self.bytes.push(*imm as u8);
@@ -1001,7 +1012,7 @@ impl super::InstructionEncoder {
                     let r = needs_vex_ext(&dst.name);
                     let b = needs_vex_ext(&count.name);
                     let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                    self.emit_vex(r, false, b, 1, 0, vvvv_enc, l, pp);
+                    self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l, pp });
                     self.bytes.push(reg_op);
                     self.bytes.push(self.modrm(3, dst_num, count_num));
                     Ok(())
@@ -1123,7 +1134,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&src.name);
                 let b = needs_vex_ext(&dst.name);
-                self.emit_vex(r, false, b, 3, 0, 0, 1, pp); // L=1 (256-bit source)
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 0, vvvv: 0, l: 1, pp }); // L=1 (256-bit source)
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, src_num, dst_num));
                 self.bytes.push(*imm as u8);
@@ -1134,7 +1145,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&src.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 3, 0, 0, 1, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 3, w: 0, vvvv: 0, l: 1, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(src_num, mem)?;
@@ -1159,7 +1170,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 3, 1, 0, l, pp); // W=1
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 1, vvvv: 0, l, pp }); // W=1
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -1170,7 +1181,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 3, 1, 0, l, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 3, w: 1, vvvv: 0, l, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -1201,7 +1212,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 3, 0, vvvv_enc, l, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 0, vvvv: vvvv_enc, l, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 // is4: mask register encoded in imm8[7:4]
@@ -1227,7 +1238,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 3, 0, vvvv_enc, 0, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 0, vvvv: vvvv_enc, l: 0, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -1240,7 +1251,7 @@ impl super::InstructionEncoder {
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, x, b_ext, 3, 0, vvvv_enc, 0, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 3, w: 0, vvvv: vvvv_enc, l: 0, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;
@@ -1265,7 +1276,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 1, 0, vvvv_enc, 0, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 1, w: 0, vvvv: vvvv_enc, l: 0, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -1288,7 +1299,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 let vvvv_enc = vvvv_num | (if needs_vex_ext(&vvvv.name) { 8 } else { 0 });
-                self.emit_vex(r, false, b, 3, 1, vvvv_enc, 0, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 1, vvvv: vvvv_enc, l: 0, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(*imm as u8);
@@ -1309,7 +1320,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&src.name);
                 let b = needs_vex_ext(&dst.name);
-                self.emit_vex(r, false, b, 3, 0, 0, 0, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w: 0, vvvv: 0, l: 0, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, src_num, dst_num));
                 self.bytes.push(*imm as u8);
@@ -1320,7 +1331,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&src.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 3, 0, 0, 0, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 3, w: 0, vvvv: 0, l: 0, pp });
                 self.bytes.push(opcode);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(src_num, mem)?;
@@ -1356,7 +1367,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad dst register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 2, w, vvvv_enc, 0, pp);
+                self.emit_vex(VexFields { r, x: false, b, mm: 2, w, vvvv: vvvv_enc, l: 0, pp });
                 self.bytes.push(opcode);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -1366,7 +1377,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 2, w, vvvv_enc, 0, pp);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 2, w, vvvv: vvvv_enc, l: 0, pp });
                 self.bytes.push(opcode);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -1393,7 +1404,7 @@ impl super::InstructionEncoder {
                 let dst_num = reg_num(&dst.name).ok_or("bad register")?;
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
-                self.emit_vex(r, false, b, 2, w, vvvv_enc, 0, 0); // NP.0F38
+                self.emit_vex(VexFields { r, x: false, b, mm: 2, w, vvvv: vvvv_enc, l: 0, pp: 0 }); // NP.0F38
                 self.bytes.push(0xF2);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 Ok(())
@@ -1403,7 +1414,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 2, w, vvvv_enc, 0, 0);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 2, w, vvvv: vvvv_enc, l: 0, pp: 0 });
                 self.bytes.push(0xF2);
                 self.encode_modrm_mem(dst_num, mem)
             }
@@ -1431,7 +1442,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b = needs_vex_ext(&src.name);
                 // VEX.LZ.F2.0F3A.Wx F0 /r imm8 (mm=3 for 0F3A, pp=3 for F2)
-                self.emit_vex(r, false, b, 3, w, 0, 0, 3);
+                self.emit_vex(VexFields { r, x: false, b, mm: 3, w, vvvv: 0, l: 0, pp: 3 });
                 self.bytes.push(0xF0);
                 self.bytes.push(self.modrm(3, dst_num, src_num));
                 self.bytes.push(imm);
@@ -1442,7 +1453,7 @@ impl super::InstructionEncoder {
                 let r = needs_vex_ext(&dst.name);
                 let b_ext = mem.base.as_ref().is_some_and(|b| needs_vex_ext(&b.name));
                 let x = mem.index.as_ref().is_some_and(|i| needs_vex_ext(&i.name));
-                self.emit_vex(r, x, b_ext, 3, w, 0, 0, 3);
+                self.emit_vex(VexFields { r, x, b: b_ext, mm: 3, w, vvvv: 0, l: 0, pp: 3 });
                 self.bytes.push(0xF0);
                 let rc = self.relocations.len();
                 self.encode_modrm_mem(dst_num, mem)?;

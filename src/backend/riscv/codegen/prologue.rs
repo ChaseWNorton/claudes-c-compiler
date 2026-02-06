@@ -65,7 +65,9 @@ impl RiscvCodegen {
             let alloc = ((alloc_size + 7) & !7).max(8);
             let new_space = ((space + alloc + effective_align - 1) / effective_align) * effective_align;
             (-new_space, new_space)
-        }, &reg_assigned, &RISCV_CALLEE_SAVED, cached_liveness, true);
+        }, &reg_assigned, crate::backend::stack_layout::StackLayoutOpts {
+            callee_saved_regs: &RISCV_CALLEE_SAVED, cached_liveness, lhs_first_binop: true,
+        });
 
         // Add space for saving callee-saved registers.
         // Each callee-saved register needs 8 bytes on the stack.

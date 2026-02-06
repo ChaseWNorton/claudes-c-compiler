@@ -373,7 +373,7 @@ impl MacroTable {
             } else if b == BLUE_PAINT_MARKER {
                 i = Self::copy_blue_painted(bytes, i, &mut result);
             } else if is_ident_start_byte(b) && !(self.asm_mode && b == b'$') {
-                i = self.expand_identifier(text, bytes, i, &mut result, expanding);
+                i = self.expand_identifier(bytes, i, &mut result, expanding);
             } else if b == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
                 i = Self::copy_block_comment(bytes, i, &mut result);
             } else if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
@@ -426,7 +426,7 @@ impl MacroTable {
     }
 
     /// Process an identifier: expand macros, handle builtins, or copy verbatim.
-    fn expand_identifier(&self, text: &str, bytes: &[u8], start: usize,
+    fn expand_identifier(&self, bytes: &[u8], start: usize,
                          result: &mut String, expanding: &mut FxHashSet<String>) -> usize {
         let len = bytes.len();
         let mut i = start + 1;
@@ -477,7 +477,7 @@ impl MacroTable {
         // Try macro expansion
         if !expanding.contains(ident) {
             if let Some(mac) = self.macros.get(ident) {
-                return self.expand_macro_invocation(text, bytes, i, ident, mac, result, expanding);
+                return self.expand_macro_invocation(bytes, i, ident, mac, result, expanding);
             }
         }
 
@@ -532,7 +532,7 @@ impl MacroTable {
     }
 
     /// Expand a macro invocation (function-like or object-like).
-    fn expand_macro_invocation(&self, _text: &str, bytes: &[u8], i: usize, ident: &str,
+    fn expand_macro_invocation(&self, bytes: &[u8], i: usize, ident: &str,
                                mac: &MacroDef, result: &mut String,
                                expanding: &mut FxHashSet<String>) -> usize {
         // Record this macro expansion for diagnostic tracing

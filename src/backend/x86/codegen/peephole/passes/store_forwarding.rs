@@ -252,11 +252,18 @@ fn gsf_handle_store(
     }
 }
 
+struct LoadDesc {
+    reg: RegId,
+    offset: i32,
+    size: MoveSize,
+}
+
 fn gsf_handle_load(
     store: &mut LineStore, infos: &mut [LineInfo], i: usize,
-    load_reg: RegId, load_offset: i32, load_size: MoveSize,
+    load: LoadDesc,
     slot_entries: &mut [SlotEntry], reg_offsets: &mut [SmallVec; 16],
 ) -> bool {
+    let LoadDesc { reg: load_reg, offset: load_offset, size: load_size } = load;
     let mut changed = false;
     let mapping = slot_entries.iter().rev()
         .find(|e| e.active && e.offset == load_offset)
@@ -348,7 +355,8 @@ pub(super) fn global_store_forwarding(store: &mut LineStore, infos: &mut [LineIn
             }
 
             LineKind::LoadRbp { reg: load_reg, offset: load_offset, size: load_size } => {
-                changed |= gsf_handle_load(store, infos, i, load_reg, load_offset, load_size,
+                changed |= gsf_handle_load(store, infos, i,
+                    LoadDesc { reg: load_reg, offset: load_offset, size: load_size },
                     &mut slot_entries, &mut reg_offsets);
             }
 

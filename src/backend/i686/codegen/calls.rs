@@ -103,8 +103,7 @@ impl I686Codegen {
     }
 
     pub(super) fn emit_call_reg_args_impl(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass],
-                          _arg_types: &[IrType], _total_sp_adjust: i64,
-                          _f128_temp_space: usize, _stack_arg_space: usize,
+                          _arg_types: &[IrType], _stack_info: (i64, usize, usize),
                           _struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>]) {
         if self.regparm == 0 {
             return; // cdecl: no register args

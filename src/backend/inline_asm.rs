@@ -402,28 +402,17 @@ pub fn expand_dialect_alternatives(template: &str) -> Cow<'_, str> {
 /// arch-specific details.
 pub fn emit_inline_asm_common(
     emitter: &mut dyn InlineAsmEmitter,
-    template: &str,
-    outputs: &[(String, Value, Option<String>)],
-    inputs: &[(String, Operand, Option<String>)],
-    clobbers: &[String],
-    operand_types: &[IrType],
-    goto_labels: &[(String, BlockId)],
-    input_symbols: &[Option<String>],
+    ops: super::traits::AsmOperands,
 ) {
-    emit_inline_asm_common_impl(emitter, template, outputs, inputs, clobbers, operand_types, goto_labels, input_symbols, &[]);
+    emit_inline_asm_common_impl(emitter, ops, &[]);
 }
 
 pub fn emit_inline_asm_common_impl(
     emitter: &mut dyn InlineAsmEmitter,
-    template: &str,
-    outputs: &[(String, Value, Option<String>)],
-    inputs: &[(String, Operand, Option<String>)],
-    clobbers: &[String],
-    operand_types: &[IrType],
-    goto_labels: &[(String, BlockId)],
-    input_symbols: &[Option<String>],
+    ops: super::traits::AsmOperands,
     seg_overrides: &[AddressSpace],
 ) {
+    let super::traits::AsmOperands { template, outputs, inputs, clobbers, operand_types, goto_labels, input_symbols } = ops;
     emitter.reset_scratch_state();
 
     // Phase 1: Classify all operands and assign registers
@@ -713,7 +702,7 @@ fn assign_scratch_registers(
     // so the wraparound fallback never reuses an already-assigned register.
     let mut output_excluded: Vec<String> = specific_regs.to_vec();
     for i in 0..outputs.len() {
-        assign_one_scratch(emitter, operands, input_tied_to, &output_excluded, outputs, inputs, i, num_plus);
+        assign_one_scratch(emitter, operands, input_tied_to, &output_excluded, outputs, inputs, (i, num_plus));
         // Track the just-assigned register so it won't be reused by the
         // next output operand when the scratch pool wraps around.
         if !operands[i].reg.is_empty() {
@@ -766,7 +755,7 @@ fn assign_scratch_registers(
     // extended exclusion list that includes early-clobber output registers.
     // Also track assigned registers to avoid reuse when the pool wraps around.
     for i in outputs.len()..total_operands {
-        assign_one_scratch(emitter, operands, input_tied_to, &input_excluded, outputs, inputs, i, num_plus);
+        assign_one_scratch(emitter, operands, input_tied_to, &input_excluded, outputs, inputs, (i, num_plus));
         if !operands[i].reg.is_empty() {
             let reg = &operands[i].reg;
             if !input_excluded.contains(reg) {
@@ -790,9 +779,9 @@ fn assign_one_scratch(
     excluded: &[String],
     outputs: &[(String, Value, Option<String>)],
     inputs: &[(String, Operand, Option<String>)],
-    i: usize,
-    num_plus: usize,
+    indices: (usize, usize), // (i, num_plus)
 ) {
+    let (i, num_plus) = indices;
     if !operands[i].reg.is_empty() {
         return;
     }

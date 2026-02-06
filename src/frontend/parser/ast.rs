@@ -199,6 +199,19 @@ pub mod decl_flag {
     pub const ATOMIC: u16            = 1 << 9;
 }
 
+/// Alignment-related attributes grouped for `Declaration::new`.
+pub struct AlignSpec {
+    pub alignment: Option<usize>,
+    pub alignas_type: Option<TypeSpecifier>,
+    pub alignment_sizeof_type: Option<TypeSpecifier>,
+}
+
+impl AlignSpec {
+    pub fn none() -> Self {
+        Self { alignment: None, alignas_type: None, alignment_sizeof_type: None }
+    }
+}
+
 /// A variable/type declaration.
 ///
 /// Boolean storage-class / qualifier / attribute flags are stored as a packed
@@ -271,9 +284,7 @@ impl Declaration {
     pub fn new(
         type_spec: TypeSpecifier,
         declarators: Vec<InitDeclarator>,
-        alignment: Option<usize>,
-        alignas_type: Option<TypeSpecifier>,
-        alignment_sizeof_type: Option<TypeSpecifier>,
+        align: AlignSpec,
         address_space: AddressSpace,
         vector_size: Option<usize>,
         ext_vector_nelem: Option<usize>,
@@ -283,9 +294,9 @@ impl Declaration {
             type_spec,
             declarators,
             flags: 0,
-            alignment,
-            alignas_type,
-            alignment_sizeof_type,
+            alignment: align.alignment,
+            alignas_type: align.alignas_type,
+            alignment_sizeof_type: align.alignment_sizeof_type,
             address_space,
             vector_size,
             ext_vector_nelem,
@@ -298,9 +309,7 @@ impl Declaration {
         Self::new(
             TypeSpecifier::Void,
             Vec::new(),
-            None,
-            None,
-            None,
+            AlignSpec::none(),
             AddressSpace::Default,
             None,
             None,

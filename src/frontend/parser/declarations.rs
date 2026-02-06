@@ -118,7 +118,7 @@ impl Parser {
             let mut d = Declaration::new(
                 type_spec,
                 Vec::new(),
-                None, None, None,
+                AlignSpec::none(),
                 self.attrs.parsing_address_space,
                 self.attrs.parsing_vector_size.take(),
                 self.attrs.parsing_ext_vector_nelem.take(),
@@ -628,7 +628,7 @@ impl Parser {
         let mut d = Declaration::new(
             type_spec,
             declarators,
-            ctx.alignment, ctx.alignas_type, ctx.alignment_sizeof_type,
+            AlignSpec { alignment: ctx.alignment, alignas_type: ctx.alignas_type, alignment_sizeof_type: ctx.alignment_sizeof_type },
             self.attrs.parsing_address_space,
             self.attrs.parsing_vector_size.take(),
             self.attrs.parsing_ext_vector_nelem.take(),
@@ -679,7 +679,7 @@ impl Parser {
             let mut d = Declaration::new(
                 type_spec,
                 declarators,
-                None, None, None,
+                AlignSpec::none(),
                 self.attrs.parsing_address_space,
                 self.attrs.parsing_vector_size.take(),
                 self.attrs.parsing_ext_vector_nelem.take(),
@@ -786,7 +786,7 @@ impl Parser {
         let mut d = Declaration::new(
             type_spec,
             declarators,
-            alignment, alignas_type, alignment_sizeof_type,
+            AlignSpec { alignment, alignas_type, alignment_sizeof_type },
             self.attrs.parsing_address_space,
             self.attrs.parsing_vector_size.take(),
             self.attrs.parsing_ext_vector_nelem.take(),

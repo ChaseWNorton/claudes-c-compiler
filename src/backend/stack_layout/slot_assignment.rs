@@ -24,6 +24,16 @@ use super::{
     DeferredSlot, MultiBlockValue, BlockLocalValue, StackLayoutContext,
 };
 
+/// Output accumulators for instruction classification.
+pub(super) struct ClassificationOutput {
+    pub non_local_space: i64,
+    pub deferred_slots: Vec<DeferredSlot>,
+    pub multi_block_values: Vec<MultiBlockValue>,
+    pub block_local_values: Vec<BlockLocalValue>,
+    pub block_space: FxHashMap<usize, i64>,
+    pub max_block_local_space: i64,
+}
+
 /// Determine if a non-alloca value can be assigned to a block-local pool slot (Tier 3).
 /// Returns `Some(def_block_idx)` if the value is defined and used only within a
 /// single block, making it safe to share stack space with values from other blocks.
@@ -67,12 +77,7 @@ pub(super) fn classify_instructions(
     ctx: &StackLayoutContext,
     assign_slot: &impl Fn(i64, i64, i64) -> (i64, i64),
     reg_assigned: &FxHashMap<u32, PhysReg>,
-    non_local_space: &mut i64,
-    deferred_slots: &mut Vec<DeferredSlot>,
-    multi_block_values: &mut Vec<MultiBlockValue>,
-    block_local_values: &mut Vec<BlockLocalValue>,
-    block_space: &mut FxHashMap<usize, i64>,
-    max_block_local_space: &mut i64,
+    out: &mut ClassificationOutput,
 ) {
     let mut collected_values: FxHashSet<u32> = FxHashSet::default();
 
@@ -180,9 +185,8 @@ pub(super) fn classify_instructions(
         for inst in &block.instructions {
             if let Instruction::Alloca { dest, size, ty, align, .. } = inst {
                 classify_alloca(
-                    state, dest, *size, *ty, *align, ctx,
-                    assign_slot, non_local_space, deferred_slots,
-                    block_space, max_block_local_space,
+                    state, dest, *size, (*ty, *align), ctx,
+                    assign_slot, out,
                 );
             } else if let Instruction::InlineAsm { outputs, operand_types, .. } = inst {
                 // Promoted InlineAsm output values need stack slots to hold
@@ -230,7 +234,7 @@ pub(super) fn classify_instructions(
                                 state.wide_values.insert(out_val.0);
                             }
                         }
-                        multi_block_values.push(MultiBlockValue {
+                        out.multi_block_values.push(MultiBlockValue {
                             dest_id: out_val.0,
                             slot_size,
                         });
@@ -278,14 +282,12 @@ pub(super) fn classify_instructions(
                 // Fallthrough: if alloca not found or modified, classify normally.
                 classify_value(
                     state, *dest, inst, ctx, reg_assigned,
-                    &mut collected_values, multi_block_values,
-                    block_local_values,
+                    &mut collected_values, out,
                 );
             } else if let Some(dest) = inst.dest() {
                 classify_value(
                     state, dest, inst, ctx, reg_assigned,
-                    &mut collected_values, multi_block_values,
-                    block_local_values,
+                    &mut collected_values, out,
                 );
             }
         }
@@ -295,17 +297,13 @@ pub(super) fn classify_instructions(
 /// Classify a single Alloca instruction into Tier 1 (permanent) or Tier 3 (block-local).
 fn classify_alloca(
     state: &mut crate::backend::state::CodegenState,
-    dest: &Value,
-    size: usize,
-    ty: IrType,
-    align: usize,
+    dest: &Value, size: usize, ty_align: (IrType, usize),
     ctx: &StackLayoutContext,
     assign_slot: &impl Fn(i64, i64, i64) -> (i64, i64),
-    non_local_space: &mut i64,
-    deferred_slots: &mut Vec<DeferredSlot>,
-    block_space: &mut FxHashMap<usize, i64>,
-    max_block_local_space: &mut i64,
+    out: &mut ClassificationOutput,
 ) {
+    let (ty, align) = ty_align;
+    let ClassificationOutput { non_local_space, deferred_slots, block_space, max_block_local_space, .. } = out;
     let effective_align = align;
     let extra = if effective_align > 16 { effective_align - 1 } else { 0 };
     let ptr_size = crate::common::types::target_ptr_size() as i64;
@@ -369,9 +367,9 @@ fn classify_value(
     ctx: &StackLayoutContext,
     reg_assigned: &FxHashMap<u32, PhysReg>,
     collected_values: &mut FxHashSet<u32>,
-    multi_block_values: &mut Vec<MultiBlockValue>,
-    block_local_values: &mut Vec<BlockLocalValue>,
+    out: &mut ClassificationOutput,
 ) {
+    let ClassificationOutput { multi_block_values, block_local_values, .. } = out;
     let mut is_i128 = matches!(inst.result_type(), Some(IrType::I128) | Some(IrType::U128));
     let is_f128 = matches!(inst.result_type(), Some(IrType::F128))
         || matches!(inst, Instruction::Copy { src: Operand::Const(IrConst::LongDouble(..)), .. });
@@ -484,12 +482,10 @@ pub(super) fn assign_tier3_block_local_slots(
     func: &IrFunction,
     ctx: &StackLayoutContext,
     coalesce: bool,
-    block_local_values: &[BlockLocalValue],
-    deferred_slots: &mut Vec<DeferredSlot>,
-    block_space: &mut FxHashMap<usize, i64>,
-    max_block_local_space: &mut i64,
+    out: &mut ClassificationOutput,
     assign_slot: &impl Fn(i64, i64, i64) -> (i64, i64),
 ) {
+    let ClassificationOutput { block_local_values, deferred_slots, block_space, max_block_local_space, .. } = out;
     if block_local_values.is_empty() {
         return;
     }

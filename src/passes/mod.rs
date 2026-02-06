@@ -69,16 +69,21 @@ where
 /// build_cfg + compute_dominators (+ find_natural_loops for LICM/IVSR).
 ///
 /// Returns (gvn_changes, licm_changes, ivsr_changes).
-fn run_gvn_licm_ivsr_shared(
-    module: &mut IrModule,
-    visit: &[bool],
-    changed: &mut [bool],
+struct SharedPassOpts {
     run_gvn: bool,
     run_licm: bool,
     run_ivsr: bool,
     time_passes: bool,
     iter: usize,
+}
+
+fn run_gvn_licm_ivsr_shared(
+    module: &mut IrModule,
+    visit: &[bool],
+    changed: &mut [bool],
+    opts: &SharedPassOpts,
 ) -> (usize, usize, usize) {
+    let SharedPassOpts { run_gvn, run_licm, run_ivsr, time_passes, iter } = *opts;
     let mut gvn_total = 0usize;
     let mut licm_total = 0usize;
     let mut ivsr_total = 0usize;
@@ -408,8 +413,7 @@ pub(crate) fn run_passes(module: &mut IrModule, opt_level: u32, target: crate::b
             if run_gvn || run_licm || run_ivsr {
                 let (gvn_n, licm_n, ivsr_n) = run_gvn_licm_ivsr_shared(
                     module, &dirty, &mut changed,
-                    run_gvn, run_licm, run_ivsr,
-                    time_passes, iter,
+                    &SharedPassOpts { run_gvn, run_licm, run_ivsr, time_passes, iter },
                 );
                 cur_pass_changes[5] = gvn_n;
                 total_changes += gvn_n;

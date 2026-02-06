@@ -153,17 +153,24 @@ pub fn load_thin_archive_elf64<G: GlobalSymbolOps>(
 ///
 /// Currently unused: x86 and ARM linkers have their own `load_file` implementations.
 /// This generic version will be used as those linkers migrate to shared infrastructure.
+/// Configuration for `load_file_elf64`.
+#[allow(dead_code)]
+pub struct LoadFileConfig<'a, G: GlobalSymbolOps> {
+    pub expected_machine: u16,
+    pub lib_paths: &'a [String],
+    pub prefer_static: bool,
+    pub should_replace_extra: fn(&G) -> bool,
+    pub on_shared_lib: SharedLibCallback<'a>,
+}
+
 #[allow(dead_code)] // Planned shared infrastructure; x86/ARM linkers will migrate to this
 pub fn load_file_elf64<G: GlobalSymbolOps>(
     path: &str,
     objects: &mut Vec<Elf64Object>,
     globals: &mut HashMap<String, G>,
-    expected_machine: u16,
-    lib_paths: &[String],
-    prefer_static: bool,
-    should_replace_extra: fn(&G) -> bool,
-    on_shared_lib: SharedLibCallback<'_>,
+    cfg: LoadFileConfig<'_, G>,
 ) -> Result<(), String> {
+    let LoadFileConfig { expected_machine, lib_paths, prefer_static, should_replace_extra, on_shared_lib } = cfg;
     if std::env::var("LINKER_DEBUG").is_ok() {
         eprintln!("load_file: {}", path);
     }
@@ -189,17 +196,17 @@ pub fn load_file_elf64<G: GlobalSymbolOps>(
                     match entry {
                         LinkerScriptEntry::Path(lib_path) => {
                             if Path::new(lib_path).exists() {
-                                load_file_elf64(lib_path, objects, globals, expected_machine, lib_paths, prefer_static, should_replace_extra, on_shared_lib)?;
+                                load_file_elf64(lib_path, objects, globals, LoadFileConfig { expected_machine, lib_paths, prefer_static, should_replace_extra, on_shared_lib })?;
                             } else if let Some(ref dir) = script_dir {
                                 let resolved = format!("{}/{}", dir, lib_path);
                                 if Path::new(&resolved).exists() {
-                                    load_file_elf64(&resolved, objects, globals, expected_machine, lib_paths, prefer_static, should_replace_extra, on_shared_lib)?;
+                                    load_file_elf64(&resolved, objects, globals, LoadFileConfig { expected_machine, lib_paths, prefer_static, should_replace_extra, on_shared_lib })?;
                                 }
                             }
                         }
                         LinkerScriptEntry::Lib(lib_name) => {
                             if let Some(resolved_path) = resolve_lib(lib_name, lib_paths, prefer_static) {
-                                load_file_elf64(&resolved_path, objects, globals, expected_machine, lib_paths, prefer_static, should_replace_extra, on_shared_lib)?;
+                                load_file_elf64(&resolved_path, objects, globals, LoadFileConfig { expected_machine, lib_paths, prefer_static, should_replace_extra, on_shared_lib })?;
                             }
                         }
                     }

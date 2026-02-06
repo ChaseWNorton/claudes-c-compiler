@@ -89,7 +89,9 @@ impl X86Codegen {
             let alloc = (alloc_size + 7) & !7;
             let new_space = ((space + alloc + effective_align - 1) / effective_align) * effective_align;
             (-new_space, new_space)
-        }, &reg_assigned, &X86_CALLEE_SAVED, cached_liveness, false);
+        }, &reg_assigned, crate::backend::stack_layout::StackLayoutOpts {
+            callee_saved_regs: &X86_CALLEE_SAVED, cached_liveness, lhs_first_binop: false,
+        });
 
         if func.is_variadic {
             if self.no_sse {

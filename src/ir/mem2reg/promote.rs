@@ -399,7 +399,7 @@ fn rename_variables(
     alloca_infos: &[AllocaInfo],
     phi_locations: &[FxHashSet<usize>],
     dom_children: &[Vec<usize>],
-    preds: &analysis::FlatAdj,
+    _preds: &analysis::FlatAdj,
     label_to_idx: &FxHashMap<BlockId, usize>,
 ) {
     let num_allocas = alloca_infos.len();
@@ -461,17 +461,19 @@ fn rename_variables(
         def_stacks[i].push(Operand::Const(IrConst::zero(info.ty)));
     }
 
+    let rename_ctx = RenameCtx {
+        alloca_to_idx: &alloca_to_idx,
+        alloca_infos,
+        phi_dests: &phi_dests,
+        dom_children,
+        label_to_idx,
+    };
     rename_block(
         0,
         func,
-        &alloca_to_idx,
-        alloca_infos,
+        &rename_ctx,
         &mut def_stacks,
         &mut next_value,
-        &phi_dests,
-        dom_children,
-        preds,
-        label_to_idx,
     );
 
     // Remove promoted allocas from the entry block, and remove dead loads/stores
@@ -481,19 +483,24 @@ fn rename_variables(
     func.next_value_id = next_value;
 }
 
+/// Read-only context for the recursive rename pass.
+struct RenameCtx<'a> {
+    alloca_to_idx: &'a FxHashMap<u32, usize>,
+    alloca_infos: &'a [AllocaInfo],
+    phi_dests: &'a [FxHashMap<usize, Value>],
+    dom_children: &'a [Vec<usize>],
+    label_to_idx: &'a FxHashMap<BlockId, usize>,
+}
+
 /// Recursive dominator-tree DFS for variable renaming.
 fn rename_block(
     block_idx: usize,
     func: &mut IrFunction,
-    alloca_to_idx: &FxHashMap<u32, usize>,
-    alloca_infos: &[AllocaInfo],
+    ctx: &RenameCtx,
     def_stacks: &mut [Vec<Operand>],
     next_value: &mut u32,
-    phi_dests: &[FxHashMap<usize, Value>],
-    dom_children: &[Vec<usize>],
-    _preds: &analysis::FlatAdj,
-    label_to_idx: &FxHashMap<BlockId, usize>,
 ) {
+    let RenameCtx { alloca_to_idx, alloca_infos, phi_dests, dom_children, label_to_idx } = ctx;
     // Record stack depths so we can pop on exit
     let stack_depths: Vec<usize> = def_stacks.iter().map(|s| s.len()).collect();
 
@@ -685,14 +692,9 @@ fn rename_block(
             rename_block(
                 child,
                 func,
-                alloca_to_idx,
-                alloca_infos,
+                ctx,
                 def_stacks,
                 next_value,
-                phi_dests,
-                dom_children,
-                _preds,
-                label_to_idx,
             );
             for (i, &depth) in child_depths.iter().enumerate() {
                 def_stacks[i].truncate(depth);
@@ -701,14 +703,9 @@ fn rename_block(
             rename_block(
                 child,
                 func,
-                alloca_to_idx,
-                alloca_infos,
+                ctx,
                 def_stacks,
                 next_value,
-                phi_dests,
-                dom_children,
-                _preds,
-                label_to_idx,
             );
         }
     }

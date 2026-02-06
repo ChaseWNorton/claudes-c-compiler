@@ -571,9 +571,9 @@ pub fn classify_call_args(
     struct_arg_aligns: &[Option<usize>],
     struct_arg_classes: &[Vec<crate::common::types::EightbyteClass>],
     struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>],
-    is_variadic: bool,
-    config: &CallAbiConfig,
+    variadic_config: (bool, &CallAbiConfig), // (is_variadic, config)
 ) -> Vec<CallArgClass> {
+    let (is_variadic, config) = variadic_config;
     // Build ArgInfo slice from call-site arrays.
     let arg_infos: Vec<ArgInfo<'_>> = args.iter().enumerate().map(|(i, arg)| {
         let arg_ty = if i < arg_types.len() { Some(arg_types[i]) } else { None };

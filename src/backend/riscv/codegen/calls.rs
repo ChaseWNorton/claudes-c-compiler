@@ -183,8 +183,9 @@ impl RiscvCodegen {
     }
 
     pub(super) fn emit_call_reg_args_impl(&mut self, args: &[Operand], arg_classes: &[CallArgClass],
-                          arg_types: &[IrType], _total_sp_adjust: i64, _f128_temp_space: usize, stack_arg_space: usize,
+                          arg_types: &[IrType], stack_info: (i64, usize, usize),
                           struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>]) {
+        let (_, _, stack_arg_space) = stack_info;
         let float_arg_regs = ["fa0", "fa1", "fa2", "fa3", "fa4", "fa5", "fa6", "fa7"];
 
         // GP arg staging strategy: use only caller-saved temp registers (t3, t4, t5)
