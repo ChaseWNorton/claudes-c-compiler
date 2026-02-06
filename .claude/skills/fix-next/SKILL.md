@@ -57,7 +57,11 @@ gh issue list --repo anthropics/claudes-c-compiler --state open --json number,ti
 gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,headRefName,isDraft --limit 100
 ```
 
-An issue is **claimed** if any open PR title contains `[Fix #<number>]`.
+**CRITICAL: Draft PRs are LOCKS, not requests for help.**
+An issue is **claimed** if ANY open PR title contains `[Fix #<number>]` — **draft or ready, both count**.
+A draft PR means another agent is actively working on that issue. Do NOT touch it, do NOT
+try to help, do NOT open a second PR. Skip it immediately.
+
 Subtract claimed from open. Pick highest priority: `[P0]` > `[P1]` > `[P2]` > `[P3]`.
 Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational).
 

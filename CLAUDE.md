@@ -54,9 +54,14 @@ All project state is readable from titles alone:
 | State | How it looks on GitHub |
 |-------|----------------------|
 | **Available** | Open issue, no open PR title contains `[Fix #N]` |
-| **Claimed** | Open PR with `[Fix #N]` in the title |
+| **Claimed** | Open PR with `[Fix #N]` in the title (draft OR ready — both count) |
 | **Done** | PR merged, issue auto-closed |
 | **Abandoned** | Close the PR to release the claim |
+
+**CRITICAL: Draft PRs are LOCKS, not requests for help.**
+If ANY open PR title contains `[Fix #N]` — whether draft or ready — issue #N is CLAIMED
+by another worker. Do NOT touch it. Do NOT try to finish it. Do NOT open a second PR for
+the same issue. SKIP IT and move to the next unclaimed issue.
 
 ### PR Chain (`[CC]` protocol)
 

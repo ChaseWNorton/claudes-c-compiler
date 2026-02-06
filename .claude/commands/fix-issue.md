@@ -11,7 +11,7 @@ Check PR titles for `[Fix #$ARGUMENTS]`:
 ```bash
 gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 ```
-If any PR title contains `[Fix #$ARGUMENTS]`, it's already claimed. Tell the user and suggest picking another issue.
+If any PR title contains `[Fix #$ARGUMENTS]` — **draft or ready, both count** — the issue is **LOCKED** by another worker. A draft PR is a claim lock, NOT a request for help. Tell the user and suggest picking another issue. Do NOT try to contribute to the existing PR.
 
 ## Phase 0: Detect the chain
 

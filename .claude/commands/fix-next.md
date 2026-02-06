@@ -20,7 +20,10 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    # Claimed issue numbers (parse [Fix #N] from PR titles)
    gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
    ```
-   An issue is claimed if any open PR title contains `[Fix #<number>]`.
+   **CRITICAL: Draft PRs are LOCKS.** An issue is claimed if ANY open PR title contains
+   `[Fix #<number>]` — **draft or ready, both count as claimed**. A draft PR means another
+   agent is working on it. Do NOT touch it, do NOT try to help. Skip it.
+
    Pick the highest-priority unclaimed issue: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`.
    If no unclaimed issues remain, report that and stop.
 

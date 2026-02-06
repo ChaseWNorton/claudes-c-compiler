@@ -48,10 +48,13 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 - **Issue priority**: `[P0]`-`[P3]` in issue title
 - **Milestone membership**: `[M<N>]` in issue title
 - **Milestone definitions**: `[MILESTONE] M<N>:` in issue title
-- **Claims**: `[Fix #<N>]` in PR title — issue #N is claimed
+- **Claims**: `[Fix #<N>]` in PR title (draft OR ready) — issue #N is **LOCKED by another worker**
 - **Chain**: `[CC]` at start of PR title — PR is part of the chain
 - **Chain tip**: highest-numbered non-draft `[CC]` PR
 - **Unprioritized**: issue title has no `[P<N>]` code → needs triage
+
+**CRITICAL: Draft PRs are LOCKS, not requests for help.** If ANY open PR title contains
+`[Fix #N]` — whether draft or ready — that issue is claimed. Do NOT touch it. SKIP IT.
 
 ### Compute milestone progress
 
@@ -144,7 +147,7 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 The claim and the fix are separate phases:
 
 1. **Detect chain** — find the chain tip (highest non-draft `[CC]` PR). If none, use `main`.
-2. **Claim** — branch off chain tip (or main), push to `origin`, open draft PR to `upstream` with title `[CC][Fix #<N>] <description>` (or `[Fix #<N>]` if no chain). This is the lock. Do this BEFORE writing any code.
+2. **Claim** — branch off chain tip (or main), push to `origin`, open draft PR to `upstream` with title `[CC][Fix #<N>] <description>` (or `[Fix #<N>]` if no chain). **This draft PR is a LOCK — it tells all other agents this issue is taken. Other agents MUST skip it.** Do this BEFORE writing any code.
 3. **Fix** — read the issue body (work order), read the source files, implement the fix, write tests, verify build.
 4. **Ship** — commit, push, **MUST mark PR ready** (`gh pr ready`), update PR body with summary/changes/test plan. A draft PR that stays draft is invisible to reviewers — the fix is not done until it's marked ready. Once ready, your `[CC]` PR becomes the new chain tip.
 5. **Loop** — go back to step 1 with the next unclaimed issue.

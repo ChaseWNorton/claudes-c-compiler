@@ -25,9 +25,15 @@ Every issue exists in exactly one state:
 | State | Signal on GitHub | What it means |
 |-------|-----------------|---------------|
 | **Available** | Open issue, no open PR title contains `[Fix #N]` | No one is working on it |
-| **Claimed** | Open PR with `[Fix #N]` in title | Someone is actively working |
+| **Claimed** | Open PR (draft OR ready) with `[Fix #N]` in title | Someone is actively working — **DO NOT TOUCH** |
 | **Done** | PR merged; issue auto-closed by GitHub | Fix is complete |
 | **Abandoned** | PR closed without merge | Claim released, issue available again |
+
+**CRITICAL: A draft PR is a LOCK, not a request for help.**
+When you see `[Fix #N]` in ANY open PR title — draft or ready — that issue is taken.
+Another agent created that draft PR to claim the issue before writing code. It is their
+workspace. Do NOT read it, do NOT try to contribute to it, do NOT open a competing PR.
+Skip it immediately and move to the next unclaimed issue.
 
 The state transitions are:
 
@@ -94,7 +100,8 @@ gh issue list --repo anthropics/claudes-c-compiler --state open --json number,ti
 gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 ```
 
-An issue is **claimed** if any open PR title contains `[Fix #<number>]`.
+An issue is **claimed** if any open PR title contains `[Fix #<number>]` — **draft or ready, both count as claimed**.
+A draft PR is a lock held by another worker. Do NOT touch claimed issues.
 Subtract claimed from open issues. Pick the highest-priority unclaimed one.
 
 Priority sort: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`, then unprefixed.

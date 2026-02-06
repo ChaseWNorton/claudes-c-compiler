@@ -14,7 +14,7 @@ gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title
 
 ## Step 2: Determine which issues are claimed
 
-An issue is **claimed** if any open PR title contains `[Fix #<number>]`. Parse PR titles to build a set of claimed issue numbers.
+An issue is **claimed** if any open PR title contains `[Fix #<number>]` — **draft or ready, both count as claimed**. A draft PR is a lock held by another agent, NOT a request for help. Parse PR titles to build a set of claimed issue numbers.
 
 ## Step 3: Present the issues
 
