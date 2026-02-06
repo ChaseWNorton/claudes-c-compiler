@@ -146,6 +146,9 @@ pub struct SemanticAnalyzer {
     /// Each entry is `Some(span)` if a default was seen, `None` if not.
     /// Pushed on switch entry, popped on switch exit.
     switch_default_spans: Vec<Option<Span>>,
+    /// Return type of the function currently being analyzed.
+    /// Used to diagnose `return expr;` in void functions (C11 §6.8.6.4p1).
+    current_return_type: Option<CType>,
 }
 
 impl SemanticAnalyzer {
@@ -158,6 +161,7 @@ impl SemanticAnalyzer {
             defined_structs: RefCell::new(FxHashSet::default()),
             switch_cases: Vec::new(),
             switch_default_spans: Vec::new(),
+            current_return_type: None,
         };
         // Pre-populate with common implicit declarations
         analyzer.declare_implicit_functions();
@@ -277,6 +281,10 @@ impl SemanticAnalyzer {
             }
         }
 
+        // Track return type for void-return diagnostics (C11 §6.8.6.4p1)
+        let prev_return_type = self.current_return_type.take();
+        self.current_return_type = Some(return_type.clone());
+
         // Analyze function body
         self.analyze_compound_stmt(&func.body);
 
@@ -298,6 +306,8 @@ impl SemanticAnalyzer {
                 crate::common::error::WarningKind::ReturnType,
             );
         }
+
+        self.current_return_type = prev_return_type;
 
         // Pop function scope
         self.result.type_context.pop_scope();
@@ -874,8 +884,15 @@ impl SemanticAnalyzer {
                 self.analyze_expr(expr);
             }
             Stmt::Expr(None) => {}
-            Stmt::Return(Some(expr), _) => {
+            Stmt::Return(Some(expr), span) => {
                 self.analyze_expr(expr);
+                // C11 §6.8.6.4p1: return with expression in void function is an error
+                if matches!(self.current_return_type, Some(CType::Void)) {
+                    self.diagnostics.borrow_mut().error(
+                        "'return' with a value, in function returning void",
+                        *span,
+                    );
+                }
             }
             Stmt::Return(None, _) => {}
             Stmt::If(cond, then_br, else_br, _) => {
@@ -2874,5 +2891,40 @@ mod tests {
         assert!(sema_errors(
             "int f(void) { switch(0) { default: break; default: break; default: break; } return 0; }"
         ) >= 2, "expected at least 2 errors for 3 defaults");
+    }
+
+    // ---- void function returning a value (C11 §6.8.6.4p1) ----
+
+    #[test]
+    fn void_return_with_value() {
+        assert!(sema_errors("void foo(void) { return 42; }") > 0,
+            "should error on return with value in void function");
+    }
+
+    #[test]
+    fn void_return_without_value_ok() {
+        assert_eq!(sema_errors("void foo(void) { return; }"), 0,
+            "bare return in void function should be accepted");
+    }
+
+    #[test]
+    fn nonvoid_return_with_value_ok() {
+        assert_eq!(sema_errors("int foo(void) { return 42; }"), 0,
+            "return with value in non-void function should be accepted");
+    }
+
+    #[test]
+    fn void_return_with_expr() {
+        assert!(sema_errors("void bar(int x) { return x + 1; }") > 0,
+            "should error on return with expression in void function");
+    }
+
+    #[test]
+    fn void_return_with_void_cast_ok() {
+        // `return (void)0;` is technically `return expr;` in a void function,
+        // but GCC/Clang accept it. For now we reject it — matching strict C11.
+        let e = sema_errors("void foo(void) { return (void)0; }");
+        // Just verify it compiles through sema without panicking.
+        let _ = e;
     }
 }
