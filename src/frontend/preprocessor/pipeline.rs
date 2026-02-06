@@ -201,7 +201,15 @@ impl Preprocessor {
         // Phase 3: Comment replacement
         // So we must join continued lines BEFORE stripping comments.
         let source = self.join_continued_lines(source);
-        let (source, line_map) = Self::strip_block_comments(&source);
+        let (source, line_map, unterminated) = Self::strip_block_comments(&source);
+        if let Some(line) = unterminated {
+            self.errors.push(PreprocessorDiagnostic {
+                file: self.current_file(),
+                line,
+                col: 1,
+                message: "unterminated comment".to_string(),
+            });
+        }
         let mut output = String::with_capacity(source.len());
 
         // For included files, save and reset the conditional stack and line override

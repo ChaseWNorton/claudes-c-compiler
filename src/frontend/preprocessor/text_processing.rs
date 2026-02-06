@@ -97,14 +97,17 @@ impl Preprocessor {
     /// which avoids breaking preprocessor directives that have block comments
     /// between `#` and the directive keyword (e.g., `#/*...\n...*/if 1`).
     /// Uses raw byte operations to preserve UTF-8 sequences in string literals.
-    pub(super) fn strip_block_comments(source: &str) -> (std::borrow::Cow<'_, str>, LineMap) {
+    /// Returns `(source, line_map, unterminated_comment_line)`.
+    /// If `unterminated_comment_line` is `Some(line)`, a `/*` on that 1-based
+    /// line was never closed.
+    pub(super) fn strip_block_comments(source: &str) -> (std::borrow::Cow<'_, str>, LineMap, Option<usize>) {
         let bytes = source.as_bytes();
         let len = bytes.len();
 
         // Fast path: if no block comment or line comment markers exist, return source as-is.
         // This avoids both the byte-by-byte scan and the Vec<u8> allocation.
         if !contains_comment_marker(bytes) {
-            return (std::borrow::Cow::Borrowed(source), LineMap::Identity);
+            return (std::borrow::Cow::Borrowed(source), LineMap::Identity, None);
         }
 
         let mut result: Vec<u8> = Vec::with_capacity(source.len());
@@ -113,6 +116,8 @@ impl Preprocessor {
         let mut src_line: usize = 0;
         // Whether any block comment spans multiple lines (shifts line numbering)
         let mut has_multiline_block_comment = false;
+        // 1-based line number of an unterminated block comment, if any
+        let mut unterminated_comment_line: Option<usize> = None;
         // For each output line, record which source line it corresponds to
         // Only populated if has_multiline_block_comment becomes true
         let mut line_map: Vec<usize> = Vec::new();
@@ -141,15 +146,21 @@ impl Preprocessor {
                     i += 2;
                     result.push(b' ');
                     let comment_start_line = src_line;
+                    let mut found_end = false;
                     while i < len {
                         if i + 1 < len && bytes[i] == b'*' && bytes[i + 1] == b'/' {
                             i += 2;
+                            found_end = true;
                             break;
                         }
                         if bytes[i] == b'\n' {
                             src_line += 1;
                         }
                         i += 1;
+                    }
+                    if !found_end {
+                        // Report 1-based line number of the opening /*
+                        unterminated_comment_line = Some(comment_start_line + 1);
                     }
                     // If block comment spanned multiple lines, we need the full line map
                     if src_line > comment_start_line && !has_multiline_block_comment {
@@ -197,9 +208,9 @@ impl Preprocessor {
         let text = String::from_utf8(result)
             .expect("comment stripping produced non-UTF8 (input was valid UTF-8)");
         if has_multiline_block_comment {
-            (std::borrow::Cow::Owned(text), LineMap::Mapped(line_map))
+            (std::borrow::Cow::Owned(text), LineMap::Mapped(line_map), unterminated_comment_line)
         } else {
-            (std::borrow::Cow::Owned(text), LineMap::Identity)
+            (std::borrow::Cow::Owned(text), LineMap::Identity, unterminated_comment_line)
         }
     }
 
@@ -294,5 +305,68 @@ pub(super) fn split_first_word(s: &str) -> (&str, &str) {
         }
     } else {
         (s, "")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unterminated_block_comment_detected() {
+        let source = "/* this comment never ends\nint x = 5;\n";
+        let (_text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, Some(1), "should report unterminated comment on line 1");
+    }
+
+    #[test]
+    fn test_unterminated_block_comment_later_in_file() {
+        let source = "int x = 5;\n/* starts on line 2\nmore stuff\n";
+        let (_text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, Some(2), "should report unterminated comment on line 2");
+    }
+
+    #[test]
+    fn test_terminated_block_comment_no_error() {
+        let source = "/* valid */ int x = 5;\n";
+        let (_text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, None, "valid comment should not report error");
+    }
+
+    #[test]
+    fn test_multiline_terminated_comment_no_error() {
+        let source = "/* multi\nline\ncomment */ int x;\n";
+        let (_text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, None, "terminated multiline comment should be fine");
+    }
+
+    #[test]
+    fn test_no_comments_no_error() {
+        let source = "int main(void) { return 0; }\n";
+        let (_text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, None, "no comments means no error");
+    }
+
+    #[test]
+    fn test_empty_unterminated_comment() {
+        let source = "/*";
+        let (_text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, Some(1), "bare /* should be unterminated");
+    }
+
+    #[test]
+    fn test_comment_in_string_not_affected() {
+        // /* inside a string literal should not be treated as a comment
+        let source = "char *s = \"/* not a comment */\";\n";
+        let (text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, None, "/* in string is not a comment");
+        assert!(text.contains("/* not a comment */"), "string content should be preserved");
+    }
+
+    #[test]
+    fn test_multiple_comments_last_unterminated() {
+        let source = "/* ok */ int x; /* unterminated\n";
+        let (_text, _map, unterminated) = Preprocessor::strip_block_comments(source);
+        assert_eq!(unterminated, Some(1), "second unterminated comment detected");
     }
 }
