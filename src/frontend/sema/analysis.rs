@@ -1631,6 +1631,36 @@ impl SemanticAnalyzer {
             Expr::BinaryOp(op, lhs, rhs, span) => {
                 self.analyze_expr(lhs);
                 self.analyze_expr(rhs);
+                // C11 §6.5.7, §6.5.10-12: shift and bitwise operators require integer operands.
+                if matches!(op, BinOp::Shl | BinOp::Shr | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Mod) {
+                    let checker = super::type_checker::ExprTypeChecker {
+                        symbols: &self.symbol_table,
+                        types: &self.result.type_context,
+                        functions: &self.result.functions,
+                        expr_types: Some(&self.result.expr_types),
+                    };
+                    let lhs_ty = checker.infer_expr_ctype(lhs);
+                    let rhs_ty = checker.infer_expr_ctype(rhs);
+                    let lhs_is_float = lhs_ty.as_ref().is_some_and(|t| t.is_floating());
+                    let rhs_is_float = rhs_ty.as_ref().is_some_and(|t| t.is_floating());
+                    if lhs_is_float || rhs_is_float {
+                        let op_str = match op {
+                            BinOp::Shl => "<<", BinOp::Shr => ">>",
+                            BinOp::BitAnd => "&", BinOp::BitOr => "|",
+                            BinOp::BitXor => "^", BinOp::Mod => "%",
+                            _ => unreachable!(),
+                        };
+                        self.diagnostics.borrow_mut().error(
+                            format!(
+                                "invalid operands to binary {} (have '{}' and '{}')",
+                                op_str,
+                                lhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string()),
+                                rhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string()),
+                            ),
+                            *span,
+                        );
+                    }
+                }
                 // Check pointer subtraction type compatibility (C11 6.5.6p3):
                 // both operands must point to compatible types.
                 if *op == BinOp::Sub {
@@ -3233,5 +3263,50 @@ mod tests {
         // Redeclaration in the same scope is not a shadow (it's a redeclaration)
         let (_, w) = sema_counts("int f(void) { int x = 1; int x = 2; return x; }");
         assert_eq!(w, 0, "same-scope redeclaration should not trigger -Wshadow");
+    }
+
+    // ---- bitwise/shift on float types (C11 §6.5.7, §6.5.10-12) ----
+
+    #[test]
+    fn float_shift_right_error() {
+        // Issue #78: long double >> 1 should be rejected
+        let (e, _) = sema_counts("double f(double x) { return x >> 1; }");
+        assert!(e > 0, "shift on float type should produce an error");
+    }
+
+    #[test]
+    fn float_shift_left_error() {
+        let (e, _) = sema_counts("double f(double x) { return x << 1; }");
+        assert!(e > 0, "shift on float type should produce an error");
+    }
+
+    #[test]
+    fn float_bitand_error() {
+        let (e, _) = sema_counts("double f(double x) { return x & 1; }");
+        assert!(e > 0, "bitwise AND on float type should produce an error");
+    }
+
+    #[test]
+    fn float_bitor_error() {
+        let (e, _) = sema_counts("double f(double x) { return x | 1; }");
+        assert!(e > 0, "bitwise OR on float type should produce an error");
+    }
+
+    #[test]
+    fn float_bitxor_error() {
+        let (e, _) = sema_counts("double f(double x) { return x ^ 1; }");
+        assert!(e > 0, "bitwise XOR on float type should produce an error");
+    }
+
+    #[test]
+    fn float_mod_error() {
+        let (e, _) = sema_counts("double f(double x) { return x % 2; }");
+        assert!(e > 0, "modulo on float type should produce an error");
+    }
+
+    #[test]
+    fn int_shift_no_error() {
+        let (e, _) = sema_counts("int f(int x) { return x >> 1; }");
+        assert_eq!(e, 0, "shift on integer type should not produce an error");
     }
 }
