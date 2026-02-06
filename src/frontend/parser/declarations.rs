@@ -135,6 +135,7 @@ impl Parser {
 
         // Handle post-type storage class specifiers (C allows "struct S typedef name;")
         self.consume_post_type_qualifiers();
+        self.validate_storage_class_specifiers(start);
 
         let (name, derived, decl_mode, decl_common, decl_aligned, _) = self.parse_declarator_with_attrs();
         let (post_ctor, post_dtor, post_mode, post_common, post_aligned, first_asm_reg) = self.parse_asm_and_attributes();
@@ -662,6 +663,7 @@ impl Parser {
         let type_spec = self.parse_type_specifier()?;
 
         self.consume_post_type_qualifiers();
+        self.validate_storage_class_specifiers(start);
 
         let is_static = self.attrs.parsing_static();
         let is_extern = self.attrs.parsing_extern();
@@ -1114,6 +1116,35 @@ impl Parser {
         }
     }
 
+    /// Validate that the current set of storage-class specifiers does not
+    /// contain conflicting combinations.  Per C11 6.7.1: at most one
+    /// storage-class specifier may appear in a declaration, except that
+    /// `_Thread_local` may appear with `static` or `extern`.
+    pub(super) fn validate_storage_class_specifiers(&mut self, span: Span) {
+        let is_static = self.attrs.parsing_static();
+        let is_extern = self.attrs.parsing_extern();
+        let is_typedef = self.attrs.parsing_typedef();
+        let is_thread_local = self.attrs.parsing_thread_local();
+
+        // Count mutually-exclusive storage classes present
+        let count = is_static as u8 + is_extern as u8 + is_typedef as u8;
+
+        if count > 1 {
+            self.emit_error(
+                "multiple storage classes in declaration specifiers",
+                span,
+            );
+        }
+
+        // _Thread_local can combine with static or extern, but not typedef
+        if is_thread_local && is_typedef {
+            self.emit_error(
+                "'_Thread_local' may not be used with 'typedef'",
+                span,
+            );
+        }
+    }
+
     /// Consume post-type storage class specifiers and qualifiers.
     /// C allows "struct { int i; } typedef name;" and "char _Alignas(16) x;".
     /// This is shared between parse_external_decl and parse_local_declaration.
@@ -1278,4 +1309,122 @@ impl Parser {
         // evaluable at parse time but are valid constant expressions.
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::frontend::lexer::scan::Lexer;
+    use crate::frontend::parser::parse::Parser;
+
+    /// Helper: parse the given C source and return the parser error count.
+    fn parse_error_count(src: &str) -> usize {
+        let tokens = Lexer::new(src, 0).tokenize();
+        let mut parser = Parser::new(tokens);
+        let _ = parser.parse();
+        parser.error_count
+    }
+
+    // ---- invalid combinations (must produce errors) ----
+
+    #[test]
+    fn static_extern_is_rejected() {
+        assert!(parse_error_count("static extern int x;") > 0);
+    }
+
+    #[test]
+    fn extern_static_is_rejected() {
+        assert!(parse_error_count("extern static int x;") > 0);
+    }
+
+    #[test]
+    fn typedef_static_is_rejected() {
+        assert!(parse_error_count("typedef static int myint;") > 0);
+    }
+
+    #[test]
+    fn typedef_extern_is_rejected() {
+        assert!(parse_error_count("typedef extern int myint;") > 0);
+    }
+
+    #[test]
+    fn thread_local_typedef_is_rejected() {
+        assert!(parse_error_count("_Thread_local typedef int myint;") > 0);
+    }
+
+    #[test]
+    fn typedef_thread_local_is_rejected() {
+        assert!(parse_error_count("typedef _Thread_local int myint;") > 0);
+    }
+
+    #[test]
+    fn static_extern_local_is_rejected() {
+        assert!(
+            parse_error_count("int main(void) { static extern int x; return x; }") > 0
+        );
+    }
+
+    #[test]
+    fn typedef_static_local_is_rejected() {
+        assert!(
+            parse_error_count("int main(void) { typedef static int myint; }") > 0
+        );
+    }
+
+    // ---- post-type position (C allows "struct S typedef name;") ----
+
+    #[test]
+    fn post_type_static_extern_is_rejected() {
+        assert!(parse_error_count("int static extern x;") > 0);
+    }
+
+    // ---- valid single storage class (must NOT produce errors) ----
+
+    #[test]
+    fn static_alone_is_accepted() {
+        assert_eq!(parse_error_count("static int x;"), 0);
+    }
+
+    #[test]
+    fn extern_alone_is_accepted() {
+        assert_eq!(parse_error_count("extern int x;"), 0);
+    }
+
+    #[test]
+    fn typedef_alone_is_accepted() {
+        assert_eq!(parse_error_count("typedef int myint;"), 0);
+    }
+
+    // ---- valid _Thread_local combinations ----
+
+    #[test]
+    fn static_thread_local_is_accepted() {
+        assert_eq!(parse_error_count("static _Thread_local int x;"), 0);
+    }
+
+    #[test]
+    fn thread_local_static_is_accepted() {
+        assert_eq!(parse_error_count("_Thread_local static int x;"), 0);
+    }
+
+    #[test]
+    fn extern_thread_local_is_accepted() {
+        assert_eq!(parse_error_count("extern _Thread_local int x;"), 0);
+    }
+
+    #[test]
+    fn thread_local_extern_is_accepted() {
+        assert_eq!(parse_error_count("_Thread_local extern int x;"), 0);
+    }
+
+    // ---- no storage class at all ----
+
+    #[test]
+    fn no_storage_class_is_accepted() {
+        assert_eq!(parse_error_count("int x;"), 0);
+    }
+
+    #[test]
+    fn bare_function_no_storage_class() {
+        assert_eq!(parse_error_count("int main(void) { return 0; }"), 0);
+    }
 }
