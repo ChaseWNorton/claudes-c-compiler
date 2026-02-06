@@ -959,6 +959,13 @@ impl SemanticAnalyzer {
             }
             Stmt::Case(expr, body, span) => {
                 self.analyze_expr(expr);
+                // C11 §6.8.1p1: case label must be within a switch statement
+                if self.switch_cases.is_empty() {
+                    self.diagnostics.borrow_mut().error(
+                        "'case' label not within a switch statement",
+                        *span,
+                    );
+                }
                 // C11 §6.8.4.2p3: No two case constant expressions in the same
                 // switch shall have the same value after conversion.
                 if let Some(val) = self.eval_const_expr(expr) {
@@ -978,12 +985,26 @@ impl SemanticAnalyzer {
                 }
                 self.analyze_stmt(body);
             }
-            Stmt::CaseRange(low, high, body, _) => {
+            Stmt::CaseRange(low, high, body, span) => {
                 self.analyze_expr(low);
                 self.analyze_expr(high);
+                // C11 §6.8.1p1: case label must be within a switch statement
+                if self.switch_cases.is_empty() {
+                    self.diagnostics.borrow_mut().error(
+                        "'case' label not within a switch statement",
+                        *span,
+                    );
+                }
                 self.analyze_stmt(body);
             }
             Stmt::Default(body, span) => {
+                // C11 §6.8.1p1: default label must be within a switch statement
+                if self.switch_cases.is_empty() {
+                    self.diagnostics.borrow_mut().error(
+                        "'default' label not within a switch statement",
+                        *span,
+                    );
+                }
                 // C11 6.8.4.2p2: There may be at most one default label in
                 // a switch statement.
                 if let Some(prev_span) = self.switch_default_spans.last().copied().flatten() {
@@ -2926,5 +2947,32 @@ mod tests {
         let e = sema_errors("void foo(void) { return (void)0; }");
         // Just verify it compiles through sema without panicking.
         let _ = e;
+    }
+
+    // ---- case/default outside switch (C11 §6.8.1p1) ----
+
+    #[test]
+    fn case_outside_switch() {
+        assert!(sema_errors("int f(void) { case 1: return 1; }") > 0,
+            "case label outside switch should error");
+    }
+
+    #[test]
+    fn default_outside_switch() {
+        assert!(sema_errors("int f(void) { default: return 0; }") > 0,
+            "default label outside switch should error");
+    }
+
+    #[test]
+    fn case_inside_switch_ok() {
+        assert_eq!(sema_errors(
+            "int f(void) { switch(0) { case 1: break; default: break; } return 0; }"
+        ), 0, "case/default inside switch should not error");
+    }
+
+    #[test]
+    fn case_outside_switch_nested_in_if() {
+        assert!(sema_errors("int f(void) { if (1) { case 1: return 1; } return 0; }") > 0,
+            "case label in if (not in switch) should error");
     }
 }
