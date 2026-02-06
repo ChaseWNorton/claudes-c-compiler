@@ -19,8 +19,8 @@ Use this skill when:
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
 gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# Open PRs — titles contain [Fix #N] for claim detection
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,updatedAt --limit 50
+# Open PRs — titles contain [Fix #N] for claim detection, isDraft for completion state
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,updatedAt,isDraft --limit 50
 
 # Merged PRs
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
@@ -44,10 +44,12 @@ Group open issues by:
 - `[P3]` Low — nice to have
 - Unprefixed — needs triage
 
-**Status**:
+**Status** (cross-reference PRs with `isDraft`):
 - **Available** — no open PR title contains `[Fix #N]`
-- **Claimed** — open PR title contains `[Fix #N]`
-- **Stale claim** — claimed but PR hasn't been updated in 24+ hours
+- **In progress** — draft PR with `[Fix #N]` in title
+- **Complete** — non-draft PR with `[Fix #N]` in title (awaiting merge)
+- **Merged** — issue closed (PR merged)
+- **Stale claim** — draft PR with `[Fix #N]` but no activity in 24+ hours
 
 **Category** (from issue body):
 - Frontend diagnostics (sema)
@@ -95,11 +97,11 @@ DUPLICATES DETECTED:
   #XX and #YY — <description>
 
 MILESTONES:
-  M1: Core Diagnostic Coverage — 2/6 done (33%)
-      Done: #25, #22 | Open: #20, #21, #23, #24
+  M1: Core Diagnostic Coverage — 6/6 done (0 merged, 6 awaiting merge)
+      Merged: (none) | Complete: #20, #21, #22, #23, #24, #25 | Available: (none)
 
 PROGRESS:
-  Open: XX | Claimed: XX | Available: XX | Completed: XX
+  Total: XX | Merged: XX | Complete: XX | In progress: XX | Available: XX
 
 BY PRIORITY:
   P0: XX open (XX claimed, XX available)

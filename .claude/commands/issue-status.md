@@ -9,8 +9,8 @@ Run these commands in parallel:
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
 gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# Open PRs — titles contain [Fix #N] for claim detection
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,url --limit 50
+# Open PRs — titles contain [Fix #N] for claim detection, isDraft for completion state
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,url,isDraft --limit 50
 
 # Merged PRs
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title,url --limit 20
@@ -19,9 +19,12 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 ## Step 2: Parse from titles
 
 - **Milestones**: titles matching `[MILESTONE] M<N>:`
-- **Milestone sub-issues**: titles containing `[M<N>]` — count open vs closed per milestone
+- **Milestone sub-issues**: titles containing `[M<N>]` — count per milestone by state
 - **Priority**: `[P0]`-`[P3]` in title
-- **Claimed**: open PR title contains `[Fix #<issue_number>]`
+- **Complete (awaiting merge)**: open issue + non-draft PR with `[Fix #N]` in title
+- **In progress**: open issue + draft PR with `[Fix #N]` in title
+- **Available**: open issue, no PR with `[Fix #N]`
+- **Merged**: closed issue
 
 ## Step 3: Display dashboard
 
@@ -31,24 +34,27 @@ CHAIN:
   New [CC] branches base off #46
 
 MILESTONES:
-  M1: Core Diagnostic Coverage (#42)    — 2/6 done
+  M1: Core Diagnostic Coverage (#42)    — 6/6 done (0 merged, 6 awaiting merge)
   M2: CLI Reliability (#43)             — needs decomposition (0 sub-issues)
 
-CLAIMED (in progress):
-  #20 [P0] Duplicate case labels       ← PR #XX by @author
-  #21 [P0] Duplicate default labels    ← PR #XX by @author
-
-AVAILABLE (unclaimed):
-  #22 [P0] Void function return
-  #23 [P0] case outside switch
+COMPLETE (awaiting merge — non-draft PR exists):
+  #20 [P0] Duplicate case labels       ← PR #45 (ready)
+  #21 [P0] Duplicate default labels    ← PR #46 (ready)
   ...
 
-RECENTLY COMPLETED:
+IN PROGRESS (draft PR exists):
+  #XX [P1] Some issue                  ← PR #XX (draft)
+
+AVAILABLE (unclaimed):
+  #36 [P3] Test infrastructure
+  ...
+
+MERGED:
   #XX [P0] Some issue                  ← PR #XX merged
   ...
 
 SUMMARY:
-  Total open: XX | Claimed: XX | Available: XX | Completed: XX
+  Total: XX | Merged: XX | Complete: XX | In progress: XX | Available: XX
 ```
 
 Group available issues by priority (P0 first). Show milestones first if any exist.

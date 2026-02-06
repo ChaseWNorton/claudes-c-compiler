@@ -60,11 +60,20 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 
 ### Compute milestone progress
 
-For each open `[MILESTONE]` issue, count `[M<N>]` issues across open + closed titles.
+For each open `[MILESTONE]` issue, find all `[M<N>]` issues (open + closed). Then cross-reference
+with the PR list to determine completion:
+
+- **Merged** = issue is closed (auto-closed by PR merge)
+- **Complete** = issue is open BUT has a non-draft PR with `[Fix #N]` in the title (work done, awaiting merge)
+- **In progress** = issue is open with a draft PR with `[Fix #N]` (work underway)
+- **Available** = issue is open with no PR
+
+Progress = (merged + complete) / total. Show both:
 
 - Zero `[M<N>]` issues → needs decomposition
-- Some open, some closed → in progress (X/Y)
-- All closed → complete
+- All merged → complete
+- Some complete but not merged → `X/Y done (Z awaiting merge)`
+- Mix of states → `X/Y done (Z in progress, W available)`
 
 ### Detect PR chain
 
@@ -117,8 +126,9 @@ CCC — What do you want to do?
 If milestones exist, show their progress inline:
 ```
   MILESTONES:
-    M1: Core Diagnostic Coverage — 2/6 done    (4 available to fix)
+    M1: Core Diagnostic Coverage — 6/6 done    (0 merged, 6 awaiting merge)
     M2: CLI Reliability — needs decomposition   (0 sub-issues)
+    M3: Test Infrastructure — 0/4 done          (4 available to fix)
 ```
 
 **Recommend the most impactful action** based on state:
