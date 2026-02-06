@@ -138,6 +138,10 @@ pub struct SemanticAnalyzer {
     /// check. Uses RefCell for interior mutability since resolve_struct_or_union
     /// takes &self.
     defined_structs: RefCell<FxHashSet<String>>,
+    /// Stack of seen case values per switch nesting level (C11 §6.8.4.2p3).
+    /// Each entry maps a case constant value to the span of its first occurrence,
+    /// enabling duplicate detection with "previous case defined here" notes.
+    switch_cases: Vec<FxHashMap<i64, Span>>,
 }
 
 impl SemanticAnalyzer {
@@ -148,6 +152,7 @@ impl SemanticAnalyzer {
             enum_counter: 0,
             diagnostics: RefCell::new(DiagnosticEngine::new()),
             defined_structs: RefCell::new(FxHashSet::default()),
+            switch_cases: Vec::new(),
         };
         // Pre-populate with common implicit declarations
         analyzer.declare_implicit_functions();
@@ -924,10 +929,29 @@ impl SemanticAnalyzer {
                         self.diagnostics.borrow_mut().emit(&diag);
                     }
                 }
+                self.switch_cases.push(FxHashMap::default());
                 self.analyze_stmt(body);
+                self.switch_cases.pop();
             }
-            Stmt::Case(expr, body, _) => {
+            Stmt::Case(expr, body, span) => {
                 self.analyze_expr(expr);
+                // C11 §6.8.4.2p3: No two case constant expressions in the same
+                // switch shall have the same value after conversion.
+                if let Some(val) = self.eval_const_expr(expr) {
+                    if let Some(case_map) = self.switch_cases.last_mut() {
+                        if let Some(&prev_span) = case_map.get(&val) {
+                            let diag = crate::common::error::Diagnostic::error(
+                                format!("duplicate case value '{}'", val)
+                            ).with_span(*span)
+                             .with_note(crate::common::error::Diagnostic::note(
+                                "previous case defined here"
+                             ).with_span(prev_span));
+                            self.diagnostics.borrow_mut().emit(&diag);
+                        } else {
+                            case_map.insert(val, *span);
+                        }
+                    }
+                }
                 self.analyze_stmt(body);
             }
             Stmt::CaseRange(low, high, body, _) => {
@@ -2364,6 +2388,7 @@ impl Default for SemanticAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+<<<<<<< HEAD
     use crate::frontend::lexer::scan::Lexer;
     use crate::frontend::parser::parse::Parser;
 
@@ -2747,5 +2772,58 @@ mod tests {
         assert!(sema_errors(
             "int main(void) { int a = 1; int b = 2; int * const p = &a; p = &b; return *p; }"
         ) > 0);
+    }
+
+    // ---- duplicate case labels (C11 §6.8.4.2p3) ----
+
+    #[test]
+    fn duplicate_case_label() {
+        assert!(sema_errors(
+            "int f(void) { switch(0) { case 1: break; case 1: break; } return 0; }",
+        ) > 0, "expected error for duplicate case value");
+    }
+
+    #[test]
+    fn distinct_case_labels_ok() {
+        assert_eq!(sema_errors(
+            "int f(void) { switch(0) { case 1: break; case 2: break; } return 0; }",
+        ), 0, "distinct case labels should not error");
+    }
+
+    #[test]
+    fn duplicate_case_label_multiple() {
+        assert!(sema_errors(
+            "int f(void) { switch(0) { case 1: break; case 2: break; case 1: break; case 2: break; } return 0; }",
+        ) >= 2, "expected errors for two duplicate case values");
+    }
+
+    #[test]
+    fn duplicate_case_in_nested_switch_ok() {
+        // Same value in nested switches is allowed — each switch has its own scope.
+        assert_eq!(sema_errors(
+            "int f(void) { switch(0) { case 1: switch(0) { case 1: break; } break; } return 0; }",
+        ), 0, "same case value in nested switches should be ok");
+    }
+
+    #[test]
+    fn duplicate_case_expression() {
+        // case 2+3 and case 5 are the same value.
+        assert!(sema_errors(
+            "int f(void) { switch(0) { case 2+3: break; case 5: break; } return 0; }",
+        ) > 0, "expected error for duplicate case value via expression");
+    }
+
+    #[test]
+    fn case_zero_duplicate() {
+        assert!(sema_errors(
+            "int f(void) { switch(0) { case 0: break; case 0: break; } return 0; }",
+        ) > 0, "expected error for duplicate case 0");
+    }
+
+    #[test]
+    fn negative_case_duplicate() {
+        assert!(sema_errors(
+            "int f(void) { int x = 0; switch(x) { case -1: break; case -1: break; } return 0; }",
+        ) > 0, "expected error for duplicate negative case");
     }
 }
