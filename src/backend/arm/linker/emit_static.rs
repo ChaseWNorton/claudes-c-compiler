@@ -609,29 +609,25 @@ pub(super) fn emit_executable(
     // LOAD: RX segment starting from file offset 0 (includes ELF header + PLT stubs)
     let rx_actual_filesz = if iplt_stub_size > 0 { iplt_stub_file_off + iplt_stub_size } else { rx_filesz };
     let rx_actual_memsz = rx_actual_filesz;
-    wphdr(&mut out, ph, PT_LOAD, PF_R | PF_X,
-          0, BASE_ADDR, rx_actual_filesz, rx_actual_memsz, PAGE_SIZE);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R | PF_X, p_offset: 0, p_vaddr: BASE_ADDR, p_paddr: BASE_ADDR, p_filesz: rx_actual_filesz, p_memsz: rx_actual_memsz, p_align: PAGE_SIZE }.write_at(&mut out, ph);
     ph += 56;
 
     // LOAD: RW segment
-    wphdr(&mut out, ph, PT_LOAD, PF_R | PF_W,
-          rw_page_offset, rw_page_addr, rw_filesz, rw_memsz, PAGE_SIZE);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R | PF_W, p_offset: rw_page_offset, p_vaddr: rw_page_addr, p_paddr: rw_page_addr, p_filesz: rw_filesz, p_memsz: rw_memsz, p_align: PAGE_SIZE }.write_at(&mut out, ph);
     ph += 56;
 
     // TLS segment
     if has_tls && tls_addr != 0 {
-        wphdr(&mut out, ph, PT_TLS, PF_R,
-              tls_file_offset, tls_addr, tls_file_size, tls_mem_size, tls_align);
+        Phdr64 { p_type: PT_TLS, p_flags: PF_R, p_offset: tls_file_offset, p_vaddr: tls_addr, p_paddr: tls_addr, p_filesz: tls_file_size, p_memsz: tls_mem_size, p_align: tls_align }.write_at(&mut out, ph);
         ph += 56;
     }
 
     // GNU_STACK
-    wphdr(&mut out, ph, PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0, 0x10);
+    Phdr64 { p_type: PT_GNU_STACK, p_flags: PF_R | PF_W, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 0x10 }.write_at(&mut out, ph);
     ph += 56;
 
     // PT_GNU_EH_FRAME: points to .eh_frame_hdr for stack unwinding
-    wphdr(&mut out, ph, PT_GNU_EH_FRAME, PF_R,
-          eh_frame_hdr_offset, eh_frame_hdr_vaddr, eh_frame_hdr_size, eh_frame_hdr_size, 4);
+    Phdr64 { p_type: PT_GNU_EH_FRAME, p_flags: PF_R, p_offset: eh_frame_hdr_offset, p_vaddr: eh_frame_hdr_vaddr, p_paddr: eh_frame_hdr_vaddr, p_filesz: eh_frame_hdr_size, p_memsz: eh_frame_hdr_size, p_align: 4 }.write_at(&mut out, ph);
 
     // Write output
     std::fs::write(output_path, &out).map_err(|e| format!("failed to write '{}': {}", output_path, e))?;

@@ -425,25 +425,20 @@ pub fn write_relocatable_object(
 
     if is_32bit {
         // NULL
-        write_shdr32(&mut elf, 0, SHT_NULL, 0, 0, 0, 0, 0, 0, 0, 0);
+        Shdr32 { sh_name: 0, sh_type: SHT_NULL, sh_flags: 0, sh_addr: 0, sh_offset: 0, sh_size: 0, sh_link: 0, sh_info: 0, sh_addralign: 0, sh_entsize: 0 }.append_to(&mut elf);
         // Group sections (COMDAT)
         for (gi, (group_name, _members)) in comdat_groups.iter().enumerate() {
             let sh_name = shstrtab.offset_of(".group");
             // sh_link = symtab index, sh_info = symbol index of group signature
             let sig_sym_idx = find_symbol_index_shared(group_name, &sym_entries, &strtab, content_sections);
-            write_shdr32(&mut elf, sh_name, SHT_GROUP, 0,
-                        0, group_offsets[gi] as u32, group_section_data[gi].len() as u32,
-                        symtab_shndx as u32, sig_sym_idx,
-                        4, 4);
+            Shdr32 { sh_name, sh_type: SHT_GROUP, sh_flags: 0, sh_addr: 0, sh_offset: group_offsets[gi] as u32, sh_size: group_section_data[gi].len() as u32, sh_link: symtab_shndx as u32, sh_info: sig_sym_idx, sh_addralign: 4, sh_entsize: 4 }.append_to(&mut elf);
         }
         // Content sections
         for (i, sec_name) in content_sections.iter().enumerate() {
             let section = sections.get(sec_name).unwrap();
             let sh_name = shstrtab.offset_of(sec_name);
             let sh_offset = if section.sh_type == SHT_NOBITS { 0 } else { section_offsets[i] as u32 };
-            write_shdr32(&mut elf, sh_name, section.sh_type, section.sh_flags as u32,
-                        0, sh_offset, section.data.len() as u32,
-                        0, 0, section.sh_addralign as u32, 0);
+            Shdr32 { sh_name, sh_type: section.sh_type, sh_flags: section.sh_flags as u32, sh_addr: 0, sh_offset, sh_size: section.data.len() as u32, sh_link: 0, sh_info: 0, sh_addralign: section.sh_addralign as u32, sh_entsize: 0 }.append_to(&mut elf);
         }
         // Reloc sections
         reloc_idx = 0;
@@ -454,45 +449,32 @@ pub fn write_relocatable_object(
                     let sh_name = shstrtab.offset_of(&reloc_name);
                     let sh_offset = reloc_offsets[reloc_idx] as u32;
                     let sh_size = (section.relocs.len() * reloc_entry_size) as u32;
-                    write_shdr32(&mut elf, sh_name, reloc_sh_type, 0,
-                                0, sh_offset, sh_size,
-                                symtab_shndx as u32, content_shndx_offset as u32 + i as u32,
-                                4, reloc_entry_size as u32);
+                    Shdr32 { sh_name, sh_type: reloc_sh_type, sh_flags: 0, sh_addr: 0, sh_offset, sh_size, sh_link: symtab_shndx as u32, sh_info: content_shndx_offset as u32 + i as u32, sh_addralign: 4, sh_entsize: reloc_entry_size as u32 }.append_to(&mut elf);
                     reloc_idx += 1;
                 }
             }
         }
         // .symtab
-        write_shdr32(&mut elf, shstrtab.offset_of(".symtab"), SHT_SYMTAB, 0,
-                    0, symtab_offset as u32, symtab_size as u32,
-                    strtab_shndx as u32, first_global_idx as u32,
-                    4, sym_entry_size as u32);
+        Shdr32 { sh_name: shstrtab.offset_of(".symtab"), sh_type: SHT_SYMTAB, sh_flags: 0, sh_addr: 0, sh_offset: symtab_offset as u32, sh_size: symtab_size as u32, sh_link: strtab_shndx as u32, sh_info: first_global_idx as u32, sh_addralign: 4, sh_entsize: sym_entry_size as u32 }.append_to(&mut elf);
         // .strtab
-        write_shdr32(&mut elf, shstrtab.offset_of(".strtab"), SHT_STRTAB, 0,
-                    0, strtab_offset as u32, strtab_data.len() as u32, 0, 0, 1, 0);
+        Shdr32 { sh_name: shstrtab.offset_of(".strtab"), sh_type: SHT_STRTAB, sh_flags: 0, sh_addr: 0, sh_offset: strtab_offset as u32, sh_size: strtab_data.len() as u32, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut elf);
         // .shstrtab
-        write_shdr32(&mut elf, shstrtab.offset_of(".shstrtab"), SHT_STRTAB, 0,
-                    0, shstrtab_offset as u32, shstrtab_data.len() as u32, 0, 0, 1, 0);
+        Shdr32 { sh_name: shstrtab.offset_of(".shstrtab"), sh_type: SHT_STRTAB, sh_flags: 0, sh_addr: 0, sh_offset: shstrtab_offset as u32, sh_size: shstrtab_data.len() as u32, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut elf);
     } else {
         // NULL
-        write_shdr64(&mut elf, 0, SHT_NULL, 0, 0, 0, 0, 0, 0, 0, 0);
+        Shdr64 { sh_name: 0, sh_type: SHT_NULL, sh_flags: 0, sh_addr: 0, sh_offset: 0, sh_size: 0, sh_link: 0, sh_info: 0, sh_addralign: 0, sh_entsize: 0 }.append_to(&mut elf);
         // Group sections (COMDAT)
         for (gi, (group_name, _members)) in comdat_groups.iter().enumerate() {
             let sh_name = shstrtab.offset_of(".group");
             let sig_sym_idx = find_symbol_index_shared(group_name, &sym_entries, &strtab, content_sections);
-            write_shdr64(&mut elf, sh_name, SHT_GROUP, 0,
-                        0, group_offsets[gi] as u64, group_section_data[gi].len() as u64,
-                        symtab_shndx as u32, sig_sym_idx,
-                        4, 4);
+            Shdr64 { sh_name, sh_type: SHT_GROUP, sh_flags: 0, sh_addr: 0, sh_offset: group_offsets[gi] as u64, sh_size: group_section_data[gi].len() as u64, sh_link: symtab_shndx as u32, sh_info: sig_sym_idx, sh_addralign: 4, sh_entsize: 4 }.append_to(&mut elf);
         }
         // Content sections
         for (i, sec_name) in content_sections.iter().enumerate() {
             let section = sections.get(sec_name).unwrap();
             let sh_name = shstrtab.offset_of(sec_name);
             let sh_offset = if section.sh_type == SHT_NOBITS { 0 } else { section_offsets[i] as u64 };
-            write_shdr64(&mut elf, sh_name, section.sh_type, section.sh_flags,
-                        0, sh_offset, section.data.len() as u64,
-                        0, 0, section.sh_addralign, 0);
+            Shdr64 { sh_name, sh_type: section.sh_type, sh_flags: section.sh_flags, sh_addr: 0, sh_offset, sh_size: section.data.len() as u64, sh_link: 0, sh_info: 0, sh_addralign: section.sh_addralign, sh_entsize: 0 }.append_to(&mut elf);
         }
         // Reloc sections
         reloc_idx = 0;
@@ -503,25 +485,17 @@ pub fn write_relocatable_object(
                     let sh_name = shstrtab.offset_of(&reloc_name);
                     let sh_offset = reloc_offsets[reloc_idx] as u64;
                     let sh_size = (section.relocs.len() * reloc_entry_size) as u64;
-                    write_shdr64(&mut elf, sh_name, reloc_sh_type, SHF_INFO_LINK,
-                                0, sh_offset, sh_size,
-                                symtab_shndx as u32, content_shndx_offset as u32 + i as u32,
-                                8, reloc_entry_size as u64);
+                    Shdr64 { sh_name, sh_type: reloc_sh_type, sh_flags: SHF_INFO_LINK, sh_addr: 0, sh_offset, sh_size, sh_link: symtab_shndx as u32, sh_info: content_shndx_offset as u32 + i as u32, sh_addralign: 8, sh_entsize: reloc_entry_size as u64 }.append_to(&mut elf);
                     reloc_idx += 1;
                 }
             }
         }
         // .symtab
-        write_shdr64(&mut elf, shstrtab.offset_of(".symtab"), SHT_SYMTAB, 0,
-                    0, symtab_offset as u64, symtab_size as u64,
-                    strtab_shndx as u32, first_global_idx as u32,
-                    8, sym_entry_size as u64);
+        Shdr64 { sh_name: shstrtab.offset_of(".symtab"), sh_type: SHT_SYMTAB, sh_flags: 0, sh_addr: 0, sh_offset: symtab_offset as u64, sh_size: symtab_size as u64, sh_link: strtab_shndx as u32, sh_info: first_global_idx as u32, sh_addralign: 8, sh_entsize: sym_entry_size as u64 }.append_to(&mut elf);
         // .strtab
-        write_shdr64(&mut elf, shstrtab.offset_of(".strtab"), SHT_STRTAB, 0,
-                    0, strtab_offset as u64, strtab_data.len() as u64, 0, 0, 1, 0);
+        Shdr64 { sh_name: shstrtab.offset_of(".strtab"), sh_type: SHT_STRTAB, sh_flags: 0, sh_addr: 0, sh_offset: strtab_offset as u64, sh_size: strtab_data.len() as u64, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut elf);
         // .shstrtab
-        write_shdr64(&mut elf, shstrtab.offset_of(".shstrtab"), SHT_STRTAB, 0,
-                    0, shstrtab_offset as u64, shstrtab_data.len() as u64, 0, 0, 1, 0);
+        Shdr64 { sh_name: shstrtab.offset_of(".shstrtab"), sh_type: SHT_STRTAB, sh_flags: 0, sh_addr: 0, sh_offset: shstrtab_offset as u64, sh_size: shstrtab_data.len() as u64, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut elf);
     }
 
     Ok(elf)

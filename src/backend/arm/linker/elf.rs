@@ -25,7 +25,7 @@ pub use crate::backend::elf::{
     DT_INIT_ARRAY, DT_INIT_ARRAYSZ, DT_FINI_ARRAY, DT_FINI_ARRAYSZ,
     DT_NULL, DT_RELACOUNT,
     DT_FLAGS, DF_BIND_NOW, DT_FLAGS_1, DF_1_NOW,
-    w16, w32, w64, write_bytes, wphdr,
+    w16, w32, w64, write_bytes, Phdr64,
 };
 
 use crate::backend::linker_common;

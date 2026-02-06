@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use super::elf_read::*;
 use super::relocations::{
     GlobalSym, MergedSection,
-    write_shdr, write_phdr, align_up, pad_to,
+    Shdr64, Phdr64, align_up, pad_to,
     build_gnu_hash,
 };
 use super::{reloc, symbols};
@@ -800,40 +800,37 @@ pub fn emit_executable(
     let rx_memsz = rx_segment_end_vaddr - BASE_ADDR;
 
     if !is_static {
-        write_phdr(&mut elf, 6 /* PT_PHDR */, PF_R, 64, BASE_ADDR + 64, BASE_ADDR + 64, phdr_size, phdr_size, 8);
-        write_phdr(&mut elf, PT_INTERP, PF_R, interp_offset, interp_vaddr, interp_vaddr, interp_size, interp_size, 1);
+        Phdr64 { p_type: 6 /* PT_PHDR */, p_flags: PF_R, p_offset: 64, p_vaddr: BASE_ADDR + 64, p_paddr: BASE_ADDR + 64, p_filesz: phdr_size, p_memsz: phdr_size, p_align: 8 }.append_to(&mut elf);
+        Phdr64 { p_type: PT_INTERP, p_flags: PF_R, p_offset: interp_offset, p_vaddr: interp_vaddr, p_paddr: interp_vaddr, p_filesz: interp_size, p_memsz: interp_size, p_align: 1 }.append_to(&mut elf);
     }
 
-    write_phdr(&mut elf, PT_RISCV_ATTRIBUTES, PF_R, riscv_attr_offset, 0, 0, riscv_attr_size, riscv_attr_size, 1);
-    write_phdr(&mut elf, PT_LOAD, PF_R | PF_X, 0, BASE_ADDR, BASE_ADDR, rx_filesz, rx_memsz, PAGE_SIZE);
-    write_phdr(&mut elf, PT_LOAD, PF_R | PF_W, rw_segment_start_offset, rw_segment_start_vaddr, rw_segment_start_vaddr, rw_segment_filesz, rw_segment_memsz, PAGE_SIZE);
+    Phdr64 { p_type: PT_RISCV_ATTRIBUTES, p_flags: PF_R, p_offset: riscv_attr_offset, p_vaddr: 0, p_paddr: 0, p_filesz: riscv_attr_size, p_memsz: riscv_attr_size, p_align: 1 }.append_to(&mut elf);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R | PF_X, p_offset: 0, p_vaddr: BASE_ADDR, p_paddr: BASE_ADDR, p_filesz: rx_filesz, p_memsz: rx_memsz, p_align: PAGE_SIZE }.append_to(&mut elf);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R | PF_W, p_offset: rw_segment_start_offset, p_vaddr: rw_segment_start_vaddr, p_paddr: rw_segment_start_vaddr, p_filesz: rw_segment_filesz, p_memsz: rw_segment_memsz, p_align: PAGE_SIZE }.append_to(&mut elf);
 
     if !is_static {
-        write_phdr(&mut elf, PT_DYNAMIC, PF_R | PF_W, dynamic_offset, dynamic_vaddr, dynamic_vaddr, dynamic_data.len() as u64, dynamic_data.len() as u64, 8);
+        Phdr64 { p_type: PT_DYNAMIC, p_flags: PF_R | PF_W, p_offset: dynamic_offset, p_vaddr: dynamic_vaddr, p_paddr: dynamic_vaddr, p_filesz: dynamic_data.len() as u64, p_memsz: dynamic_data.len() as u64, p_align: 8 }.append_to(&mut elf);
     }
 
-    write_phdr(&mut elf, PT_NOTE, PF_R, 0, 0, 0, 0, 0, 4);
+    Phdr64 { p_type: PT_NOTE, p_flags: PF_R, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 4 }.append_to(&mut elf);
 
     if let Some(&hdr_idx) = merged_map.get(".eh_frame_hdr") {
         let sz = merged_sections[hdr_idx].data.len() as u64;
-        write_phdr(&mut elf, PT_GNU_EH_FRAME, PF_R, section_offsets[hdr_idx],
-                   section_vaddrs[hdr_idx], section_vaddrs[hdr_idx], sz, sz, 4);
+        Phdr64 { p_type: PT_GNU_EH_FRAME, p_flags: PF_R, p_offset: section_offsets[hdr_idx], p_vaddr: section_vaddrs[hdr_idx], p_paddr: section_vaddrs[hdr_idx], p_filesz: sz, p_memsz: sz, p_align: 4 }.append_to(&mut elf);
     } else {
-        write_phdr(&mut elf, PT_GNU_EH_FRAME, PF_R, 0, 0, 0, 0, 0, 4);
+        Phdr64 { p_type: PT_GNU_EH_FRAME, p_flags: PF_R, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 4 }.append_to(&mut elf);
     }
 
-    write_phdr(&mut elf, PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0, 0, 0x10);
+    Phdr64 { p_type: PT_GNU_STACK, p_flags: PF_R | PF_W, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 0x10 }.append_to(&mut elf);
 
     if !is_static {
         let relro_filesz = relro_end_offset - rw_segment_start_offset;
         let relro_memsz = relro_end_vaddr - rw_segment_start_vaddr;
-        write_phdr(&mut elf, PT_GNU_RELRO, PF_R, rw_segment_start_offset, rw_segment_start_vaddr, rw_segment_start_vaddr,
-                   relro_filesz, relro_memsz, 1);
+        Phdr64 { p_type: PT_GNU_RELRO, p_flags: PF_R, p_offset: rw_segment_start_offset, p_vaddr: rw_segment_start_vaddr, p_paddr: rw_segment_start_vaddr, p_filesz: relro_filesz, p_memsz: relro_memsz, p_align: 1 }.append_to(&mut elf);
     }
 
     if has_tls {
-        write_phdr(&mut elf, PT_TLS, PF_R, tls_offset, tls_vaddr, tls_vaddr,
-                   tls_filesz, tls_memsz, tls_align);
+        Phdr64 { p_type: PT_TLS, p_flags: PF_R, p_offset: tls_offset, p_vaddr: tls_vaddr, p_paddr: tls_vaddr, p_filesz: tls_filesz, p_memsz: tls_memsz, p_align: tls_align }.append_to(&mut elf);
     }
 
     // Write section data
@@ -955,50 +952,35 @@ pub fn emit_executable(
 
     let mut _dynsym_shidx = 0u32;
     if !is_static {
-        write_shdr(&mut elf, get_name(".interp"), SHT_PROGBITS, SHF_ALLOC,
-                   interp_vaddr, interp_offset, interp_size, 0, 0, 1, 0);
+        Shdr64 { sh_name: get_name(".interp"), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC, sh_addr: interp_vaddr, sh_offset: interp_offset, sh_size: interp_size, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut elf);
         section_count += 1;
 
-        write_shdr(&mut elf, get_name(".gnu.hash"), 0x6ffffff6, SHF_ALLOC,
-                   gnu_hash_vaddr, gnu_hash_offset, gnu_hash_data.len() as u64,
-                   section_count + 1, 0, 8, 0);
+        Shdr64 { sh_name: get_name(".gnu.hash"), sh_type: 0x6ffffff6, sh_flags: SHF_ALLOC, sh_addr: gnu_hash_vaddr, sh_offset: gnu_hash_offset, sh_size: gnu_hash_data.len() as u64, sh_link: section_count + 1, sh_info: 0, sh_addralign: 8, sh_entsize: 0 }.append_to(&mut elf);
         section_count += 1;
         _dynsym_shidx = section_count;
 
-        write_shdr(&mut elf, get_name(".dynsym"), 11, SHF_ALLOC,
-                   dynsym_vaddr, dynsym_offset, dynsym_data.len() as u64,
-                   section_count + 1, 1, 8, 24);
+        Shdr64 { sh_name: get_name(".dynsym"), sh_type: 11, sh_flags: SHF_ALLOC, sh_addr: dynsym_vaddr, sh_offset: dynsym_offset, sh_size: dynsym_data.len() as u64, sh_link: section_count + 1, sh_info: 1, sh_addralign: 8, sh_entsize: 24 }.append_to(&mut elf);
         section_count += 1;
 
-        write_shdr(&mut elf, get_name(".dynstr"), SHT_STRTAB, SHF_ALLOC,
-                   dynstr_vaddr, dynstr_offset, dynstr_data.len() as u64, 0, 0, 1, 0);
+        Shdr64 { sh_name: get_name(".dynstr"), sh_type: SHT_STRTAB, sh_flags: SHF_ALLOC, sh_addr: dynstr_vaddr, sh_offset: dynstr_offset, sh_size: dynstr_data.len() as u64, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut elf);
         section_count += 1;
 
-        write_shdr(&mut elf, get_name(".gnu.version"), 0x6fffffff, SHF_ALLOC,
-                   versym_vaddr, versym_offset, versym_data.len() as u64,
-                   _dynsym_shidx, 0, 2, 2);
+        Shdr64 { sh_name: get_name(".gnu.version"), sh_type: 0x6fffffff, sh_flags: SHF_ALLOC, sh_addr: versym_vaddr, sh_offset: versym_offset, sh_size: versym_data.len() as u64, sh_link: _dynsym_shidx, sh_info: 0, sh_addralign: 2, sh_entsize: 2 }.append_to(&mut elf);
         section_count += 1;
 
-        write_shdr(&mut elf, get_name(".gnu.version_r"), 0x6ffffffe, SHF_ALLOC,
-                   verneed_vaddr, verneed_offset, verneed_data.len() as u64,
-                   section_count - 2, 1, 8, 0);
+        Shdr64 { sh_name: get_name(".gnu.version_r"), sh_type: 0x6ffffffe, sh_flags: SHF_ALLOC, sh_addr: verneed_vaddr, sh_offset: verneed_offset, sh_size: verneed_data.len() as u64, sh_link: section_count - 2, sh_info: 1, sh_addralign: 8, sh_entsize: 0 }.append_to(&mut elf);
         section_count += 1;
 
         if rela_dyn_size > 0 {
-            write_shdr(&mut elf, get_name(".rela.dyn"), SHT_RELA, SHF_ALLOC,
-                       rela_dyn_vaddr, rela_dyn_offset, rela_dyn_size,
-                       _dynsym_shidx, 0, 8, 24);
+            Shdr64 { sh_name: get_name(".rela.dyn"), sh_type: SHT_RELA, sh_flags: SHF_ALLOC, sh_addr: rela_dyn_vaddr, sh_offset: rela_dyn_offset, sh_size: rela_dyn_size, sh_link: _dynsym_shidx, sh_info: 0, sh_addralign: 8, sh_entsize: 24 }.append_to(&mut elf);
             section_count += 1;
         }
 
         let _rela_plt_shidx = section_count;
-        write_shdr(&mut elf, get_name(".rela.plt"), SHT_RELA, SHF_ALLOC | 0x40,
-                   rela_plt_vaddr, rela_plt_offset, rela_plt_size,
-                   _dynsym_shidx, section_count + 1, 8, 24);
+        Shdr64 { sh_name: get_name(".rela.plt"), sh_type: SHT_RELA, sh_flags: SHF_ALLOC | 0x40, sh_addr: rela_plt_vaddr, sh_offset: rela_plt_offset, sh_size: rela_plt_size, sh_link: _dynsym_shidx, sh_info: section_count + 1, sh_addralign: 8, sh_entsize: 24 }.append_to(&mut elf);
         section_count += 1;
 
-        write_shdr(&mut elf, get_name(".plt"), SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR,
-                   plt_vaddr, plt_offset, plt_size, 0, 0, 16, 16);
+        Shdr64 { sh_name: get_name(".plt"), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_EXECINSTR, sh_addr: plt_vaddr, sh_offset: plt_offset, sh_size: plt_size, sh_link: 0, sh_info: 0, sh_addralign: 16, sh_entsize: 16 }.append_to(&mut elf);
         section_count += 1;
     }
 
@@ -1011,36 +993,30 @@ pub fn emit_executable(
         let size = ms.data.len() as u64;
         let offset = section_offsets[si];
         let va = section_vaddrs[si];
-        write_shdr(&mut elf, get_name(&ms.name), sh_type, ms.sh_flags,
-                   va, offset, size, 0, 0, ms.align, 0);
+        Shdr64 { sh_name: get_name(&ms.name), sh_type, sh_flags: ms.sh_flags, sh_addr: va, sh_offset: offset, sh_size: size, sh_link: 0, sh_info: 0, sh_addralign: ms.align, sh_entsize: 0 }.append_to(&mut elf);
         section_count += 1;
     }
 
     // Generated RW sections
     if !is_static {
-        write_shdr(&mut elf, get_name(".dynamic"), 6, SHF_ALLOC | SHF_WRITE,
-                   dynamic_vaddr, dynamic_offset, dynamic_data.len() as u64,
-                   4, 0, 8, 16);
+        Shdr64 { sh_name: get_name(".dynamic"), sh_type: 6, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: dynamic_vaddr, sh_offset: dynamic_offset, sh_size: dynamic_data.len() as u64, sh_link: 4, sh_info: 0, sh_addralign: 8, sh_entsize: 16 }.append_to(&mut elf);
         section_count += 1;
     }
 
     if got_size > 0 {
-        write_shdr(&mut elf, get_name(".got"), SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
-                   got_vaddr, got_offset, got_size, 0, 0, 8, 8);
+        Shdr64 { sh_name: get_name(".got"), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: got_vaddr, sh_offset: got_offset, sh_size: got_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 }.append_to(&mut elf);
         section_count += 1;
     }
 
     if !is_static {
-        write_shdr(&mut elf, get_name(".got.plt"), SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
-                   got_plt_vaddr, got_plt_offset, got_plt_size, 0, 0, 8, 8);
+        Shdr64 { sh_name: get_name(".got.plt"), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: got_plt_vaddr, sh_offset: got_plt_offset, sh_size: got_plt_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 }.append_to(&mut elf);
         section_count += 1;
     }
 
     // .shstrtab
     let shstrtab_offset = elf.len() as u64;
     let shstrtab_shidx = section_count;
-    write_shdr(&mut elf, get_name(".shstrtab"), SHT_STRTAB, 0,
-               0, shstrtab_offset + 64, shstrtab.len() as u64, 0, 0, 1, 0);
+    Shdr64 { sh_name: get_name(".shstrtab"), sh_type: SHT_STRTAB, sh_flags: 0, sh_addr: 0, sh_offset: shstrtab_offset + 64, sh_size: shstrtab.len() as u64, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut elf);
     section_count += 1;
 
     // Patch e_shnum and e_shstrndx

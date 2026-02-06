@@ -425,22 +425,22 @@ pub(super) fn emit_dynamic_executable(
 
     // Program headers
     let mut ph = 64usize;
-    wphdr(&mut out, ph, PT_PHDR, PF_R, 64, BASE_ADDR+64, phdr_total_size, phdr_total_size, 8); ph += 56;
-    wphdr(&mut out, ph, PT_INTERP, PF_R, interp_offset, interp_addr, INTERP.len() as u64, INTERP.len() as u64, 1); ph += 56;
+    Phdr64 { p_type: PT_PHDR, p_flags: PF_R, p_offset: 64, p_vaddr: BASE_ADDR+64, p_paddr: BASE_ADDR+64, p_filesz: phdr_total_size, p_memsz: phdr_total_size, p_align: 8 }.write_at(&mut out, ph); ph += 56;
+    Phdr64 { p_type: PT_INTERP, p_flags: PF_R, p_offset: interp_offset, p_vaddr: interp_addr, p_paddr: interp_addr, p_filesz: INTERP.len() as u64, p_memsz: INTERP.len() as u64, p_align: 1 }.write_at(&mut out, ph); ph += 56;
     let ro_seg_end = rela_plt_offset + rela_plt_size;
-    wphdr(&mut out, ph, PT_LOAD, PF_R, 0, BASE_ADDR, ro_seg_end, ro_seg_end, PAGE_SIZE); ph += 56;
-    wphdr(&mut out, ph, PT_LOAD, PF_R|PF_X, text_page_offset, text_page_addr, text_total_size, text_total_size, PAGE_SIZE); ph += 56;
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R, p_offset: 0, p_vaddr: BASE_ADDR, p_paddr: BASE_ADDR, p_filesz: ro_seg_end, p_memsz: ro_seg_end, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R|PF_X, p_offset: text_page_offset, p_vaddr: text_page_addr, p_paddr: text_page_addr, p_filesz: text_total_size, p_memsz: text_total_size, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
     if rodata_total_size > 0 {
-        wphdr(&mut out, ph, PT_LOAD, PF_R, rodata_page_offset, rodata_page_addr, rodata_total_size, rodata_total_size, PAGE_SIZE); ph += 56;
+        Phdr64 { p_type: PT_LOAD, p_flags: PF_R, p_offset: rodata_page_offset, p_vaddr: rodata_page_addr, p_paddr: rodata_page_addr, p_filesz: rodata_total_size, p_memsz: rodata_total_size, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
     } else {
         // Empty placeholder segment to keep phdr count consistent
-        wphdr(&mut out, ph, PT_LOAD, PF_R, rodata_page_offset, rodata_page_addr, 0, 0, PAGE_SIZE); ph += 56;
+        Phdr64 { p_type: PT_LOAD, p_flags: PF_R, p_offset: rodata_page_offset, p_vaddr: rodata_page_addr, p_paddr: rodata_page_addr, p_filesz: 0, p_memsz: 0, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
     }
-    wphdr(&mut out, ph, PT_LOAD, PF_R|PF_W, rw_page_offset, rw_page_addr, rw_filesz, rw_memsz, PAGE_SIZE); ph += 56;
-    wphdr(&mut out, ph, PT_DYNAMIC, PF_R|PF_W, dynamic_offset, dynamic_addr, dynamic_size, dynamic_size, 8); ph += 56;
-    wphdr(&mut out, ph, PT_GNU_STACK, PF_R|PF_W, 0, 0, 0, 0, 0x10); ph += 56;
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R|PF_W, p_offset: rw_page_offset, p_vaddr: rw_page_addr, p_paddr: rw_page_addr, p_filesz: rw_filesz, p_memsz: rw_memsz, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
+    Phdr64 { p_type: PT_DYNAMIC, p_flags: PF_R|PF_W, p_offset: dynamic_offset, p_vaddr: dynamic_addr, p_paddr: dynamic_addr, p_filesz: dynamic_size, p_memsz: dynamic_size, p_align: 8 }.write_at(&mut out, ph); ph += 56;
+    Phdr64 { p_type: PT_GNU_STACK, p_flags: PF_R|PF_W, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 0x10 }.write_at(&mut out, ph); ph += 56;
     if has_tls {
-        wphdr(&mut out, ph, PT_TLS, PF_R, tls_file_offset, tls_addr, tls_file_size, tls_mem_size, tls_align);
+        Phdr64 { p_type: PT_TLS, p_flags: PF_R, p_offset: tls_file_offset, p_vaddr: tls_addr, p_paddr: tls_addr, p_filesz: tls_file_size, p_memsz: tls_mem_size, p_align: tls_align }.write_at(&mut out, ph);
     }
 
     // .interp

@@ -457,9 +457,7 @@ pub fn output_section_name(name: &str, sh_type: u32, sh_flags: u64) -> Option<St
 // ── ELF writing helpers ──────────────────────────────────────────────────
 // Re-exported from linker_common for backward compatibility with link.rs imports.
 
-pub use crate::backend::linker_common::write_elf64_shdr as write_shdr;
-pub use crate::backend::linker_common::write_elf64_phdr as write_phdr;
-pub use crate::backend::linker_common::write_elf64_phdr_at as write_phdr_at;
+pub use crate::backend::elf::{Shdr64, Phdr64};
 pub use crate::backend::linker_common::align_up_64 as align_up;
 pub use crate::backend::linker_common::pad_to;
 

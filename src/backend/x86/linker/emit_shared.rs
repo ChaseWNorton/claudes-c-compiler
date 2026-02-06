@@ -620,26 +620,26 @@ pub(super) fn emit_shared_library(
 
     // Program headers
     let mut ph = 64usize;
-    wphdr(&mut out, ph, PT_PHDR, PF_R, 64, base_addr + 64, phdr_total_size, phdr_total_size, 8); ph += 56;
+    Phdr64 { p_type: PT_PHDR, p_flags: PF_R, p_offset: 64, p_vaddr: base_addr + 64, p_paddr: base_addr + 64, p_filesz: phdr_total_size, p_memsz: phdr_total_size, p_align: 8 }.write_at(&mut out, ph); ph += 56;
     let ro_seg_end = dynstr_offset + dynstr_size;
-    wphdr(&mut out, ph, PT_LOAD, PF_R, 0, base_addr, ro_seg_end, ro_seg_end, PAGE_SIZE); ph += 56;
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R, p_offset: 0, p_vaddr: base_addr, p_paddr: base_addr, p_filesz: ro_seg_end, p_memsz: ro_seg_end, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
     if text_total_size > 0 {
-        wphdr(&mut out, ph, PT_LOAD, PF_R|PF_X, text_page_offset, text_page_addr, text_total_size, text_total_size, PAGE_SIZE); ph += 56;
+        Phdr64 { p_type: PT_LOAD, p_flags: PF_R|PF_X, p_offset: text_page_offset, p_vaddr: text_page_addr, p_paddr: text_page_addr, p_filesz: text_total_size, p_memsz: text_total_size, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
     } else {
-        wphdr(&mut out, ph, PT_LOAD, PF_R|PF_X, text_page_offset, text_page_addr, 0, 0, PAGE_SIZE); ph += 56;
+        Phdr64 { p_type: PT_LOAD, p_flags: PF_R|PF_X, p_offset: text_page_offset, p_vaddr: text_page_addr, p_paddr: text_page_addr, p_filesz: 0, p_memsz: 0, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
     }
-    wphdr(&mut out, ph, PT_LOAD, PF_R, rodata_page_offset, rodata_page_addr, rodata_total_size, rodata_total_size, PAGE_SIZE); ph += 56;
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R, p_offset: rodata_page_offset, p_vaddr: rodata_page_addr, p_paddr: rodata_page_addr, p_filesz: rodata_total_size, p_memsz: rodata_total_size, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
     let rw_filesz = offset - rw_page_offset;
     let rw_memsz = if bss_size > 0 { (bss_addr + bss_size) - rw_page_addr } else { rw_filesz };
-    wphdr(&mut out, ph, PT_LOAD, PF_R|PF_W, rw_page_offset, rw_page_addr, rw_filesz, rw_memsz, PAGE_SIZE); ph += 56;
-    wphdr(&mut out, ph, PT_DYNAMIC, PF_R|PF_W, dynamic_offset, dynamic_addr, dynamic_size, dynamic_size, 8); ph += 56;
-    wphdr(&mut out, ph, PT_GNU_STACK, PF_R|PF_W, 0, 0, 0, 0, 0x10); ph += 56;
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R|PF_W, p_offset: rw_page_offset, p_vaddr: rw_page_addr, p_paddr: rw_page_addr, p_filesz: rw_filesz, p_memsz: rw_memsz, p_align: PAGE_SIZE }.write_at(&mut out, ph); ph += 56;
+    Phdr64 { p_type: PT_DYNAMIC, p_flags: PF_R|PF_W, p_offset: dynamic_offset, p_vaddr: dynamic_addr, p_paddr: dynamic_addr, p_filesz: dynamic_size, p_memsz: dynamic_size, p_align: 8 }.write_at(&mut out, ph); ph += 56;
+    Phdr64 { p_type: PT_GNU_STACK, p_flags: PF_R|PF_W, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 0x10 }.write_at(&mut out, ph); ph += 56;
     if has_relro {
         let relro_filesz = relro_end_addr - rw_page_addr;
-        wphdr(&mut out, ph, PT_GNU_RELRO, PF_R, rw_page_offset, rw_page_addr, relro_filesz, relro_filesz, 1); ph += 56;
+        Phdr64 { p_type: PT_GNU_RELRO, p_flags: PF_R, p_offset: rw_page_offset, p_vaddr: rw_page_addr, p_paddr: rw_page_addr, p_filesz: relro_filesz, p_memsz: relro_filesz, p_align: 1 }.write_at(&mut out, ph); ph += 56;
     }
     if has_tls {
-        wphdr(&mut out, ph, PT_TLS, PF_R, tls_file_offset, tls_addr, tls_file_size, tls_mem_size, tls_align);
+        Phdr64 { p_type: PT_TLS, p_flags: PF_R, p_offset: tls_file_offset, p_vaddr: tls_addr, p_paddr: tls_addr, p_filesz: tls_file_size, p_memsz: tls_mem_size, p_align: tls_align }.write_at(&mut out, ph);
     }
 
     // .gnu.hash
@@ -1045,10 +1045,6 @@ pub(super) fn emit_shared_library(
 
     let get_shname = |n: &str| -> u32 { shstr_offsets.get(n).copied().unwrap_or(0) };
 
-    // Helper: write a 64-byte ELF64 section header
-    // Use shared write_elf64_shdr from linker_common (aliased locally for brevity)
-    let write_shdr_so = linker_common::write_elf64_shdr;
-
     // Pre-count section indices for cross-references
     let dynsym_shidx: u32 = 2; // NULL=0, .gnu.hash=1, .dynsym=2
     let dynstr_shidx: u32 = 3; // .dynstr=3
@@ -1095,90 +1091,74 @@ pub(super) fn emit_shared_library(
 
     // Write section headers
     // [0] NULL
-    write_shdr_so(&mut out, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    Shdr64 { sh_name: 0, sh_type: 0, sh_flags: 0, sh_addr: 0, sh_offset: 0, sh_size: 0, sh_link: 0, sh_info: 0, sh_addralign: 0, sh_entsize: 0 }.append_to(&mut out);
     // .gnu.hash
-    write_shdr_so(&mut out, get_shname(".gnu.hash"), SHT_GNU_HASH, SHF_ALLOC,
-               gnu_hash_addr, gnu_hash_offset, gnu_hash_size, dynsym_shidx, 0, 8, 0);
+    Shdr64 { sh_name: get_shname(".gnu.hash"), sh_type: SHT_GNU_HASH, sh_flags: SHF_ALLOC, sh_addr: gnu_hash_addr, sh_offset: gnu_hash_offset, sh_size: gnu_hash_size, sh_link: dynsym_shidx, sh_info: 0, sh_addralign: 8, sh_entsize: 0 }.append_to(&mut out);
     // .dynsym
-    write_shdr_so(&mut out, get_shname(".dynsym"), SHT_DYNSYM, SHF_ALLOC,
-               dynsym_addr, dynsym_offset, dynsym_size, dynstr_shidx, 1, 8, 24);
+    Shdr64 { sh_name: get_shname(".dynsym"), sh_type: SHT_DYNSYM, sh_flags: SHF_ALLOC, sh_addr: dynsym_addr, sh_offset: dynsym_offset, sh_size: dynsym_size, sh_link: dynstr_shidx, sh_info: 1, sh_addralign: 8, sh_entsize: 24 }.append_to(&mut out);
     // .dynstr
-    write_shdr_so(&mut out, get_shname(".dynstr"), SHT_STRTAB, SHF_ALLOC,
-               dynstr_addr, dynstr_offset, dynstr_size, 0, 0, 1, 0);
+    Shdr64 { sh_name: get_shname(".dynstr"), sh_type: SHT_STRTAB, sh_flags: SHF_ALLOC, sh_addr: dynstr_addr, sh_offset: dynstr_offset, sh_size: dynstr_size, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut out);
     // .rela.dyn
     if rela_dyn_size > 0 {
-        write_shdr_so(&mut out, get_shname(".rela.dyn"), SHT_RELA, SHF_ALLOC,
-                   rela_dyn_addr, rela_dyn_offset, rela_dyn_size, dynsym_shidx, 0, 8, 24);
+        Shdr64 { sh_name: get_shname(".rela.dyn"), sh_type: SHT_RELA, sh_flags: SHF_ALLOC, sh_addr: rela_dyn_addr, sh_offset: rela_dyn_offset, sh_size: rela_dyn_size, sh_link: dynsym_shidx, sh_info: 0, sh_addralign: 8, sh_entsize: 24 }.append_to(&mut out);
     }
     // .rela.plt
     if rela_plt_size > 0 {
-        write_shdr_so(&mut out, get_shname(".rela.plt"), SHT_RELA, SHF_ALLOC | 0x40,
-                   rela_plt_addr, rela_plt_offset, rela_plt_size, dynsym_shidx, 0, 8, 24);
+        Shdr64 { sh_name: get_shname(".rela.plt"), sh_type: SHT_RELA, sh_flags: SHF_ALLOC | 0x40, sh_addr: rela_plt_addr, sh_offset: rela_plt_offset, sh_size: rela_plt_size, sh_link: dynsym_shidx, sh_info: 0, sh_addralign: 8, sh_entsize: 24 }.append_to(&mut out);
     }
     // .plt
     if plt_size > 0 {
-        write_shdr_so(&mut out, get_shname(".plt"), SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR,
-                   plt_addr, plt_offset, plt_size, 0, 0, 16, 16);
+        Shdr64 { sh_name: get_shname(".plt"), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_EXECINSTR, sh_addr: plt_addr, sh_offset: plt_offset, sh_size: plt_size, sh_link: 0, sh_info: 0, sh_addralign: 16, sh_entsize: 16 }.append_to(&mut out);
     }
     // Merged output sections (text/rodata/data, excluding BSS/TLS/init_array/fini_array)
     for sec in output_sections.iter() {
         if sec.flags & SHF_ALLOC != 0 && sec.sh_type != SHT_NOBITS && sec.flags & SHF_TLS == 0
            && sec.name != ".init_array" && sec.name != ".fini_array" {
-            write_shdr_so(&mut out, get_shname(&sec.name), sec.sh_type, sec.flags,
-                       sec.addr, sec.file_offset, sec.mem_size, 0, 0, sec.alignment.max(1), 0);
+            Shdr64 { sh_name: get_shname(&sec.name), sh_type: sec.sh_type, sh_flags: sec.flags, sh_addr: sec.addr, sh_offset: sec.file_offset, sh_size: sec.mem_size, sh_link: 0, sh_info: 0, sh_addralign: sec.alignment.max(1), sh_entsize: 0 }.append_to(&mut out);
         }
     }
     // TLS data sections (.tdata)
     for sec in output_sections.iter() {
         if sec.flags & SHF_TLS != 0 && sec.flags & SHF_ALLOC != 0 && sec.sh_type != SHT_NOBITS {
-            write_shdr_so(&mut out, get_shname(&sec.name), sec.sh_type, sec.flags,
-                       sec.addr, sec.file_offset, sec.mem_size, 0, 0, sec.alignment.max(1), 0);
+            Shdr64 { sh_name: get_shname(&sec.name), sh_type: sec.sh_type, sh_flags: sec.flags, sh_addr: sec.addr, sh_offset: sec.file_offset, sh_size: sec.mem_size, sh_link: 0, sh_info: 0, sh_addralign: sec.alignment.max(1), sh_entsize: 0 }.append_to(&mut out);
         }
     }
     // TLS BSS sections (.tbss)
     for sec in output_sections.iter() {
         if sec.flags & SHF_TLS != 0 && sec.sh_type == SHT_NOBITS {
-            write_shdr_so(&mut out, get_shname(&sec.name), SHT_NOBITS, sec.flags,
-                       sec.addr, sec.file_offset, sec.mem_size, 0, 0, sec.alignment.max(1), 0);
+            Shdr64 { sh_name: get_shname(&sec.name), sh_type: SHT_NOBITS, sh_flags: sec.flags, sh_addr: sec.addr, sh_offset: sec.file_offset, sh_size: sec.mem_size, sh_link: 0, sh_info: 0, sh_addralign: sec.alignment.max(1), sh_entsize: 0 }.append_to(&mut out);
         }
     }
     // .init_array
     if has_init_array {
         if let Some(ia_sec) = output_sections.iter().find(|s| s.name == ".init_array") {
-            write_shdr_so(&mut out, get_shname(".init_array"), SHT_INIT_ARRAY, SHF_ALLOC | SHF_WRITE,
-                       init_array_addr, ia_sec.file_offset, init_array_size, 0, 0, 8, 8);
+            Shdr64 { sh_name: get_shname(".init_array"), sh_type: SHT_INIT_ARRAY, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: init_array_addr, sh_offset: ia_sec.file_offset, sh_size: init_array_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 }.append_to(&mut out);
         }
     }
     // .fini_array
     if has_fini_array {
         if let Some(fa_sec) = output_sections.iter().find(|s| s.name == ".fini_array") {
-            write_shdr_so(&mut out, get_shname(".fini_array"), SHT_FINI_ARRAY, SHF_ALLOC | SHF_WRITE,
-                       fini_array_addr, fa_sec.file_offset, fini_array_size, 0, 0, 8, 8);
+            Shdr64 { sh_name: get_shname(".fini_array"), sh_type: SHT_FINI_ARRAY, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: fini_array_addr, sh_offset: fa_sec.file_offset, sh_size: fini_array_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 }.append_to(&mut out);
         }
     }
     // .dynamic
-    write_shdr_so(&mut out, get_shname(".dynamic"), SHT_DYNAMIC, SHF_ALLOC | SHF_WRITE,
-               dynamic_addr, dynamic_offset, dynamic_size, dynstr_shidx, 0, 8, 16);
+    Shdr64 { sh_name: get_shname(".dynamic"), sh_type: SHT_DYNAMIC, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: dynamic_addr, sh_offset: dynamic_offset, sh_size: dynamic_size, sh_link: dynstr_shidx, sh_info: 0, sh_addralign: 8, sh_entsize: 16 }.append_to(&mut out);
     // .got.plt
     if got_plt_size > 0 {
-        write_shdr_so(&mut out, get_shname(".got.plt"), SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
-                   got_plt_addr, got_plt_offset, got_plt_size, 0, 0, 8, 8);
+        Shdr64 { sh_name: get_shname(".got.plt"), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: got_plt_addr, sh_offset: got_plt_offset, sh_size: got_plt_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 }.append_to(&mut out);
     }
     // .got
     if got_size > 0 {
-        write_shdr_so(&mut out, get_shname(".got"), SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
-                   got_addr, got_offset, got_size, 0, 0, 8, 8);
+        Shdr64 { sh_name: get_shname(".got"), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_WRITE, sh_addr: got_addr, sh_offset: got_offset, sh_size: got_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 }.append_to(&mut out);
     }
     // BSS sections (non-TLS)
     for sec in output_sections.iter() {
         if sec.sh_type == SHT_NOBITS && sec.flags & SHF_ALLOC != 0 && sec.flags & SHF_TLS == 0 {
-            write_shdr_so(&mut out, get_shname(&sec.name), SHT_NOBITS, sec.flags,
-                       sec.addr, sec.file_offset, sec.mem_size, 0, 0, sec.alignment.max(1), 0);
+            Shdr64 { sh_name: get_shname(&sec.name), sh_type: SHT_NOBITS, sh_flags: sec.flags, sh_addr: sec.addr, sh_offset: sec.file_offset, sh_size: sec.mem_size, sh_link: 0, sh_info: 0, sh_addralign: sec.alignment.max(1), sh_entsize: 0 }.append_to(&mut out);
         }
     }
     // .shstrtab (last section)
-    write_shdr_so(&mut out, get_shname(".shstrtab"), SHT_STRTAB, 0,
-               0, shstrtab_data_offset, shstrtab.len() as u64, 0, 0, 1, 0);
+    Shdr64 { sh_name: get_shname(".shstrtab"), sh_type: SHT_STRTAB, sh_flags: 0, sh_addr: 0, sh_offset: shstrtab_data_offset, sh_size: shstrtab.len() as u64, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 }.append_to(&mut out);
 
     // Patch ELF header with section header info
     out[40..48].copy_from_slice(&shdr_offset.to_le_bytes());     // e_shoff

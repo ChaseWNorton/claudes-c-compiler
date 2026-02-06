@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use super::elf_read::*;
 use super::relocations::{
     GlobalSym, MergedSection, R_RISCV_64, R_RISCV_CALL_PLT,
-    write_phdr_at, align_up, section_order,
+    Phdr64, align_up, section_order,
 };
 use super::{reloc, symbols};
 use crate::backend::linker_common::{self, DynStrTab};
@@ -476,28 +476,24 @@ pub fn emit_shared_library(
     // Program headers
     let mut ph = 64usize;
     // PT_PHDR
-    write_phdr_at(&mut elf, ph, 6, PF_R, 64, base_addr + 64, base_addr + 64, phdr_total_size, phdr_total_size, 8);
+    Phdr64 { p_type: 6, p_flags: PF_R, p_offset: 64, p_vaddr: base_addr + 64, p_paddr: base_addr + 64, p_filesz: phdr_total_size, p_memsz: phdr_total_size, p_align: 8 }.write_at(&mut elf, ph);
     ph += 56;
     // PT_LOAD (RO)
-    write_phdr_at(&mut elf, ph, PT_LOAD, PF_R, 0, base_addr, base_addr, ro_seg_end, ro_seg_end, PAGE_SIZE);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R, p_offset: 0, p_vaddr: base_addr, p_paddr: base_addr, p_filesz: ro_seg_end, p_memsz: ro_seg_end, p_align: PAGE_SIZE }.write_at(&mut elf, ph);
     ph += 56;
     // PT_LOAD (text)
-    write_phdr_at(&mut elf, ph, PT_LOAD, PF_R | PF_X, text_page_offset, text_page_addr, text_page_addr,
-                  text_total_size, text_total_size, PAGE_SIZE);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R | PF_X, p_offset: text_page_offset, p_vaddr: text_page_addr, p_paddr: text_page_addr, p_filesz: text_total_size, p_memsz: text_total_size, p_align: PAGE_SIZE }.write_at(&mut elf, ph);
     ph += 56;
     // PT_LOAD (rodata)
-    write_phdr_at(&mut elf, ph, PT_LOAD, PF_R, rodata_page_offset, rodata_page_addr, rodata_page_addr,
-                  rodata_total_size, rodata_total_size, PAGE_SIZE);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R, p_offset: rodata_page_offset, p_vaddr: rodata_page_addr, p_paddr: rodata_page_addr, p_filesz: rodata_total_size, p_memsz: rodata_total_size, p_align: PAGE_SIZE }.write_at(&mut elf, ph);
     ph += 56;
     // PT_LOAD (RW)
     let rw_filesz = offset - rw_page_offset;
     let rw_memsz = if bss_size > 0 { (bss_addr + bss_size) - rw_page_addr } else { rw_filesz };
-    write_phdr_at(&mut elf, ph, PT_LOAD, PF_R | PF_W, rw_page_offset, rw_page_addr, rw_page_addr,
-                  rw_filesz, rw_memsz, PAGE_SIZE);
+    Phdr64 { p_type: PT_LOAD, p_flags: PF_R | PF_W, p_offset: rw_page_offset, p_vaddr: rw_page_addr, p_paddr: rw_page_addr, p_filesz: rw_filesz, p_memsz: rw_memsz, p_align: PAGE_SIZE }.write_at(&mut elf, ph);
     ph += 56;
     // PT_DYNAMIC
-    write_phdr_at(&mut elf, ph, PT_DYNAMIC, PF_R | PF_W, dynamic_offset, dynamic_addr, dynamic_addr,
-                  dynamic_size, dynamic_size, 8);
+    Phdr64 { p_type: PT_DYNAMIC, p_flags: PF_R | PF_W, p_offset: dynamic_offset, p_vaddr: dynamic_addr, p_paddr: dynamic_addr, p_filesz: dynamic_size, p_memsz: dynamic_size, p_align: 8 }.write_at(&mut elf, ph);
     ph += 56;
     // PT_GNU_RELRO
     {
@@ -515,23 +511,21 @@ pub fn emit_shared_library(
         };
         let relro_filesz = relro_end - relro_start_addr;
         let relro_memsz = relro_filesz;
-        write_phdr_at(&mut elf, ph, PT_GNU_RELRO, PF_R, relro_start_offset, relro_start_addr,
-                      relro_start_addr, relro_filesz, relro_memsz, 1);
+        Phdr64 { p_type: PT_GNU_RELRO, p_flags: PF_R, p_offset: relro_start_offset, p_vaddr: relro_start_addr, p_paddr: relro_start_addr, p_filesz: relro_filesz, p_memsz: relro_memsz, p_align: 1 }.write_at(&mut elf, ph);
     }
     ph += 56;
     // PT_GNU_STACK
-    write_phdr_at(&mut elf, ph, PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0, 0, 0x10);
+    Phdr64 { p_type: PT_GNU_STACK, p_flags: PF_R | PF_W, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 0x10 }.write_at(&mut elf, ph);
     ph += 56;
     // PT_TLS (optional)
     if has_tls {
-        write_phdr_at(&mut elf, ph, PT_TLS, PF_R, tls_file_offset, tls_vaddr, tls_vaddr,
-                      tls_file_size, tls_mem_size, tls_align);
+        Phdr64 { p_type: PT_TLS, p_flags: PF_R, p_offset: tls_file_offset, p_vaddr: tls_vaddr, p_paddr: tls_vaddr, p_filesz: tls_file_size, p_memsz: tls_mem_size, p_align: tls_align }.write_at(&mut elf, ph);
         ph += 56;
     }
     // PT_RISCV_ATTRIBUTES (optional)
     if has_riscv_attrs {
         if let Some(_ms) = merged_sections.iter().find(|ms| ms.name == ".riscv.attributes") {
-            write_phdr_at(&mut elf, ph, PT_RISCV_ATTRIBUTES, PF_R, 0, 0, 0, 0, 0, 1);
+            Phdr64 { p_type: PT_RISCV_ATTRIBUTES, p_flags: PF_R, p_offset: 0, p_vaddr: 0, p_paddr: 0, p_filesz: 0, p_memsz: 0, p_align: 1 }.write_at(&mut elf, ph);
         }
     }
 

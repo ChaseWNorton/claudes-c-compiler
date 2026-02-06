@@ -89,66 +89,78 @@ pub fn write_bytes(buf: &mut [u8], off: usize, data: &[u8]) {
 
 // ── Section header writing ───────────────────────────────────────────────────
 
-/// Append an ELF64 section header to `buf`.
-pub fn write_shdr64(
-    buf: &mut Vec<u8>,
-    sh_name: u32, sh_type: u32, sh_flags: u64,
-    sh_addr: u64, sh_offset: u64, sh_size: u64,
-    sh_link: u32, sh_info: u32, sh_addralign: u64, sh_entsize: u64,
-) {
-    buf.extend_from_slice(&sh_name.to_le_bytes());
-    buf.extend_from_slice(&sh_type.to_le_bytes());
-    buf.extend_from_slice(&sh_flags.to_le_bytes());
-    buf.extend_from_slice(&sh_addr.to_le_bytes());
-    buf.extend_from_slice(&sh_offset.to_le_bytes());
-    buf.extend_from_slice(&sh_size.to_le_bytes());
-    buf.extend_from_slice(&sh_link.to_le_bytes());
-    buf.extend_from_slice(&sh_info.to_le_bytes());
-    buf.extend_from_slice(&sh_addralign.to_le_bytes());
-    buf.extend_from_slice(&sh_entsize.to_le_bytes());
+/// ELF64 section header fields.
+pub struct Shdr64 {
+    pub sh_name: u32, pub sh_type: u32, pub sh_flags: u64,
+    pub sh_addr: u64, pub sh_offset: u64, pub sh_size: u64,
+    pub sh_link: u32, pub sh_info: u32, pub sh_addralign: u64, pub sh_entsize: u64,
 }
 
-/// Append an ELF32 section header to `buf`.
-pub fn write_shdr32(
-    buf: &mut Vec<u8>,
-    sh_name: u32, sh_type: u32, sh_flags: u32,
-    sh_addr: u32, sh_offset: u32, sh_size: u32,
-    sh_link: u32, sh_info: u32, sh_addralign: u32, sh_entsize: u32,
-) {
-    buf.extend_from_slice(&sh_name.to_le_bytes());
-    buf.extend_from_slice(&sh_type.to_le_bytes());
-    buf.extend_from_slice(&sh_flags.to_le_bytes());
-    buf.extend_from_slice(&sh_addr.to_le_bytes());
-    buf.extend_from_slice(&sh_offset.to_le_bytes());
-    buf.extend_from_slice(&sh_size.to_le_bytes());
-    buf.extend_from_slice(&sh_link.to_le_bytes());
-    buf.extend_from_slice(&sh_info.to_le_bytes());
-    buf.extend_from_slice(&sh_addralign.to_le_bytes());
-    buf.extend_from_slice(&sh_entsize.to_le_bytes());
+impl Shdr64 {
+    pub fn append_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.sh_name.to_le_bytes());
+        buf.extend_from_slice(&self.sh_type.to_le_bytes());
+        buf.extend_from_slice(&self.sh_flags.to_le_bytes());
+        buf.extend_from_slice(&self.sh_addr.to_le_bytes());
+        buf.extend_from_slice(&self.sh_offset.to_le_bytes());
+        buf.extend_from_slice(&self.sh_size.to_le_bytes());
+        buf.extend_from_slice(&self.sh_link.to_le_bytes());
+        buf.extend_from_slice(&self.sh_info.to_le_bytes());
+        buf.extend_from_slice(&self.sh_addralign.to_le_bytes());
+        buf.extend_from_slice(&self.sh_entsize.to_le_bytes());
+    }
 }
 
-/// Write an ELF64 program header to `buf` at offset `off`.
-pub fn write_phdr64(
-    buf: &mut [u8], off: usize,
-    p_type: u32, p_flags: u32, p_offset: u64,
-    p_vaddr: u64, p_paddr: u64, p_filesz: u64, p_memsz: u64, p_align: u64,
-) {
-    w32(buf, off, p_type);
-    w32(buf, off + 4, p_flags);
-    w64(buf, off + 8, p_offset);
-    w64(buf, off + 16, p_vaddr);
-    w64(buf, off + 24, p_paddr);
-    w64(buf, off + 32, p_filesz);
-    w64(buf, off + 40, p_memsz);
-    w64(buf, off + 48, p_align);
+/// ELF32 section header fields.
+pub struct Shdr32 {
+    pub sh_name: u32, pub sh_type: u32, pub sh_flags: u32,
+    pub sh_addr: u32, pub sh_offset: u32, pub sh_size: u32,
+    pub sh_link: u32, pub sh_info: u32, pub sh_addralign: u32, pub sh_entsize: u32,
 }
 
-/// Write an ELF64 program header with `p_paddr = p_vaddr` (the common case).
-/// This is a convenience wrapper around `write_phdr64` used by multiple linker
-/// backends to avoid repeating the vaddr twice.
-#[inline]
-pub fn wphdr(buf: &mut [u8], off: usize, pt: u32, flags: u32, foff: u64, va: u64, fsz: u64, msz: u64, align: u64) {
-    write_phdr64(buf, off, pt, flags, foff, va, va, fsz, msz, align);
+impl Shdr32 {
+    pub fn append_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.sh_name.to_le_bytes());
+        buf.extend_from_slice(&self.sh_type.to_le_bytes());
+        buf.extend_from_slice(&self.sh_flags.to_le_bytes());
+        buf.extend_from_slice(&self.sh_addr.to_le_bytes());
+        buf.extend_from_slice(&self.sh_offset.to_le_bytes());
+        buf.extend_from_slice(&self.sh_size.to_le_bytes());
+        buf.extend_from_slice(&self.sh_link.to_le_bytes());
+        buf.extend_from_slice(&self.sh_info.to_le_bytes());
+        buf.extend_from_slice(&self.sh_addralign.to_le_bytes());
+        buf.extend_from_slice(&self.sh_entsize.to_le_bytes());
+    }
+}
+
+/// ELF64 program header fields.
+pub struct Phdr64 {
+    pub p_type: u32, pub p_flags: u32, pub p_offset: u64,
+    pub p_vaddr: u64, pub p_paddr: u64, pub p_filesz: u64, pub p_memsz: u64, pub p_align: u64,
+}
+
+impl Phdr64 {
+    pub fn write_at(&self, buf: &mut [u8], off: usize) {
+        w32(buf, off, self.p_type);
+        w32(buf, off + 4, self.p_flags);
+        w64(buf, off + 8, self.p_offset);
+        w64(buf, off + 16, self.p_vaddr);
+        w64(buf, off + 24, self.p_paddr);
+        w64(buf, off + 32, self.p_filesz);
+        w64(buf, off + 40, self.p_memsz);
+        w64(buf, off + 48, self.p_align);
+    }
+
+    pub fn append_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.p_type.to_le_bytes());
+        buf.extend_from_slice(&self.p_flags.to_le_bytes());
+        buf.extend_from_slice(&self.p_offset.to_le_bytes());
+        buf.extend_from_slice(&self.p_vaddr.to_le_bytes());
+        buf.extend_from_slice(&self.p_paddr.to_le_bytes());
+        buf.extend_from_slice(&self.p_filesz.to_le_bytes());
+        buf.extend_from_slice(&self.p_memsz.to_le_bytes());
+        buf.extend_from_slice(&self.p_align.to_le_bytes());
+    }
 }
 
 /// Write an ELF64 symbol table entry to `buf`.

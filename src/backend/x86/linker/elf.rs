@@ -22,7 +22,7 @@ pub use crate::backend::elf::{
     is_thin_archive,
     parse_linker_script_entries, LinkerScriptEntry,
     LinkerSymbolAddresses, get_standard_linker_symbols,
-    w16, w32, w64, write_bytes, wphdr,
+    w16, w32, w64, write_bytes, Shdr64, Phdr64,
 };
 
 use crate::backend::linker_common;

@@ -113,7 +113,7 @@ pub use archive::{load_archive_elf64, load_thin_archive_elf64};
 pub use resolve_lib::resolve_lib;
 
 // write.rs
-pub use write::{write_elf64_shdr, write_elf64_phdr, write_elf64_phdr_at, align_up_64, pad_to};
+pub use write::{align_up_64, pad_to};
 
 // args.rs
 pub use args::parse_linker_args;
