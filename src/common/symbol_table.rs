@@ -1,4 +1,5 @@
 use crate::common::types::CType;
+use crate::common::source::Span;
 use crate::common::fx_hash::FxHashMap;
 
 /// Linkage of a file-scope symbol per C11 6.2.2.
@@ -26,6 +27,8 @@ pub struct Symbol {
     pub linkage: Linkage,
     /// Whether this symbol was declared with the `const` qualifier.
     pub is_const: bool,
+    /// Source span of the declaration, used for -Wshadow notes.
+    pub span: Option<Span>,
 }
 
 /// A scope in the symbol table.
@@ -67,6 +70,20 @@ impl SymbolTable {
 
     pub fn lookup(&self, name: &str) -> Option<&Symbol> {
         for scope in self.scopes.iter().rev() {
+            if let Some(sym) = scope.symbols.get(name) {
+                return Some(sym);
+            }
+        }
+        None
+    }
+
+    /// Look up a name in all scopes except the current (innermost) one.
+    /// Used by -Wshadow to detect when a new declaration shadows an outer one.
+    pub fn lookup_outer(&self, name: &str) -> Option<&Symbol> {
+        if self.scopes.len() < 2 {
+            return None;
+        }
+        for scope in self.scopes[..self.scopes.len() - 1].iter().rev() {
             if let Some(sym) = scope.symbols.get(name) {
                 return Some(sym);
             }

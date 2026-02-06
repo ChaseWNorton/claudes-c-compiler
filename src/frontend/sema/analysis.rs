@@ -270,6 +270,7 @@ impl SemanticAnalyzer {
             explicit_alignment: None,
             linkage: func_linkage,
             is_const: false,
+            span: Some(func.span),
         });
 
         // Push scope for function body (both symbol table and type context,
@@ -287,6 +288,7 @@ impl SemanticAnalyzer {
                     explicit_alignment: None,
                     linkage: Linkage::None,
                     is_const: param.is_const,
+                    span: None,
                 });
             }
         }
@@ -582,12 +584,32 @@ impl SemanticAnalyzer {
             } else {
                 decl.is_const()
             };
+            // -Wshadow: check if this declaration shadows a variable in an outer scope.
+            // lookup_outer skips the current scope so same-scope redeclarations don't trigger.
+            if !init_decl.name.is_empty() {
+                if let Some(outer) = self.symbol_table.lookup_outer(&init_decl.name) {
+                    let outer_span = outer.span;
+                    let mut diag = crate::common::error::Diagnostic::warning_with_kind(
+                        format!("declaration of '{}' shadows a previous local", init_decl.name),
+                        crate::common::error::WarningKind::Shadow,
+                    ).with_span(init_decl.span);
+                    if let Some(s) = outer_span {
+                        diag = diag.with_note(
+                            crate::common::error::Diagnostic::note("shadowed declaration is here")
+                                .with_span(s),
+                        );
+                    }
+                    self.diagnostics.borrow_mut().emit(&diag);
+                }
+            }
+
             self.symbol_table.declare(Symbol {
                 name: init_decl.name.clone(),
                 ty: full_type,
                 explicit_alignment,
                 linkage: var_linkage,
                 is_const: var_is_const,
+                span: Some(init_decl.span),
             });
 
             // Track local variable declarations for -Wunused-variable.
@@ -839,6 +861,7 @@ impl SemanticAnalyzer {
                 explicit_alignment: None,
                 linkage: Linkage::None,
                 is_const: false,
+                span: None,
             });
             self.enum_counter += 1;
         }
@@ -3104,5 +3127,40 @@ mod tests {
     fn void_cast_suppresses_unused() {
         let (_, w) = sema_counts("int f(void) { int x = 42; (void)x; return 0; }");
         assert_eq!(w, 0, "(void)x should count as use");
+    }
+
+    // ---- -Wshadow: variable shadowing ----
+
+    #[test]
+    fn shadow_local_variable() {
+        let (_, w) = sema_counts("int f(void) { int x = 1; { int x = 2; return x; } }");
+        assert!(w > 0, "-Wshadow should warn when inner x shadows outer x");
+    }
+
+    #[test]
+    fn no_shadow_different_names() {
+        let (_, w) = sema_counts("int f(void) { int x = 1; { int y = 2; return x + y; } }");
+        assert_eq!(w, 0, "different names should not trigger -Wshadow");
+    }
+
+    #[test]
+    fn shadow_parameter() {
+        // Local variable shadows a function parameter
+        let (_, w) = sema_counts("int f(int x) { { int x = 2; return x; } }");
+        assert!(w > 0, "-Wshadow should warn when local shadows parameter");
+    }
+
+    #[test]
+    fn shadow_nested_blocks() {
+        // Three levels of shadowing
+        let (_, w) = sema_counts("int f(void) { int x = 1; { int x = 2; { int x = 3; return x; } } }");
+        assert!(w >= 2, "should warn for each shadowing level");
+    }
+
+    #[test]
+    fn no_shadow_same_scope() {
+        // Redeclaration in the same scope is not a shadow (it's a redeclaration)
+        let (_, w) = sema_counts("int f(void) { int x = 1; int x = 2; return x; }");
+        assert_eq!(w, 0, "same-scope redeclaration should not trigger -Wshadow");
     }
 }

@@ -124,6 +124,9 @@ pub enum WarningKind {
     /// A local variable was declared but never used.
     /// GCC flag: -Wunused-variable
     UnusedVariable,
+    /// A declaration shadows a variable in an outer scope.
+    /// GCC flag: -Wshadow
+    Shadow,
 }
 
 impl WarningKind {
@@ -141,6 +144,7 @@ impl WarningKind {
             WarningKind::IntConversion => "int-conversion",
             WarningKind::IncompatiblePointerTypes => "incompatible-pointer-types",
             WarningKind::UnusedVariable => "unused-variable",
+            WarningKind::Shadow => "shadow",
         }
     }
 
@@ -160,6 +164,7 @@ impl WarningKind {
             "int-conversion" => Some(WarningKind::IntConversion),
             "incompatible-pointer-types" => Some(WarningKind::IncompatiblePointerTypes),
             "unused-variable" => Some(WarningKind::UnusedVariable),
+            "shadow" => Some(WarningKind::Shadow),
             _ => None,
         }
     }
@@ -201,6 +206,7 @@ impl WarningKind {
             WarningKind::IntConversion,
             WarningKind::IncompatiblePointerTypes,
             WarningKind::UnusedVariable,
+            WarningKind::Shadow,
         ]
     }
 }
