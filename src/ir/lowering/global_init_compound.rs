@@ -177,8 +177,8 @@ impl Lowerer {
         }
 
         // Emit each element
-        for ai in 0..arr_size {
-            if let Some(init) = index_inits[ai] {
+        for init_opt in &index_inits[..arr_size] {
+            if let Some(init) = init_opt {
                 if let Initializer::Expr(ref expr) = init {
                     self.emit_expr_to_compound(elements, expr, ptr_size, None);
                 } else {

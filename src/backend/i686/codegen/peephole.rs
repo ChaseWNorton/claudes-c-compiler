@@ -877,10 +877,10 @@ fn global_store_forwarding(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
 
     // Collect jump targets so we can invalidate at them
     let mut jump_targets = std::collections::HashSet::new();
-    for i in 0..len {
-        if infos[i].is_nop() { continue; }
-        let s = trimmed(store, &infos[i], i);
-        match infos[i].kind {
+    for (i, info) in infos.iter().enumerate().take(len) {
+        if info.is_nop() { continue; }
+        let s = trimmed(store, info, i);
+        match info.kind {
             LineKind::Jmp | LineKind::JmpIndirect => {
                 if let Some(target) = parse_jmp_target(s) {
                     jump_targets.insert(target.trim().to_string());
@@ -895,13 +895,13 @@ fn global_store_forwarding(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
         }
     }
 
-    for i in 0..len {
-        if infos[i].is_nop() { continue; }
+    for (i, info) in infos[..len].iter_mut().enumerate() {
+        if info.is_nop() { continue; }
 
-        match infos[i].kind {
+        match info.kind {
             LineKind::Label => {
                 // Check if this label is a jump target (invalidate all)
-                let s = trimmed(store, &infos[i], i);
+                let s = trimmed(store, &*info, i);
                 if let Some(name) = s.strip_suffix(':') {
                     if jump_targets.contains(name) {
                         // This label is a jump target - invalidate all mappings
@@ -924,14 +924,14 @@ fn global_store_forwarding(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
                     if stored_reg != REG_NONE && stored_size == load_size {
                         if stored_reg == load_reg {
                             // Same register - just eliminate the load
-                            infos[i].kind = LineKind::Nop;
+                            info.kind = LineKind::Nop;
                             changed = true;
                             forwarded = true;
                         } else {
                             // Different register - forward as reg-reg move
                             let new_line = format!("    {} {}, {}", load_size.mnemonic(), reg32_name(stored_reg), reg32_name(load_reg));
                             store.replace(i, new_line);
-                            infos[i] = LineInfo {
+                            *info = LineInfo {
                                 kind: LineKind::Move { dst: load_reg, src: stored_reg },
                                 trim_start: 4,
                                 has_indirect_mem: false,
@@ -993,13 +993,13 @@ fn global_store_forwarding(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
                 }
                 // If line has indirect memory access or might clobber stack,
                 // invalidate all (conservative)
-                let s = trimmed(store, &infos[i], i);
-                if infos[i].has_indirect_mem || s.contains("(%ebp)") {
+                let s = trimmed(store, &*info, i);
+                if info.has_indirect_mem || s.contains("(%ebp)") {
                     // Only invalidate the specific slot if we can parse it
-                    let off = infos[i].ebp_offset;
+                    let off = info.ebp_offset;
                     if off != EBP_OFFSET_NONE && off < 0 && (-off as usize) <= SLOT_COUNT {
                         slots[(-off - 1) as usize] = (REG_NONE, MoveSize::L);
-                    } else if infos[i].has_indirect_mem {
+                    } else if info.has_indirect_mem {
                         // Indirect memory - could write anywhere, invalidate all
                         slots = [(REG_NONE, MoveSize::L); SLOT_COUNT];
                     }
@@ -1013,7 +1013,7 @@ fn global_store_forwarding(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
             }
             LineKind::Push { .. } | LineKind::Pop { .. } => {
                 // Push/pop modify esp but don't affect ebp-relative slots
-                if let LineKind::Pop { reg } = infos[i].kind {
+                if let LineKind::Pop { reg } = info.kind {
                     // Pop writes to a register, invalidate mappings
                     for slot in slots.iter_mut() {
                         if slot.0 == reg {
@@ -1304,8 +1304,8 @@ fn fuse_compare_and_branch(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
             let range_end = seq_indices[test_scan];
             let mut load_offsets: [i32; MAX_TRACKED_STORE_LOAD_OFFSETS] = [0; MAX_TRACKED_STORE_LOAD_OFFSETS];
             let mut load_count = 0usize;
-            for ri in range_start..=range_end {
-                let off = match infos[ri].kind {
+            for (ri, info_ri) in infos.iter().enumerate().take(range_end + 1).skip(range_start) {
+                let off = match info_ri.kind {
                     LineKind::LoadEbp { offset, .. } => Some(offset),
                     // Check NOP'd lines too - earlier passes (store/load forwarding)
                     // may have NOP'd a load that originally matched a store.
@@ -1464,29 +1464,29 @@ fn eliminate_never_read_stores(store: &LineStore, infos: &mut [LineInfo]) {
     let mut read_ranges: Vec<(i32, i32)> = Vec::new();
     let mut addr_taken = false;
 
-    for i in 0..len {
-        if infos[i].is_nop() { continue; }
-        match infos[i].kind {
+    for (i, info) in infos.iter().enumerate().take(len) {
+        if info.is_nop() { continue; }
+        match info.kind {
             LineKind::LoadEbp { offset, size, .. } => {
                 read_ranges.push((offset, size.byte_size()));
             }
             _ => {
-                let s = trimmed(store, &infos[i], i);
+                let s = trimmed(store, info, i);
                 // Check for address-of-slot patterns (leal N(%ebp), %reg or leal N(%esp), %reg)
                 if s.starts_with("leal ") && (s.contains("(%ebp)") || s.contains("(%esp)")) {
                     addr_taken = true;
                 }
                 // Indirect memory access means we can't know what's read
-                if infos[i].has_indirect_mem {
+                if info.has_indirect_mem {
                     addr_taken = true;
                 }
                 // Track %ebp-relative reads from non-Load/Store instructions
                 // (e.g. folded memory operands like "cmpl -44(%ebp), %eax")
-                let ebp_off = infos[i].ebp_offset;
+                let ebp_off = info.ebp_offset;
                 if ebp_off != EBP_OFFSET_NONE {
                     // Conservatively treat as a 4-byte read (max store size on i686)
                     read_ranges.push((ebp_off, 4));
-                } else if !matches!(infos[i].kind, LineKind::StoreEbp { .. }) && s.contains("(%ebp)") {
+                } else if !matches!(info.kind, LineKind::StoreEbp { .. }) && s.contains("(%ebp)") {
                     // Unknown %ebp reference - bail out
                     addr_taken = true;
                 }
@@ -1497,15 +1497,15 @@ fn eliminate_never_read_stores(store: &LineStore, infos: &mut [LineInfo]) {
     if addr_taken { return; }
 
     // Remove stores to slots whose byte range is never overlapped by any load
-    for i in 0..len {
-        if infos[i].is_nop() { continue; }
-        if let LineKind::StoreEbp { offset, size, .. } = infos[i].kind {
+    for info in infos.iter_mut().take(len) {
+        if info.is_nop() { continue; }
+        if let LineKind::StoreEbp { offset, size, .. } = info.kind {
             let store_bytes = size.byte_size();
             let is_read = read_ranges.iter().any(|&(r_off, r_sz)| {
                 ranges_overlap(offset, store_bytes, r_off, r_sz)
             });
             if !is_read {
-                infos[i].kind = LineKind::Nop;
+                info.kind = LineKind::Nop;
             }
         }
     }
@@ -1522,15 +1522,15 @@ fn eliminate_unused_callee_saves(store: &LineStore, infos: &mut [LineInfo]) {
 
     // Find function boundaries
     let mut func_start = 0;
-    for i in 0..len {
-        if infos[i].is_nop() { continue; }
+    for (i, info) in infos.iter().enumerate().take(len) {
+        if info.is_nop() { continue; }
         // Look for the prologue pattern: pushl %ebp; movl %esp, %ebp
-        if let LineKind::Push { reg: REG_EBP } = infos[i].kind {
+        if let LineKind::Push { reg: REG_EBP } = info.kind {
             func_start = i;
             break;
         }
-        if infos[i].kind == LineKind::Label {
-            let s = trimmed(store, &infos[i], i);
+        if info.kind == LineKind::Label {
+            let s = trimmed(store, info, i);
             if s.ends_with(':') && !s.starts_with('.') {
                 func_start = i;
             }
@@ -1545,9 +1545,9 @@ fn eliminate_unused_callee_saves(store: &LineStore, infos: &mut [LineInfo]) {
         let mut pop_idx = None;
         let mut used = false;
 
-        for i in func_start..len {
-            if infos[i].is_nop() { continue; }
-            match infos[i].kind {
+        for (i, info) in infos.iter().enumerate().take(len).skip(func_start) {
+            if info.is_nop() { continue; }
+            match info.kind {
                 LineKind::Push { reg: r } if r == reg && push_idx.is_none() => {
                     push_idx = Some(i);
                 }
@@ -1557,7 +1557,7 @@ fn eliminate_unused_callee_saves(store: &LineStore, infos: &mut [LineInfo]) {
                 _ => {
                     if push_idx.is_some() && pop_idx.is_none() {
                         // Check if the register is referenced in the body
-                        let s = trimmed(store, &infos[i], i);
+                        let s = trimmed(store, info, i);
                         if line_references_reg(s, reg) {
                             used = true;
                         }

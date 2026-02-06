@@ -106,8 +106,8 @@ pub(super) fn fuse_compare_and_branch(store: &mut LineStore, infos: &mut [LineIn
             let range_end = seq_indices[test_scan];
             let mut load_offsets: [i32; MAX_TRACKED_STORE_LOAD_OFFSETS] = [0; MAX_TRACKED_STORE_LOAD_OFFSETS];
             let mut load_count = 0usize;
-            for ri in range_start..=range_end {
-                let off = match infos[ri].kind {
+            for (ri, info_ri) in infos.iter().enumerate().take(range_end + 1).skip(range_start) {
+                let off = match info_ri.kind {
                     LineKind::LoadRbp { offset, .. } => Some(offset),
                     LineKind::Nop => {
                         let orig = classify_line(store.get(ri));

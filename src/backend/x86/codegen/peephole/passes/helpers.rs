@@ -35,9 +35,9 @@ pub(super) fn replace_reg_family(line: &str, old_id: RegId, new_id: RegId) -> St
     let mut result = line.to_string();
     // Replace in order from longest to shortest to avoid partial matches.
     // 64-bit names are longest (e.g., %r10, %rax), then 32-bit, 16-bit, 8-bit.
-    for size_idx in 0..4 {
-        let old_name = REG_NAMES[size_idx][old_id as usize];
-        let new_name = REG_NAMES[size_idx][new_id as usize];
+    for size_names in &REG_NAMES {
+        let old_name = size_names[old_id as usize];
+        let new_name = size_names[new_id as usize];
         if old_name == new_name {
             continue;
         }
@@ -221,11 +221,11 @@ pub(super) fn extract_jump_target(s: &str) -> Option<&str> {
 /// only allowing other LoadRbp or Pop or Other (for stack teardown) instructions between.
 pub(super) fn is_near_epilogue(infos: &[LineInfo], pos: usize) -> bool {
     let limit = (pos + 20).min(infos.len());
-    for j in (pos + 1)..limit {
-        if infos[j].is_nop() {
+    for info in infos.iter().take(limit).skip(pos + 1) {
+        if info.is_nop() {
             continue;
         }
-        match infos[j].kind {
+        match info.kind {
             // More callee-save restores or stack teardown moves are expected
             LineKind::LoadRbp { .. } | LineKind::Pop { .. } | LineKind::SelfMove => continue,
             // Stack pointer restoration (movq %rbp, %rsp) is classified as Other

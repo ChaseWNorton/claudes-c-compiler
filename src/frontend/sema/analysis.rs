@@ -326,7 +326,7 @@ impl SemanticAnalyzer {
         for (name, span) in self.local_declarations.drain(..) {
             if !self.used_variables.contains(&name) && !name.starts_with('_') {
                 self.diagnostics.borrow_mut().warning_with_kind(
-                    &format!("unused variable '{}'", name),
+                    format!("unused variable '{}'", name),
                     span,
                     crate::common::error::WarningKind::UnusedVariable,
                 );
@@ -973,7 +973,7 @@ impl SemanticAnalyzer {
                 if let Some(ret_ty) = &self.current_return_type {
                     if !matches!(ret_ty, CType::Void) {
                         self.diagnostics.borrow_mut().warning_with_kind(
-                            &format!("'return' with no value, in function returning '{}'", ret_ty),
+                            format!("'return' with no value, in function returning '{}'", ret_ty),
                             *span,
                             crate::common::error::WarningKind::ReturnType,
                         );
@@ -1893,8 +1893,8 @@ impl SemanticAnalyzer {
         };
 
         // Division / modulo by zero
-        if matches!(op, BinOp::Div | BinOp::Mod) {
-            if rv.to_i64() == Some(0) {
+        if matches!(op, BinOp::Div | BinOp::Mod)
+            && rv.to_i64() == Some(0) {
                 self.diagnostics.borrow_mut().warning_with_kind(
                     "division by zero in constant expression",
                     span,
@@ -1902,7 +1902,6 @@ impl SemanticAnalyzer {
                 );
                 return;
             }
-        }
 
         // Shift count >= type width
         if matches!(op, BinOp::Shl | BinOp::Shr) {

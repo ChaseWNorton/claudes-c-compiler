@@ -204,8 +204,8 @@ pub fn emit_shared_library(
         }
         gnu_hash_chains[i_idx] = h & !1;
     }
-    for bucket_idx in 0..gnu_hash_nbuckets as usize {
-        if gnu_hash_buckets[bucket_idx] == 0 { continue; }
+    for (bucket_idx, &bucket_val) in gnu_hash_buckets.iter().enumerate() {
+        if bucket_val == 0 { continue; }
         let mut last_in_bucket = 0;
         for (i_idx, &h) in hashed_sym_hashes.iter().enumerate() {
             if (h % gnu_hash_nbuckets) as usize == bucket_idx {

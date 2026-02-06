@@ -256,8 +256,8 @@ pub(super) fn emit_executable(
         gnu_hash_chains[i] = h & !1; // clear bit 0 (will set later for last in chain)
     }
     // Mark the last symbol in each bucket chain with bit 0 set
-    for bucket_idx in 0..gnu_hash_nbuckets as usize {
-        if gnu_hash_buckets[bucket_idx] == 0 { continue; }
+    for (bucket_idx, &bucket_val) in gnu_hash_buckets.iter().enumerate() {
+        if bucket_val == 0 { continue; }
         let mut last_in_bucket = 0;
         for (i, &h) in hashed_sym_hashes.iter().enumerate() {
             if (h % gnu_hash_nbuckets) as usize == bucket_idx {
@@ -863,13 +863,13 @@ pub(super) fn emit_executable(
         }
 
         // .rela.iplt - R_X86_64_IRELATIVE relocations
-        for i in 0..num_ifunc {
+        for (i, &resolver_addr) in ifunc_resolver_addrs.iter().enumerate() {
             let rp = rela_iplt_offset as usize + i * 24;
             let r_offset = ifunc_got_addr + i as u64 * 8;
             // r_info: (0 << 32) | R_X86_64_IRELATIVE
             w64(&mut out, rp, r_offset);
             w64(&mut out, rp+8, R_X86_64_IRELATIVE as u64);
-            w64(&mut out, rp+16, ifunc_resolver_addrs[i]); // r_addend = resolver address
+            w64(&mut out, rp+16, resolver_addr); // r_addend = resolver address
         }
     }
 
@@ -877,9 +877,9 @@ pub(super) fn emit_executable(
     // Snapshot globals to avoid borrow issues
     let globals_snap: HashMap<String, GlobalSymbol> = globals.clone();
 
-    for obj_idx in 0..objects.len() {
-        for sec_idx in 0..objects[obj_idx].sections.len() {
-            let relas = &objects[obj_idx].relocations[sec_idx];
+    for (obj_idx, obj) in objects.iter().enumerate() {
+        for (sec_idx, _sec) in obj.sections.iter().enumerate() {
+            let relas = &obj.relocations[sec_idx];
             if relas.is_empty() { continue; }
             let (out_idx, sec_off) = match section_map.get(&(obj_idx, sec_idx)) {
                 Some(&v) => v, None => continue,
@@ -889,8 +889,8 @@ pub(super) fn emit_executable(
 
             for rela in relas {
                 let si = rela.sym_idx as usize;
-                if si >= objects[obj_idx].symbols.len() { continue; }
-                let sym = &objects[obj_idx].symbols[si];
+                if si >= obj.symbols.len() { continue; }
+                let sym = &obj.symbols[si];
                 let p = sa + sec_off + rela.offset;
                 let fp = (sfo + sec_off + rela.offset) as usize;
                 let a = rela.addend;

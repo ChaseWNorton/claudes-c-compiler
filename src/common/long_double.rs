@@ -277,8 +277,8 @@ fn cmp_shifted(remainder: &[u32], divisor: &[u32], shift: u32) -> bool {
 
     if remainder.len() > div_top {
         // Remainder has more limbs, check if upper limbs are non-zero
-        for i in div_top..remainder.len() {
-            if remainder[i] != 0 {
+        for &limb in &remainder[div_top..] {
+            if limb != 0 {
                 return true;
             }
         }
@@ -320,14 +320,14 @@ fn sub_shifted(remainder: &mut [u32], divisor: &[u32], shift: u32) {
     let bit_shift = shift % 32;
 
     let mut borrow: i64 = 0;
-    for i in word_shift..remainder.len() {
+    for (i, limb) in remainder.iter_mut().enumerate().skip(word_shift) {
         let d = shifted_limb(divisor, i, word_shift, bit_shift) as i64;
-        let val = remainder[i] as i64 - d - borrow;
+        let val = *limb as i64 - d - borrow;
         if val < 0 {
-            remainder[i] = (val + (1i64 << 32)) as u32;
+            *limb = (val + (1i64 << 32)) as u32;
             borrow = 1;
         } else {
-            remainder[i] = val as u32;
+            *limb = val as u32;
             borrow = 0;
         }
     }

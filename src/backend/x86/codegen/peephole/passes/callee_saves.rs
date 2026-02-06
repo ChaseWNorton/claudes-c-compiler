@@ -97,11 +97,11 @@ pub(super) fn eliminate_unused_callee_saves(store: &LineStore, infos: &mut [Line
         // Find the end of this function by looking for the .size directive.
         let body_start = j;
         let mut func_end = len;
-        for k in body_start..len {
-            if infos[k].is_nop() {
+        for (k, info_k) in infos.iter().enumerate().take(len).skip(body_start) {
+            if info_k.is_nop() {
                 continue;
             }
-            let line = infos[k].trimmed(store.get(k));
+            let line = info_k.trimmed(store.get(k));
             if line.starts_with(".size ") {
                 func_end = k + 1;
                 break;

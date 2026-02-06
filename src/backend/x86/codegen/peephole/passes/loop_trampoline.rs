@@ -113,10 +113,10 @@ pub(super) fn eliminate_loop_trampolines(store: &mut LineStore, infos: &mut [Lin
     let mut label_positions: Vec<(u32, usize)> = Vec::new();
     let mut max_label_num: u32 = 0;
 
-    for i in 0..len {
-        if infos[i].is_nop() { continue; }
-        if infos[i].kind == LineKind::Label {
-            let trimmed = infos[i].trimmed(store.get(i));
+    for (i, info_i) in infos.iter().enumerate().take(len) {
+        if info_i.is_nop() { continue; }
+        if info_i.kind == LineKind::Label {
+            let trimmed = info_i.trimmed(store.get(i));
             if let Some(n) = parse_label_number(trimmed) {
                 label_positions.push((n, i));
                 if n > max_label_num { max_label_num = n; }
@@ -143,17 +143,17 @@ pub(super) fn eliminate_loop_trampolines(store: &mut LineStore, infos: &mut [Lin
     let mut label_branch_count: Vec<u32> = vec![0; table_size];
     let mut cond_branch_for_label: Vec<usize> = vec![usize::MAX; table_size];
 
-    for i in 0..len {
-        if infos[i].is_nop() { continue; }
-        match infos[i].kind {
+    for (i, info_i) in infos.iter().enumerate().take(len) {
+        if info_i.is_nop() { continue; }
+        match info_i.kind {
             LineKind::Jmp | LineKind::CondJmp => {
-                let trimmed = infos[i].trimmed(store.get(i));
+                let trimmed = info_i.trimmed(store.get(i));
                 if let Some(target) = extract_jump_target(trimmed) {
                     if let Some(n) = parse_dotl_number(target) {
                         if (n as usize) < table_size {
                             label_branch_count[n as usize] += 1;
                             // Record the first conditional branch targeting this label
-                            if infos[i].kind == LineKind::CondJmp
+                            if info_i.kind == LineKind::CondJmp
                                 && cond_branch_for_label[n as usize] == usize::MAX
                             {
                                 cond_branch_for_label[n as usize] = i;

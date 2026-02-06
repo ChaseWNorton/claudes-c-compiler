@@ -470,18 +470,18 @@ pub(super) fn emit_executable(
         .collect();
     // Build a resolved address map for GOT entries by walking relocations
     let mut got_resolved: HashMap<String, u64> = HashMap::new();
-    for obj_idx in 0..objects.len() {
-        for sec_idx in 0..objects[obj_idx].sections.len() {
-            for rela in &objects[obj_idx].relocations[sec_idx] {
+    for (obj_idx, obj) in objects.iter().enumerate() {
+        for sec_idx in 0..obj.sections.len() {
+            for rela in &obj.relocations[sec_idx] {
                 match rela.rela_type {
                     R_AARCH64_ADR_GOT_PAGE | R_AARCH64_LD64_GOT_LO12_NC |
                     reloc::R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21 | reloc::R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC => {
                         let si = rela.sym_idx as usize;
-                        if si < objects[obj_idx].symbols.len() {
-                            let sym = &objects[obj_idx].symbols[si];
+                        if si < obj.symbols.len() {
+                            let sym = &obj.symbols[si];
                             let key = reloc::got_key(obj_idx, sym);
                             got_resolved.entry(key).or_insert_with(|| {
-                                
+
                                 reloc::resolve_sym(obj_idx, sym, &globals_snap,
                                                               section_map, output_sections)
                             });

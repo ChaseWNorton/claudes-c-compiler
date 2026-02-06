@@ -40,9 +40,8 @@ pub fn merge_sections_elf64_gc(
 ) {
     let mut output_map: HashMap<String, usize> = HashMap::new();
 
-    for obj_idx in 0..objects.len() {
-        for sec_idx in 0..objects[obj_idx].sections.len() {
-            let sec = &objects[obj_idx].sections[sec_idx];
+    for (obj_idx, obj) in objects.iter().enumerate() {
+        for (sec_idx, sec) in obj.sections.iter().enumerate() {
             if sec.flags & SHF_ALLOC == 0 { continue; }
             if matches!(sec.sh_type, SHT_NULL | SHT_STRTAB | SHT_SYMTAB | SHT_RELA | SHT_REL | SHT_GROUP) { continue; }
             if sec.flags & SHF_EXCLUDE != 0 { continue; }

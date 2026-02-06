@@ -162,24 +162,24 @@ pub(super) fn eliminate_dead_stores(store: &LineStore, infos: &mut [LineInfo]) -
         let mut slot_overwritten = false;
         let mut pattern_len: usize = 0;
 
-        for j in (i + 1)..end {
-            if infos[j].is_nop() {
+        for (j, info_j) in infos.iter().enumerate().take(end).skip(i + 1) {
+            if info_j.is_nop() {
                 continue;
             }
 
-            if infos[j].is_barrier() {
+            if info_j.is_barrier() {
                 slot_read = true;
                 break;
             }
 
-            if let LineKind::LoadRbp { offset: load_off, size: load_sz, .. } = infos[j].kind {
+            if let LineKind::LoadRbp { offset: load_off, size: load_sz, .. } = info_j.kind {
                 if ranges_overlap(store_offset, store_bytes, load_off, load_sz.byte_size()) {
                     slot_read = true;
                     break;
                 }
             }
 
-            if let LineKind::StoreRbp { offset: new_off, size: new_sz, .. } = infos[j].kind {
+            if let LineKind::StoreRbp { offset: new_off, size: new_sz, .. } = info_j.kind {
                 let new_bytes = new_sz.byte_size();
                 if new_off <= store_offset && new_off + new_bytes >= store_offset + store_bytes {
                     slot_overwritten = true;
@@ -193,12 +193,12 @@ pub(super) fn eliminate_dead_stores(store: &LineStore, infos: &mut [LineInfo]) -
 
             // Check Other and Cmp lines for rbp references. Cmp lines can
             // have memory operands after memory fold (e.g., cmpq -N(%rbp), %rax).
-            if matches!(infos[j].kind, LineKind::Other { .. } | LineKind::Cmp) {
-                if infos[j].has_indirect_mem {
+            if matches!(info_j.kind, LineKind::Other { .. } | LineKind::Cmp) {
+                if info_j.has_indirect_mem {
                     slot_read = true;
                     break;
                 }
-                let rbp_off = infos[j].rbp_offset;
+                let rbp_off = info_j.rbp_offset;
                 if rbp_off != RBP_OFFSET_NONE {
                     if rbp_off >= store_offset && rbp_off < store_offset + store_bytes {
                         slot_read = true;
@@ -215,7 +215,7 @@ pub(super) fn eliminate_dead_stores(store: &LineStore, infos: &mut [LineInfo]) -
                 }
                 let pattern = std::str::from_utf8(&pattern_bytes[..pattern_len])
                     .expect("rbp pattern produced non-UTF8");
-                let line = infos[j].trimmed(store.get(j));
+                let line = info_j.trimmed(store.get(j));
                 if line.contains(pattern) {
                     slot_read = true;
                     break;
@@ -227,7 +227,7 @@ pub(super) fn eliminate_dead_stores(store: &LineStore, infos: &mut [LineInfo]) -
                         let check_len = write_rbp_pattern(&mut sub_pattern_bytes, check_off);
                         let check_pattern = std::str::from_utf8(&sub_pattern_bytes[..check_len])
                             .expect("rbp pattern produced non-UTF8");
-                        let line = infos[j].trimmed(store.get(j));
+                        let line = info_j.trimmed(store.get(j));
                         if line.contains(check_pattern) {
                             slot_read = true;
                             break;
@@ -315,11 +315,11 @@ pub(super) fn eliminate_never_read_stores(store: &LineStore, infos: &mut [LineIn
 
         // Find the end of this function
         let mut func_end = len;
-        for k in body_start..len {
-            if infos[k].is_nop() {
+        for (k, info_k) in infos.iter().enumerate().take(len).skip(body_start) {
+            if info_k.is_nop() {
                 continue;
             }
-            let line = infos[k].trimmed(store.get(k));
+            let line = info_k.trimmed(store.get(k));
             if line.starts_with(".size ") {
                 func_end = k + 1;
                 break;
@@ -330,32 +330,32 @@ pub(super) fn eliminate_never_read_stores(store: &LineStore, infos: &mut [LineIn
         let mut has_indirect = false;
         let mut read_ranges: Vec<(i32, i32)> = Vec::new();
 
-        for k in body_start..func_end {
-            if infos[k].is_nop() {
+        for (k, info_k) in infos.iter().enumerate().take(func_end).skip(body_start) {
+            if info_k.is_nop() {
                 continue;
             }
 
-            if infos[k].has_indirect_mem {
+            if info_k.has_indirect_mem {
                 has_indirect = true;
                 break;
             }
 
-            match infos[k].kind {
+            match info_k.kind {
                 LineKind::StoreRbp { .. } => {}
                 LineKind::LoadRbp { offset, size, .. } => {
                     read_ranges.push((offset, size.byte_size()));
                 }
                 LineKind::Other { .. } => {
-                    let rbp_off = infos[k].rbp_offset;
+                    let rbp_off = info_k.rbp_offset;
                     if rbp_off != RBP_OFFSET_NONE {
-                        let line = infos[k].trimmed(store.get(k));
+                        let line = info_k.trimmed(store.get(k));
                         if line.starts_with("leaq ") {
                             has_indirect = true;
                             break;
                         }
                         read_ranges.push((rbp_off, 32));
                     } else {
-                        let line = infos[k].trimmed(store.get(k));
+                        let line = info_k.trimmed(store.get(k));
                         if line.contains("(%rbp)") {
                             has_indirect = true;
                             break;
@@ -366,7 +366,7 @@ pub(super) fn eliminate_never_read_stores(store: &LineStore, infos: &mut [LineIn
                 | LineKind::Label | LineKind::Jmp | LineKind::CondJmp
                 | LineKind::JmpIndirect | LineKind::Ret | LineKind::Directive => {}
                 _ => {
-                    let line = infos[k].trimmed(store.get(k));
+                    let line = info_k.trimmed(store.get(k));
                     let rbp_off = parse_rbp_offset(line);
                     if rbp_off != RBP_OFFSET_NONE {
                         read_ranges.push((rbp_off, 8));
@@ -384,17 +384,17 @@ pub(super) fn eliminate_never_read_stores(store: &LineStore, infos: &mut [LineIn
         }
 
         // Phase 2: Eliminate stores to unread slots
-        for k in body_start..func_end {
-            if infos[k].is_nop() {
+        for info_k in infos.iter_mut().take(func_end).skip(body_start) {
+            if info_k.is_nop() {
                 continue;
             }
-            if let LineKind::StoreRbp { offset, size, .. } = infos[k].kind {
+            if let LineKind::StoreRbp { offset, size, .. } = info_k.kind {
                 let store_bytes = size.byte_size();
                 let is_read = read_ranges.iter().any(|&(r_off, r_sz)| {
                     ranges_overlap(offset, store_bytes, r_off, r_sz)
                 });
                 if !is_read {
-                    mark_nop(&mut infos[k]);
+                    mark_nop(info_k);
                 }
             }
         }

@@ -11,8 +11,8 @@ pub(crate) fn parse_vtypei(operands: &[Operand], start_idx: usize) -> Result<u32
     let mut ta: u32 = 0;   // Tail agnostic
     let mut ma: u32 = 0;   // Mask agnostic
 
-    for i in start_idx..operands.len() {
-        let name = match &operands[i] {
+    for op in &operands[start_idx..] {
+        let name = match op {
             Operand::Symbol(s) => s.to_lowercase(),
             Operand::Reg(s) => s.to_lowercase(),
             // Raw immediate: treat as pre-encoded vtypei value

@@ -117,8 +117,8 @@ impl RiscvCodegen {
         // For variadic functions: save all integer register args (a0-a7) to the
         // register save area at POSITIVE offsets from s0.
         if func.is_variadic {
-            for i in 0..8usize {
-                self.emit_store_to_s0(RISCV_ARG_REGS[i], (i as i64) * 8, "sd");
+            for (i, &reg) in RISCV_ARG_REGS.iter().enumerate() {
+                self.emit_store_to_s0(reg, (i as i64) * 8, "sd");
             }
         }
 
@@ -147,8 +147,8 @@ impl RiscvCodegen {
         let has_f128_reg_params = param_classes.iter().any(|c| matches!(c, ParamClass::F128GpPair { .. }));
         let f128_save_offset: i64 = if has_f128_reg_params && !func.is_variadic {
             self.state.emit("    addi sp, sp, -128");
-            for i in 0..8usize {
-                self.state.emit_fmt(format_args!("    sd {}, {}(sp)", RISCV_ARG_REGS[i], i * 8));
+            for (i, &reg) in RISCV_ARG_REGS.iter().enumerate() {
+                self.state.emit_fmt(format_args!("    sd {}, {}(sp)", reg, i * 8));
             }
             for i in 0..8usize {
                 self.state.emit_fmt(format_args!("    fsd fa{}, {}(sp)", i, 64 + i * 8));

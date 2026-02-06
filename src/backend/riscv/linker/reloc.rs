@@ -565,8 +565,7 @@ pub fn collect_gd_tls_relax_info(
                     );
                     gd_tls_relax_info.insert(auipc_vaddr, (sym_val, reloc.addend));
 
-                    for j in (ri + 1)..relocs.len().min(ri + 8) {
-                        let call_reloc = &relocs[j];
+                    for call_reloc in &relocs[(ri + 1)..relocs.len().min(ri + 8)] {
                         if call_reloc.rela_type == R_RISCV_CALL_PLT {
                             let call_sym = &obj.symbols[call_reloc.sym_idx as usize];
                             if call_sym.name == "__tls_get_addr" {

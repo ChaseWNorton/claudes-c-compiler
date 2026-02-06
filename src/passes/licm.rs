@@ -866,8 +866,8 @@ fn topological_sort_instructions(mut insts: Vec<Instruction>) -> Vec<Instruction
 
     // Kahn's algorithm
     let mut queue: Vec<usize> = Vec::new();
-    for i in 0..n {
-        if in_degree[i] == 0 {
+    for (i, &deg) in in_degree.iter().enumerate() {
+        if deg == 0 {
             queue.push(i);
         }
     }

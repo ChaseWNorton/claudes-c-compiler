@@ -575,8 +575,8 @@ fn parse_directive(line: &str) -> Result<AsmItem, String> {
                         let mut data = Vec::with_capacity(total_bytes as usize);
                         let value_bytes = value.to_le_bytes();
                         for _ in 0..repeat {
-                            for j in 0..size.min(8) as usize {
-                                data.push(value_bytes[j]);
+                            for &b in &value_bytes[..size.min(8) as usize] {
+                                data.push(b);
                             }
                         }
                         Ok(AsmItem::Ascii(data))

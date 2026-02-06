@@ -47,8 +47,8 @@ pub(super) fn build_gnu_hash_32(hashed_names: &[String], symoffset: u32) -> (Vec
     }
 
     // Mark the last symbol in each bucket chain with bit 0 set
-    for bucket_idx in 0..nbuckets as usize {
-        if buckets[bucket_idx] == 0 { continue; }
+    for (bucket_idx, &bucket_val) in buckets.iter().enumerate() {
+        if bucket_val == 0 { continue; }
         let mut last_in_bucket = 0;
         for (i, &h) in sym_hashes.iter().enumerate() {
             if (h % nbuckets) as usize == bucket_idx {

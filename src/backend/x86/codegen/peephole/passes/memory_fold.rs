@@ -121,8 +121,8 @@ pub(super) fn fold_memory_operands(store: &mut LineStore, infos: &mut [LineInfo]
                     if src_fam == load_reg && dst_fam != load_reg {
                         // Check for intervening store to the same offset
                         let mut intervening_store = false;
-                        for k in (i + 1)..j {
-                            if let LineKind::StoreRbp { offset: so, .. } = infos[k].kind {
+                        for info_k in infos.iter().take(j).skip(i + 1) {
+                            if let LineKind::StoreRbp { offset: so, .. } = info_k.kind {
                                 if so == offset {
                                     intervening_store = true;
                                     break;

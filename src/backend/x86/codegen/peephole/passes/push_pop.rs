@@ -22,11 +22,11 @@ pub(super) fn eliminate_push_pop_pairs(store: &LineStore, infos: &mut [LineInfo]
             if let LineKind::Pop { reg: pop_reg_id } = infos[j].kind {
                 if pop_reg_id == push_reg_id {
                     let mut safe = true;
-                    for k in (i + 1)..j {
-                        if infos[k].is_nop() {
+                    for (k, info_k) in infos.iter().enumerate().take(j).skip(i + 1) {
+                        if info_k.is_nop() {
                             continue;
                         }
-                        if instruction_modifies_reg_id(&infos[k], push_reg_id) {
+                        if instruction_modifies_reg_id(info_k, push_reg_id) {
                             safe = false;
                             break;
                         }
@@ -34,7 +34,7 @@ pub(super) fn eliminate_push_pop_pairs(store: &LineStore, infos: &mut [LineInfo]
                         // (pushfq, popfq, pushfl, popfl, etc.) -- these read/write
                         // the stack slot that our push placed data on, so eliminating
                         // the push/pop pair would be incorrect.
-                        if instruction_modifies_stack(store.get(k), &infos[k]) {
+                        if instruction_modifies_stack(store.get(k), info_k) {
                             safe = false;
                             break;
                         }
@@ -137,8 +137,8 @@ pub(super) fn eliminate_binop_push_pop_pattern(store: &mut LineStore, infos: &mu
                 if pop_reg_id == push_reg_id {
                     // Check no stack-modifying instructions between push and pop
                     let mut stack_safe = true;
-                    for k in (i + 1)..=pop_idx {
-                        if !infos[k].is_nop() && instruction_modifies_stack(store.get(k), &infos[k]) {
+                    for (k, info_k) in infos.iter().enumerate().take(pop_idx + 1).skip(i + 1) {
+                        if !info_k.is_nop() && instruction_modifies_stack(store.get(k), info_k) {
                             stack_safe = false;
                             break;
                         }

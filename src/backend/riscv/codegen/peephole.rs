@@ -481,10 +481,10 @@ fn eliminate_redundant_jumps(lines: &[String], kinds: &mut [LineKind], n: usize)
 
 fn eliminate_self_moves(kinds: &mut [LineKind], n: usize) -> bool {
     let mut changed = false;
-    for i in 0..n {
-        if let LineKind::Move { dst, src } = kinds[i] {
+    for kind in kinds[..n].iter_mut() {
+        if let LineKind::Move { dst, src } = *kind {
             if dst == src {
-                kinds[i] = LineKind::Nop;
+                *kind = LineKind::Nop;
                 changed = true;
             }
         }
@@ -1006,15 +1006,15 @@ fn global_dead_store_elimination(lines: &[String], kinds: &mut [LineKind], n: us
 
     // Phase 2: Remove stores whose byte range does not overlap any load range
     let mut changed = false;
-    for i in 0..n {
-        if let LineKind::StoreS0 { offset, is_word, .. } = kinds[i] {
+    for kind in kinds[..n].iter_mut() {
+        if let LineKind::StoreS0 { offset, is_word, .. } = *kind {
             let store_size = if is_word { 4 } else { 8 };
             let overlaps_any_load = loaded_ranges.iter().any(|&(load_off, load_sz)| {
                 // Two ranges [a, a+as) and [b, b+bs) overlap iff a < b+bs && b < a+as
                 offset < load_off + load_sz && load_off < offset + store_size
             });
             if !overlaps_any_load {
-                kinds[i] = LineKind::Nop;
+                *kind = LineKind::Nop;
                 changed = true;
             }
         }

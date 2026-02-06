@@ -139,8 +139,8 @@ pub(crate) fn eliminate_dead_code(func: &mut IrFunction) -> usize {
         let has_spans = block.source_spans.len() == original_len && !block.source_spans.is_empty();
         if has_spans {
             let mut write_idx = 0;
-            for read_idx in 0..original_len {
-                if !dead_flags[read_idx] {
+            for (read_idx, &is_dead) in dead_flags[..original_len].iter().enumerate() {
+                if !is_dead {
                     if write_idx != read_idx {
                         block.instructions.swap(write_idx, read_idx);
                         block.source_spans.swap(write_idx, read_idx);

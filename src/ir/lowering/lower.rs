@@ -1305,8 +1305,7 @@ impl Lowerer {
     pub(super) fn emit_string_to_alloca(&mut self, alloca: Value, s: &str, base_offset: usize, max_bytes: usize) {
         let str_bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
         let bytes_to_copy = str_bytes.len().min(max_bytes);
-        for j in 0..bytes_to_copy {
-            let byte = str_bytes[j];
+        for (j, &byte) in str_bytes[..bytes_to_copy].iter().enumerate() {
             let val = Operand::Const(IrConst::I8(byte as i8));
             let offset = Operand::Const(IrConst::ptr_int((base_offset + j) as i64));
             let addr = self.fresh_value();

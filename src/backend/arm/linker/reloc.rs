@@ -109,17 +109,17 @@ pub fn got_key(obj_idx: usize, sym: &Symbol) -> String {
 /// (which use GOT entries containing the TP offset).
 pub fn collect_got_symbols(objects: &[ElfObject]) -> Vec<(String, GotEntryKind)> {
     let mut got_syms: Vec<(String, GotEntryKind)> = Vec::new();
-    for obj_idx in 0..objects.len() {
-        for sec_idx in 0..objects[obj_idx].sections.len() {
-            for rela in &objects[obj_idx].relocations[sec_idx] {
+    for (obj_idx, obj) in objects.iter().enumerate() {
+        for sec_idx in 0..obj.sections.len() {
+            for rela in &obj.relocations[sec_idx] {
                 let kind = match rela.rela_type {
                     R_AARCH64_ADR_GOT_PAGE | R_AARCH64_LD64_GOT_LO12_NC => GotEntryKind::Regular,
                     R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21 | R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC => GotEntryKind::TlsIE,
                     _ => continue,
                 };
                 let si = rela.sym_idx as usize;
-                if si < objects[obj_idx].symbols.len() {
-                    let key = got_key(obj_idx, &objects[obj_idx].symbols[si]);
+                if si < obj.symbols.len() {
+                    let key = got_key(obj_idx, &obj.symbols[si]);
                     if !got_syms.iter().any(|(k, _)| k == &key) {
                         got_syms.push((key, kind));
                     }
@@ -149,9 +149,9 @@ pub fn apply_relocations(
     tls_info: &TlsInfo,
     got_info: &GotInfo,
 ) -> Result<(), String> {
-    for obj_idx in 0..objects.len() {
-        for sec_idx in 0..objects[obj_idx].sections.len() {
-            let relas = &objects[obj_idx].relocations[sec_idx];
+    for (obj_idx, obj) in objects.iter().enumerate() {
+        for sec_idx in 0..obj.sections.len() {
+            let relas = &obj.relocations[sec_idx];
             if relas.is_empty() { continue; }
             let (out_idx, sec_off) = match section_map.get(&(obj_idx, sec_idx)) {
                 Some(&v) => v,
@@ -162,8 +162,8 @@ pub fn apply_relocations(
 
             for rela in relas {
                 let si = rela.sym_idx as usize;
-                if si >= objects[obj_idx].symbols.len() { continue; }
-                let sym = &objects[obj_idx].symbols[si];
+                if si >= obj.symbols.len() { continue; }
+                let sym = &obj.symbols[si];
                 let p = sa + sec_off + rela.offset;
                 let fp = (sfo + sec_off + rela.offset) as usize;
                 let a = rela.addend;
@@ -171,7 +171,7 @@ pub fn apply_relocations(
                 let gkey = got_key(obj_idx, sym);
 
                 apply_one_reloc(out, fp, rela.rela_type, s, a, p, &sym.name,
-                                &objects[obj_idx].source_name, tls_info, got_info, &gkey)?;
+                                &obj.source_name, tls_info, got_info, &gkey)?;
             }
         }
     }

@@ -173,9 +173,9 @@ fn invalidate_reg_flat(
 
 fn collect_jump_targets(store: &LineStore, infos: &[LineInfo], len: usize) -> JumpTargets {
     let mut max_label_num: u32 = 0;
-    for i in 0..len {
-        if infos[i].kind == LineKind::Label {
-            let trimmed = infos[i].trimmed(store.get(i));
+    for (i, info_i) in infos.iter().enumerate().take(len) {
+        if info_i.kind == LineKind::Label {
+            let trimmed = info_i.trimmed(store.get(i));
             if let Some(n) = parse_label_number(trimmed) {
                 if n > max_label_num {
                     max_label_num = n;
@@ -186,10 +186,10 @@ fn collect_jump_targets(store: &LineStore, infos: &[LineInfo], len: usize) -> Ju
     let mut is_jump_target = vec![false; (max_label_num + 1) as usize];
     let mut has_non_numeric_jump_targets = false;
     let mut has_indirect_jump = false;
-    for i in 0..len {
-        match infos[i].kind {
+    for (i, info_i) in infos.iter().enumerate().take(len) {
+        match info_i.kind {
             LineKind::Jmp | LineKind::CondJmp => {
-                let trimmed = infos[i].trimmed(store.get(i));
+                let trimmed = info_i.trimmed(store.get(i));
                 if let Some(target) = extract_jump_target(trimmed) {
                     if let Some(n) = parse_dotl_number(target) {
                         if (n as usize) < is_jump_target.len() {
