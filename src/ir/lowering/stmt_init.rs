@@ -52,7 +52,9 @@ impl Lowerer {
             if let Some(vs) = decl.resolve_vector_size(elem_size) {
                 ext_da.apply_vector_size(vs);
             }
-            self.globals.insert(declarator.name.clone(), GlobalInfo::from_analysis(&ext_da));
+            let mut ginfo = GlobalInfo::from_analysis(&ext_da);
+            ginfo.var.is_atomic = decl.is_atomic();
+            self.globals.insert(declarator.name.clone(), ginfo);
         }
         true // Handled, caller should continue to next declarator
     }

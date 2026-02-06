@@ -1,5 +1,6 @@
 use crate::frontend::parser::ast::{Expr, TypeSpecifier, UnaryOp};
 use crate::ir::reexports::{
+    AtomicOrdering,
     Instruction,
     IrBinOp,
     IrConst,
@@ -187,6 +188,25 @@ impl Lowerer {
         let addr = self.lvalue_addr(lv);
         let seg_override = self.lvalue_addr_space(lv);
         self.emit(Instruction::Store { val, ptr: addr, ty , seg_override });
+    }
+
+    /// Store a value to an lvalue atomically with SeqCst ordering.
+    pub(super) fn store_lvalue_atomic(&mut self, lv: &LValue, val: Operand, ty: IrType) {
+        let addr = self.lvalue_addr(lv);
+        self.emit(Instruction::AtomicStore { ptr: Operand::Value(addr), val, ty, ordering: AtomicOrdering::SeqCst });
+    }
+
+    /// Check whether an expression refers to an `_Atomic`-qualified variable.
+    pub(super) fn is_expr_atomic(&self, expr: &Expr) -> bool {
+        if let Expr::Identifier(name, _) = expr {
+            if let Some(info) = self.func_state.as_ref().and_then(|fs| fs.locals.get(name)) {
+                return info.var.is_atomic;
+            }
+            if let Some(ginfo) = self.globals.get(name) {
+                return ginfo.var.is_atomic;
+            }
+        }
+        false
     }
 
     /// Compute the address of an array element: base_addr + index * elem_size.

@@ -9,6 +9,8 @@
 
 use crate::frontend::parser::ast::{BinOp, Expr};
 use crate::ir::reexports::{
+    AtomicOrdering,
+    AtomicRmwOp,
     Instruction,
     IrBinOp,
     IrConst,
@@ -74,7 +76,11 @@ impl Lowerer {
         };
 
         if let Some(lv) = lv {
-            self.store_lvalue_typed(&lv, rhs_val, lhs_ty);
+            if self.is_expr_atomic(lhs) {
+                self.store_lvalue_atomic(&lv, rhs_val, lhs_ty);
+            } else {
+                self.store_lvalue_typed(&lv, rhs_val, lhs_ty);
+            }
             return rhs_val;
         }
         rhs_val
@@ -448,6 +454,13 @@ impl Lowerer {
             return result;
         }
 
+        // Atomic RMW for _Atomic variables with supported ops (C11 6.5.16.2p3).
+        if self.is_expr_atomic(lhs) {
+            if let Some(rmw_op) = Self::binop_to_atomic_rmw(op) {
+                return self.lower_atomic_rmw_compound_assign(rmw_op, lhs, rhs);
+            }
+        }
+
         // Standard scalar compound assignment
         self.lower_scalar_compound_assign(op, lhs, rhs)
     }
@@ -517,7 +530,11 @@ impl Lowerer {
             let ir_op = Self::binop_to_ir(*op, is_unsigned);
             let result = self.emit_binop_val(ir_op, loaded_promoted, rhs_promoted, op_ty);
             let result_cast = self.emit_implicit_cast(Operand::Value(result), op_ty, ty);
-            self.store_lvalue_typed(&lv, result_cast, ty);
+            if self.is_expr_atomic(lhs) {
+                self.store_lvalue_atomic(&lv, result_cast, ty);
+            } else {
+                self.store_lvalue_typed(&lv, result_cast, ty);
+            }
             return result_cast;
         }
         Operand::Const(IrConst::I64(0))
@@ -561,10 +578,74 @@ impl Lowerer {
             } else {
                 store_val
             };
-            self.store_lvalue_typed(&lv, store_val, ty);
+            if self.is_expr_atomic(lhs) {
+                self.store_lvalue_atomic(&lv, store_val, ty);
+            } else {
+                self.store_lvalue_typed(&lv, store_val, ty);
+            }
             return store_val;
         }
         rhs_val
+    }
+
+    // -----------------------------------------------------------------------
+    // Atomic RMW compound assignment
+    // -----------------------------------------------------------------------
+
+    /// Map a C binary operator to an AtomicRmwOp, if one exists.
+    fn binop_to_atomic_rmw(op: &BinOp) -> Option<AtomicRmwOp> {
+        match op {
+            BinOp::Add => Some(AtomicRmwOp::Add),
+            BinOp::Sub => Some(AtomicRmwOp::Sub),
+            BinOp::BitAnd => Some(AtomicRmwOp::And),
+            BinOp::BitOr => Some(AtomicRmwOp::Or),
+            BinOp::BitXor => Some(AtomicRmwOp::Xor),
+            _ => None,
+        }
+    }
+
+    /// Lower `_Atomic var op= rhs` using a single AtomicRmw instruction.
+    /// Returns the new value (old op rhs) per C11 6.5.16.2p3.
+    fn lower_atomic_rmw_compound_assign(
+        &mut self, rmw_op: AtomicRmwOp, lhs: &Expr, rhs: &Expr,
+    ) -> Operand {
+        let ty = self.get_expr_type(lhs);
+        let rhs_val = self.lower_expr(rhs);
+        let rhs_cast = self.emit_implicit_cast(rhs_val, self.get_expr_type(rhs), ty);
+        let Some(lv) = self.lower_lvalue(lhs) else {
+            return rhs_cast;
+        };
+        let ptr = self.lvalue_addr(&lv);
+
+        // Scale RHS for pointer += and -=
+        let actual_rhs = if ty == IrType::Ptr && matches!(rmw_op, AtomicRmwOp::Add | AtomicRmwOp::Sub) {
+            let elem_size = self.get_pointer_elem_size_from_expr(lhs);
+            self.scale_index(rhs_cast, elem_size)
+        } else {
+            rhs_cast
+        };
+
+        let old = self.fresh_value();
+        self.emit(Instruction::AtomicRmw {
+            dest: old, op: rmw_op, ptr: Operand::Value(ptr),
+            val: actual_rhs, ty, ordering: AtomicOrdering::SeqCst,
+        });
+
+        // Compound assignment returns the new value: old op rhs.
+        let ir_op = match rmw_op {
+            AtomicRmwOp::Add => IrBinOp::Add,
+            AtomicRmwOp::Sub => IrBinOp::Sub,
+            AtomicRmwOp::And => IrBinOp::And,
+            AtomicRmwOp::Or => IrBinOp::Or,
+            AtomicRmwOp::Xor => IrBinOp::Xor,
+            _ => unreachable!("binop_to_atomic_rmw only returns Add/Sub/And/Or/Xor"),
+        };
+        let new_val = self.fresh_value();
+        self.emit(Instruction::BinOp {
+            dest: new_val, op: ir_op,
+            lhs: Operand::Value(old), rhs: actual_rhs, ty,
+        });
+        Operand::Value(new_val)
     }
 
     // -----------------------------------------------------------------------

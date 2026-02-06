@@ -130,6 +130,7 @@ impl Parser {
             d.set_const(self.attrs.parsing_const());
             d.set_volatile(self.attrs.parsing_volatile());
             d.set_thread_local(self.attrs.parsing_thread_local());
+            d.set_atomic(self.attrs.parsing_atomic());
             return Some(ExternalDecl::Declaration(d));
         }
 
@@ -642,6 +643,7 @@ impl Parser {
         d.set_thread_local(self.attrs.parsing_thread_local());
         d.set_transparent_union(is_transparent_union);
         d.set_inline(self.attrs.parsing_inline());
+        d.set_atomic(self.attrs.parsing_atomic());
         Some(ExternalDecl::Declaration(d))
     }
 
@@ -659,6 +661,7 @@ impl Parser {
         self.attrs.set_inline(false);
         self.attrs.set_const(false);
         self.attrs.set_volatile(false);
+        self.attrs.set_atomic(false);
         self.attrs.parsing_address_space = AddressSpace::Default;
         let type_spec = self.parse_type_specifier()?;
 
@@ -688,6 +691,7 @@ impl Parser {
             d.set_const(self.attrs.parsing_const());
             d.set_volatile(self.attrs.parsing_volatile());
             d.set_thread_local(self.attrs.parsing_thread_local());
+            d.set_atomic(self.attrs.parsing_atomic());
             return Some(d);
         }
 
@@ -795,6 +799,7 @@ impl Parser {
         d.set_volatile(self.attrs.parsing_volatile());
         d.set_thread_local(self.attrs.parsing_thread_local());
         d.set_transparent_union(is_transparent_union);
+        d.set_atomic(self.attrs.parsing_atomic());
         Some(d)
     }
 

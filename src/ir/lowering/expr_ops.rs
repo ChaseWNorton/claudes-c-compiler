@@ -10,6 +10,8 @@ use crate::frontend::parser::ast::{
     UnaryOp,
 };
 use crate::ir::reexports::{
+    AtomicOrdering,
+    AtomicRmwOp,
     Instruction,
     IrBinOp,
     IrCmpOp,
@@ -780,6 +782,32 @@ impl Lowerer {
         }
 
         let ty = self.get_expr_type(inner);
+
+        // Atomic inc/dec: use AtomicRmw for a single atomic operation.
+        if self.is_expr_atomic(inner) {
+            if let Some(lv) = self.lower_lvalue(inner) {
+                let ptr = self.lvalue_addr(&lv);
+                let (step, _) = self.inc_dec_step_and_type(ty, inner);
+                let rmw_op = if is_inc { AtomicRmwOp::Add } else { AtomicRmwOp::Sub };
+                let old = self.fresh_value();
+                self.emit(Instruction::AtomicRmw {
+                    dest: old, op: rmw_op, ptr: Operand::Value(ptr),
+                    val: step, ty, ordering: AtomicOrdering::SeqCst,
+                });
+                if return_new {
+                    // Pre-inc/dec: return old +/- step
+                    let ir_op = if is_inc { IrBinOp::Add } else { IrBinOp::Sub };
+                    let new_val = self.fresh_value();
+                    self.emit(Instruction::BinOp {
+                        dest: new_val, op: ir_op,
+                        lhs: Operand::Value(old), rhs: step, ty,
+                    });
+                    return Operand::Value(new_val);
+                }
+                return Operand::Value(old);
+            }
+        }
+
         if let Some(lv) = self.lower_lvalue(inner) {
             let loaded = self.load_lvalue_typed(&lv, ty);
             let loaded_val = self.operand_to_value(loaded);

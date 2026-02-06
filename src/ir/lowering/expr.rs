@@ -15,6 +15,7 @@ use crate::frontend::parser::ast::{
     UnaryOp,
 };
 use crate::ir::reexports::{
+    AtomicOrdering,
     Instruction,
     IrBinOp,
     IrCmpOp,
@@ -263,7 +264,11 @@ impl Lowerer {
             }
         }
         let dest = self.fresh_value();
-        self.emit(Instruction::Load { dest, ptr: addr, ty: ginfo.ty, seg_override: ginfo.address_space });
+        if ginfo.is_atomic {
+            self.emit(Instruction::AtomicLoad { dest, ptr: Operand::Value(addr), ty: ginfo.ty, ordering: AtomicOrdering::SeqCst });
+        } else {
+            self.emit(Instruction::Load { dest, ptr: addr, ty: ginfo.ty, seg_override: ginfo.address_space });
+        }
         Operand::Value(dest)
     }
 
@@ -285,6 +290,7 @@ impl Lowerer {
             let is_struct = info.is_struct;
             let is_complex = info.c_type.as_ref().is_some_and(|ct| ct.is_complex());
             let is_vector = info.c_type.as_ref().is_some_and(|ct| ct.is_vector());
+            let is_atomic = info.var.is_atomic;
             let static_global_name = info.static_global_name.clone();
             let asm_register = info.asm_register.clone();
             let asm_register_has_init = info.asm_register_has_init;
@@ -313,7 +319,11 @@ impl Lowerer {
                     return Operand::Value(addr);
                 }
                 let dest = self.fresh_value();
-                self.emit(Instruction::Load { dest, ptr: addr, ty , seg_override: AddressSpace::Default });
+                if is_atomic {
+                    self.emit(Instruction::AtomicLoad { dest, ptr: Operand::Value(addr), ty, ordering: AtomicOrdering::SeqCst });
+                } else {
+                    self.emit(Instruction::Load { dest, ptr: addr, ty , seg_override: AddressSpace::Default });
+                }
                 return Operand::Value(dest);
             }
             if is_array || is_struct {
@@ -323,7 +333,11 @@ impl Lowerer {
                 return Operand::Value(alloca);
             }
             let dest = self.fresh_value();
-            self.emit(Instruction::Load { dest, ptr: alloca, ty , seg_override: AddressSpace::Default });
+            if is_atomic {
+                self.emit(Instruction::AtomicLoad { dest, ptr: Operand::Value(alloca), ty, ordering: AtomicOrdering::SeqCst });
+            } else {
+                self.emit(Instruction::Load { dest, ptr: alloca, ty , seg_override: AddressSpace::Default });
+            }
             return Operand::Value(dest);
         }
 
@@ -555,4 +569,236 @@ impl Lowerer {
         Operand::Value(dest)
     }
 
+}
+
+#[cfg(test)]
+mod atomic_tests {
+    use crate::backend::Target;
+    use crate::common::error::DiagnosticEngine;
+    use crate::common::source::SourceManager;
+    use crate::frontend::preprocessor::Preprocessor;
+    use crate::frontend::lexer::Lexer;
+    use crate::frontend::parser::Parser;
+    use crate::frontend::sema::SemanticAnalyzer;
+    use crate::ir::lowering::Lowerer;
+    use crate::ir::instruction::Instruction;
+    use crate::ir::module::IrModule;
+
+    /// Compile C source to IR module for testing.
+    fn compile_to_ir(code: &str) -> IrModule {
+        crate::common::types::set_target_ptr_size(8);
+        crate::common::types::set_target_long_double_is_f128(false);
+
+        let mut preprocessor = Preprocessor::new();
+        preprocessor.set_target("x86_64");
+        preprocessor.set_filename("<test>");
+        let preprocessed = preprocessor.preprocess(code);
+
+        let mut source_manager = SourceManager::new();
+        let file_id = source_manager.add_file("<test>".to_string(), preprocessed);
+        source_manager.build_line_map();
+        let macro_expansions = preprocessor.take_macro_expansion_info();
+        source_manager.set_macro_expansions(macro_expansions);
+
+        let mut lexer = Lexer::new(source_manager.get_content(file_id), file_id);
+        lexer.set_gnu_extensions(true);
+        let tokens = lexer.tokenize();
+
+        let mut diagnostics = DiagnosticEngine::new();
+        diagnostics.set_source_manager(source_manager);
+        let mut parser = Parser::new(tokens);
+        parser.set_diagnostics(diagnostics);
+        let ast = parser.parse();
+        assert_eq!(parser.error_count, 0, "parse errors");
+
+        let diagnostics = parser.take_diagnostics();
+        let mut sema = SemanticAnalyzer::new();
+        sema.set_diagnostics(diagnostics);
+        let _ = sema.analyze(&ast);
+        let diagnostics = sema.take_diagnostics();
+        let sema_result = sema.into_result();
+
+        let lowerer = Lowerer::with_type_context(
+            Target::X86_64,
+            sema_result.type_context,
+            sema_result.functions,
+            sema_result.expr_types,
+            sema_result.const_values,
+            diagnostics,
+            false,
+        );
+        let (module, _) = lowerer.lower(&ast);
+        module
+    }
+
+    /// Check if a function's IR contains any AtomicStore instruction.
+    fn has_atomic_store(module: &IrModule, func_name: &str) -> bool {
+        module.functions.iter()
+            .find(|f| f.name == func_name)
+            .map(|f| f.blocks.iter().any(|b| b.instructions.iter().any(|i|
+                matches!(i, Instruction::AtomicStore { .. })
+            )))
+            .unwrap_or(false)
+    }
+
+    /// Check if a function's IR contains any AtomicLoad instruction.
+    fn has_atomic_load(module: &IrModule, func_name: &str) -> bool {
+        module.functions.iter()
+            .find(|f| f.name == func_name)
+            .map(|f| f.blocks.iter().any(|b| b.instructions.iter().any(|i|
+                matches!(i, Instruction::AtomicLoad { .. })
+            )))
+            .unwrap_or(false)
+    }
+
+    /// Check if a function's IR contains any AtomicRmw instruction.
+    fn has_atomic_rmw(module: &IrModule, func_name: &str) -> bool {
+        module.functions.iter()
+            .find(|f| f.name == func_name)
+            .map(|f| f.blocks.iter().any(|b| b.instructions.iter().any(|i|
+                matches!(i, Instruction::AtomicRmw { .. })
+            )))
+            .unwrap_or(false)
+    }
+
+    /// Check if a function's IR contains any plain (non-atomic) Store instruction.
+    fn has_plain_store(module: &IrModule, func_name: &str) -> bool {
+        module.functions.iter()
+            .find(|f| f.name == func_name)
+            .map(|f| f.blocks.iter().any(|b| b.instructions.iter().any(|i|
+                matches!(i, Instruction::Store { .. })
+            )))
+            .unwrap_or(false)
+    }
+
+    // ---- Basic atomic store/load ----
+
+    #[test]
+    fn atomic_int_store_emits_atomic_store() {
+        let m = compile_to_ir("void f(void) { _Atomic int x; x = 5; }");
+        assert!(has_atomic_store(&m, "f"), "expected AtomicStore for _Atomic int assignment");
+    }
+
+    #[test]
+    fn atomic_int_load_emits_atomic_load() {
+        let m = compile_to_ir("int f(void) { _Atomic int x = 1; return x; }");
+        assert!(has_atomic_load(&m, "f"), "expected AtomicLoad for _Atomic int read");
+    }
+
+    #[test]
+    fn atomic_specifier_form_works() {
+        let m = compile_to_ir("void f(void) { _Atomic(int) x; x = 5; }");
+        assert!(has_atomic_store(&m, "f"), "expected AtomicStore for _Atomic(int) assignment");
+    }
+
+    // ---- Non-atomic variables should not use atomic instructions ----
+
+    #[test]
+    fn non_atomic_int_uses_plain_store() {
+        let m = compile_to_ir("void f(void) { int x; x = 5; }");
+        assert!(has_plain_store(&m, "f"), "expected plain Store for non-atomic int");
+        assert!(!has_atomic_store(&m, "f"), "should not have AtomicStore for non-atomic int");
+    }
+
+    #[test]
+    fn non_atomic_int_uses_plain_load() {
+        let m = compile_to_ir("int f(void) { int x = 1; return x; }");
+        assert!(!has_atomic_load(&m, "f"), "should not have AtomicLoad for non-atomic int");
+    }
+
+    // ---- Compound assignment uses AtomicRmw ----
+
+    #[test]
+    fn atomic_compound_add_emits_rmw() {
+        let m = compile_to_ir("void f(void) { _Atomic int x = 0; x += 5; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for _Atomic int +=");
+    }
+
+    #[test]
+    fn atomic_compound_sub_emits_rmw() {
+        let m = compile_to_ir("void f(void) { _Atomic int x = 10; x -= 3; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for _Atomic int -=");
+    }
+
+    #[test]
+    fn atomic_compound_and_emits_rmw() {
+        let m = compile_to_ir("void f(void) { _Atomic int x = 0xff; x &= 0x0f; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for _Atomic int &=");
+    }
+
+    #[test]
+    fn atomic_compound_or_emits_rmw() {
+        let m = compile_to_ir("void f(void) { _Atomic int x = 0; x |= 0x0f; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for _Atomic int |=");
+    }
+
+    #[test]
+    fn atomic_compound_xor_emits_rmw() {
+        let m = compile_to_ir("void f(void) { _Atomic int x = 0xff; x ^= 0x0f; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for _Atomic int ^=");
+    }
+
+    // ---- Increment/decrement uses AtomicRmw ----
+
+    #[test]
+    fn atomic_pre_increment_emits_rmw() {
+        let m = compile_to_ir("int f(void) { _Atomic int x = 0; return ++x; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for ++(_Atomic int)");
+    }
+
+    #[test]
+    fn atomic_post_increment_emits_rmw() {
+        let m = compile_to_ir("int f(void) { _Atomic int x = 0; return x++; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for (_Atomic int)++");
+    }
+
+    #[test]
+    fn atomic_pre_decrement_emits_rmw() {
+        let m = compile_to_ir("int f(void) { _Atomic int x = 10; return --x; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for --(_Atomic int)");
+    }
+
+    #[test]
+    fn atomic_post_decrement_emits_rmw() {
+        let m = compile_to_ir("int f(void) { _Atomic int x = 10; return x--; }");
+        assert!(has_atomic_rmw(&m, "f"), "expected AtomicRmw for (_Atomic int)--");
+    }
+
+    // ---- Non-RMW compound assignment still uses AtomicLoad/AtomicStore ----
+
+    #[test]
+    fn atomic_compound_mul_uses_atomic_load_store() {
+        let m = compile_to_ir("void f(void) { _Atomic int x = 2; x *= 3; }");
+        // Mul has no RMW equivalent, falls back to AtomicLoad + compute + AtomicStore
+        assert!(!has_atomic_rmw(&m, "f"), "should not use AtomicRmw for *=");
+        assert!(has_atomic_store(&m, "f"), "expected AtomicStore for _Atomic int *=");
+    }
+
+    // ---- Global atomic variables ----
+
+    #[test]
+    fn global_atomic_store() {
+        let m = compile_to_ir("_Atomic int g; void f(void) { g = 42; }");
+        assert!(has_atomic_store(&m, "f"), "expected AtomicStore for global _Atomic int");
+    }
+
+    #[test]
+    fn global_atomic_load() {
+        let m = compile_to_ir("_Atomic int g = 1; int f(void) { return g; }");
+        assert!(has_atomic_load(&m, "f"), "expected AtomicLoad for global _Atomic int");
+    }
+
+    // ---- __atomic_* builtins still work ----
+
+    #[test]
+    fn atomic_builtin_load_still_works() {
+        let m = compile_to_ir("int f(void) { int x = 1; return __atomic_load_n(&x, __ATOMIC_SEQ_CST); }");
+        assert!(has_atomic_load(&m, "f"), "expected AtomicLoad from __atomic_load_n");
+    }
+
+    #[test]
+    fn atomic_builtin_store_still_works() {
+        let m = compile_to_ir("void f(void) { int x; __atomic_store_n(&x, 5, __ATOMIC_SEQ_CST); }");
+        assert!(has_atomic_store(&m, "f"), "expected AtomicStore from __atomic_store_n");
+    }
 }

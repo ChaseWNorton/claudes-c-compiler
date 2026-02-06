@@ -348,7 +348,7 @@ impl Lowerer {
 
         let name = orig_param.name.clone().unwrap_or_default();
         self.insert_local_scoped(name, LocalInfo {
-            var: VarInfo { ty, elem_size, is_array: false, pointee_type, struct_layout, is_struct: false, array_dim_strides, c_type, is_ptr_to_func_ptr, address_space: AddressSpace::Default, explicit_alignment: None },
+            var: VarInfo { ty, elem_size, is_array: false, pointee_type, struct_layout, is_struct: false, array_dim_strides, c_type, is_ptr_to_func_ptr, address_space: AddressSpace::Default, explicit_alignment: None, is_atomic: false },
             alloca, alloc_size: param_size, is_bool, static_global_name: None, vla_strides: vec![], vla_size: None, asm_register: None, asm_register_has_init: false, cleanup_fn: None,
             is_const: orig_param.is_const,
         });
@@ -390,7 +390,7 @@ impl Lowerer {
 
         let name = orig_param.name.clone().unwrap_or_default();
         self.insert_local_scoped(name, LocalInfo {
-            var: VarInfo { ty: IrType::Ptr, elem_size: 0, is_array: false, pointee_type: None, struct_layout: layout, is_struct: true, array_dim_strides: vec![], c_type, is_ptr_to_func_ptr: false, address_space: AddressSpace::Default, explicit_alignment: None },
+            var: VarInfo { ty: IrType::Ptr, elem_size: 0, is_array: false, pointee_type: None, struct_layout: layout, is_struct: true, array_dim_strides: vec![], c_type, is_ptr_to_func_ptr: false, address_space: AddressSpace::Default, explicit_alignment: None, is_atomic: false },
             alloca, alloc_size: size, is_bool: false, static_global_name: None, vla_strides: vec![], vla_size: None, asm_register: None, asm_register_has_init: false, cleanup_fn: None,
             is_const: orig_param.is_const,
         });
@@ -401,7 +401,7 @@ impl Lowerer {
         let ct = self.type_spec_to_ctype(&orig_param.type_spec);
         let name = orig_param.name.clone().unwrap_or_default();
         self.insert_local_scoped(name, LocalInfo {
-            var: VarInfo { ty: IrType::Ptr, elem_size: 0, is_array: false, pointee_type: None, struct_layout: None, is_struct: true, array_dim_strides: vec![], c_type: Some(ct), is_ptr_to_func_ptr: false, address_space: AddressSpace::Default, explicit_alignment: None },
+            var: VarInfo { ty: IrType::Ptr, elem_size: 0, is_array: false, pointee_type: None, struct_layout: None, is_struct: true, array_dim_strides: vec![], c_type: Some(ct), is_ptr_to_func_ptr: false, address_space: AddressSpace::Default, explicit_alignment: None, is_atomic: false },
             alloca, alloc_size: 8, is_bool: false, static_global_name: None, vla_strides: vec![], vla_size: None, asm_register: None, asm_register_has_init: false, cleanup_fn: None,
             is_const: orig_param.is_const,
         });
@@ -429,7 +429,7 @@ impl Lowerer {
 
         let name = orig_param.name.clone().unwrap_or_default();
         self.func_mut().locals.insert(name, LocalInfo {
-            var: VarInfo { ty: IrType::Ptr, elem_size: 0, is_array: false, pointee_type: None, struct_layout: None, is_struct: true, array_dim_strides: vec![], c_type: Some(ct), is_ptr_to_func_ptr: false, address_space: AddressSpace::Default, explicit_alignment: None },
+            var: VarInfo { ty: IrType::Ptr, elem_size: 0, is_array: false, pointee_type: None, struct_layout: None, is_struct: true, array_dim_strides: vec![], c_type: Some(ct), is_ptr_to_func_ptr: false, address_space: AddressSpace::Default, explicit_alignment: None, is_atomic: false },
             alloca: complex_alloca, alloc_size: complex_size, is_bool: false, static_global_name: None, vla_strides: vec![], vla_size: None, asm_register: None, asm_register_has_init: false, cleanup_fn: None,
             is_const: orig_param.is_const,
         });

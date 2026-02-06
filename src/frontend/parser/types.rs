@@ -151,6 +151,7 @@ impl Parser {
                         if let Some(inner_type) = inner {
                             let result = self.parse_abstract_declarator_suffix(inner_type);
                             self.expect_closing(&TokenKind::RParen, open);
+                            self.attrs.set_atomic(true);
                             return Some(result);
                         }
                         // Fallback: if we can't parse a type, emit error and skip
@@ -162,9 +163,9 @@ impl Parser {
                         self.consume_if(&TokenKind::RParen);
                         return Some(TypeSpecifier::Int);
                     }
-                    // _Atomic without parens is a type qualifier; since we don't
-                    // track atomic-ness, it falls through to continue collecting
-                    // type specifiers.
+                    // _Atomic without parens is a type qualifier; set the flag
+                    // so it propagates to the declaration and IR lowering.
+                    self.attrs.set_atomic(true);
                 }
                 // Alignas
                 TokenKind::Alignas => {

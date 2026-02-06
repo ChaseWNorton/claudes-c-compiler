@@ -310,6 +310,7 @@ impl Lowerer {
     ) {
         let mut local_info = LocalInfo::from_analysis(da, alloca, decl.is_const());
         local_info.var.address_space = decl.address_space;
+        local_info.var.is_atomic = decl.is_atomic();
         if explicit_align > 0 {
             local_info.var.explicit_alignment = Some(explicit_align);
         }
@@ -396,7 +397,8 @@ impl Lowerer {
         // self-referential initializers (e.g., static struct work w = { .entry = { &w.entry, &w.entry } })
         // can resolve &w.entry via resolve_chained_member_access -> self.globals.get().
         // This mirrors the same pattern used in lower_global_decl().
-        let ginfo = GlobalInfo::from_analysis(da);
+        let mut ginfo = GlobalInfo::from_analysis(da);
+        ginfo.var.is_atomic = decl.is_atomic();
         self.globals.insert(static_name.clone(), ginfo);
 
         // Determine initializer (evaluated at compile time for static locals)
@@ -488,6 +490,7 @@ impl Lowerer {
         // Store type info in locals (with static_global_name set so each use site
         // emits a fresh GlobalAddr in its own basic block, avoiding unreachable-block issues).
         let mut local_info = LocalInfo::for_static(da, static_name, decl.is_const());
+        local_info.var.is_atomic = decl.is_atomic();
         if let Some(ea) = explicit_align {
             local_info.var.explicit_alignment = Some(ea);
         }

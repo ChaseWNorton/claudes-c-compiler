@@ -56,6 +56,9 @@ pub(super) struct VarInfo {
     /// variable declaration. When set, _Alignof(var) returns this value (or the
     /// natural type alignment, whichever is larger) per C11 6.2.8p3.
     pub explicit_alignment: Option<usize>,
+    /// Whether this variable was declared with `_Atomic` qualifier.
+    /// When true, loads/stores emit AtomicLoad/AtomicStore with SeqCst ordering.
+    pub is_atomic: bool,
 }
 
 /// Information about a local variable stored in an alloca.
@@ -409,6 +412,7 @@ impl VarInfo {
             is_ptr_to_func_ptr: da.is_ptr_to_func_ptr,
             address_space: AddressSpace::Default,
             explicit_alignment: None,
+            is_atomic: false,
         }
     }
 }

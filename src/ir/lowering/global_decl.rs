@@ -63,6 +63,7 @@ impl Lowerer {
             // initializers (e.g., `struct Node n = {&n}`) can resolve.
             let mut ginfo = GlobalInfo::from_analysis(&da);
             ginfo.var.address_space = decl.address_space;
+            ginfo.var.is_atomic = decl.is_atomic();
             self.globals.insert(declarator.name.clone(), ginfo);
 
             let init = self.lower_declarator_init(decl, declarator, &da);
@@ -183,6 +184,7 @@ impl Lowerer {
         let mut ginfo = GlobalInfo::from_analysis(&da);
         ginfo.asm_register = Some(reg_name.clone());
         ginfo.var.address_space = decl.address_space;
+        ginfo.var.is_atomic = decl.is_atomic();
         self.globals.insert(declarator.name.clone(), ginfo);
         true
     }
@@ -200,6 +202,7 @@ impl Lowerer {
             }
             let mut ginfo = GlobalInfo::from_analysis(&da);
             ginfo.var.address_space = decl.address_space;
+            ginfo.var.is_atomic = decl.is_atomic();
             self.globals.insert(declarator.name.clone(), ginfo);
         }
         // For extern TLS variables, emit an IrGlobal so codegen uses TLS access patterns.

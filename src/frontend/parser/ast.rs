@@ -195,12 +195,14 @@ pub mod decl_flag {
     /// Used to implement C99 6.7.4p7: a function provides an external definition
     /// only if not ALL file-scope declarations include `inline`.
     pub const INLINE: u16            = 1 << 8;
+    /// `_Atomic` type qualifier.
+    pub const ATOMIC: u16            = 1 << 9;
 }
 
 /// A variable/type declaration.
 ///
 /// Boolean storage-class / qualifier / attribute flags are stored as a packed
-/// bitfield (`flags`) for memory efficiency — 9 booleans collapse from 9 bytes
+/// bitfield (`flags`) for memory efficiency — 10 booleans collapse from 10 bytes
 /// into 2 bytes.  Accessor methods provide the same API as the old struct
 /// fields.
 #[derive(Clone)]
@@ -244,6 +246,7 @@ impl Declaration {
     #[inline] pub fn is_thread_local(&self) -> bool       { self.flags & decl_flag::THREAD_LOCAL != 0 }
     #[inline] pub fn is_transparent_union(&self) -> bool  { self.flags & decl_flag::TRANSPARENT_UNION != 0 }
     #[inline] pub fn is_inline(&self) -> bool              { self.flags & decl_flag::INLINE != 0 }
+    #[inline] pub fn is_atomic(&self) -> bool              { self.flags & decl_flag::ATOMIC != 0 }
 
     // --- flag setters ---
 
@@ -256,6 +259,7 @@ impl Declaration {
     #[inline] pub fn set_thread_local(&mut self, v: bool)       { self.set_flag(decl_flag::THREAD_LOCAL, v) }
     #[inline] pub fn set_transparent_union(&mut self, v: bool)  { self.set_flag(decl_flag::TRANSPARENT_UNION, v) }
     #[inline] pub fn set_inline(&mut self, v: bool)             { self.set_flag(decl_flag::INLINE, v) }
+    #[inline] pub fn set_atomic(&mut self, v: bool)            { self.set_flag(decl_flag::ATOMIC, v) }
 
     #[inline]
     fn set_flag(&mut self, mask: u16, v: bool) {

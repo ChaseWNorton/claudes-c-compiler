@@ -95,6 +95,8 @@ pub(super) mod parsed_attr_flag {
     pub const FASTCALL: u32         = 1 << 17;
     /// `__attribute__((naked))` encountered — emit no prologue/epilogue.
     pub const NAKED: u32            = 1 << 18;
+    /// `_Atomic` type qualifier or specifier encountered.
+    pub const ATOMIC: u32           = 1 << 19;
 }
 
 /// Accumulated storage-class specifiers, type qualifiers, and GCC attributes
@@ -166,6 +168,7 @@ impl ParsedDeclAttrs {
     #[inline] pub fn parsing_transparent_union(&self) -> bool { self.flags & parsed_attr_flag::TRANSPARENT_UNION != 0 }
     #[inline] pub fn parsing_fastcall(&self) -> bool         { self.flags & parsed_attr_flag::FASTCALL != 0 }
     #[inline] pub fn parsing_naked(&self) -> bool            { self.flags & parsed_attr_flag::NAKED != 0 }
+    #[inline] pub fn parsing_atomic(&self) -> bool           { self.flags & parsed_attr_flag::ATOMIC != 0 }
 
     // --- flag setters ---
 
@@ -184,6 +187,7 @@ impl ParsedDeclAttrs {
     #[inline] pub fn set_always_inline(&mut self, v: bool)    { self.set_flag(parsed_attr_flag::ALWAYS_INLINE, v) }
     #[inline] pub fn set_noinline(&mut self, v: bool)         { self.set_flag(parsed_attr_flag::NOINLINE, v) }
     #[inline] pub fn set_noreturn(&mut self, v: bool)         { self.set_flag(parsed_attr_flag::NORETURN, v) }
+    #[inline] pub fn set_atomic(&mut self, v: bool)          { self.set_flag(parsed_attr_flag::ATOMIC, v) }
     #[inline] pub fn set_error_attr(&mut self, v: bool)       { self.set_flag(parsed_attr_flag::ERROR_ATTR, v) }
     #[inline] pub fn set_transparent_union(&mut self, v: bool) { self.set_flag(parsed_attr_flag::TRANSPARENT_UNION, v) }
     #[inline] pub fn set_fastcall(&mut self, v: bool)         { self.set_flag(parsed_attr_flag::FASTCALL, v) }
