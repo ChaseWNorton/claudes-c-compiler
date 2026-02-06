@@ -44,11 +44,8 @@ GitHub Issues and PRs are the shared state — no external tools needed.
 All project state is readable from titles alone:
 
 ```
-[OPEN][P0] Description              — issue: ready for pickup, priority 0
-[OPEN][P2][M1] Description          — issue: ready, milestone M1
-[REVIEWING][P0] Description         — issue: agent investigating validity
-[WIP][P1] Description               — issue: confirmed real, work in progress
-[DENIED][P2] Description            — issue: not a real bug (proof in comment)
+[P0] Description                    — standalone issue, priority 0
+[P2][M1] Description                — issue belonging to milestone M1
 [MILESTONE] M1: Description         — milestone definition
 [Fix #20] Description               — PR: claims issue #20
 [CC][Fix #20] Description           — PR: chain member + claims issue #20
@@ -56,25 +53,26 @@ All project state is readable from titles alone:
 
 ### Issue lifecycle
 
-Every issue has a lifecycle state tag as the **first** code in its title. Every state
-change requires a title update AND a comment explaining why.
+Issues have lifecycle states tracked via **structured comments** (not title edits —
+agents can't modify titles on issues they didn't create). State is derived from comments
+and PR signals.
 
-| State | Tag | Meaning | Who sets it |
-|-------|-----|---------|-------------|
-| **Open** | `[OPEN]` | Ready for pickup | `/decompose`, `/file-issue`, triage |
-| **Reviewing** | `[REVIEWING]` | Agent investigating validity | FIX workflow, before draft PR |
-| **Work in progress** | `[WIP]` | Confirmed real, draft PR created | FIX workflow, after validation |
-| **Denied** | `[DENIED]` | Not a real bug | FIX workflow, with proof in comment |
-| **Complete** | `[COMPLETE]` | Fix shipped, PR marked ready | FIX workflow, after PR ready |
-| *(none)* | *(no tag)* | External issue, needs review | External contributors |
+| State | Signal | Meaning |
+|-------|--------|---------|
+| **Available** | Open issue, no `<!-- CCC:REVIEWING -->` comment, no `[Fix #N]` PR | Ready for pickup |
+| **Reviewing** | Comment with `<!-- CCC:REVIEWING -->` marker | Agent investigating validity |
+| **Claimed (WIP)** | Draft PR with `[Fix #N]` in title | Confirmed real, work in progress |
+| **Denied** | Comment with `<!-- CCC:DENIED -->` marker + proof | Not a real bug |
+| **Complete** | Ready (non-draft) PR with `[Fix #N]` in title | Fix shipped |
 
 ```
-[OPEN] ──→ [REVIEWING] ──→ [WIP] + draft PR ──→ [COMPLETE] + PR ready
-                        └──→ [DENIED] + proof comment
+Available ──→ Reviewing (comment) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
+                                   └──→ Denied (comment with proof)
 ```
 
 **CRITICAL: An agent MUST validate an issue BEFORE creating a draft PR.**
-Read the issue, check the code, confirm the bug exists. Only then claim it.
+Post a `<!-- CCC:REVIEWING -->` comment, read the code, confirm the bug exists.
+If not real, post a `<!-- CCC:DENIED -->` comment with proof. Only if real, create the PR.
 
 ### PR claim states
 

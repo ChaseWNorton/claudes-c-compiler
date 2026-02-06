@@ -20,31 +20,28 @@ If any PR title contains `[Fix #$ARGUMENTS]` — **draft or ready, both count** 
    gh issue view $ARGUMENTS --repo anthropics/claudes-c-compiler
    ```
 
-2. **Mark as REVIEWING:**
+2. **Post REVIEWING comment:**
    ```bash
-   gh issue edit $ARGUMENTS --repo anthropics/claudes-c-compiler \
-     --title "[REVIEWING]<rest of title without [OPEN]>"
    gh issue comment $ARGUMENTS --repo anthropics/claudes-c-compiler \
-     --body "Reviewing: investigating whether this issue is valid."
+     --body "<!-- CCC:REVIEWING -->
+   **Reviewing** — investigating whether this issue is valid."
    ```
 
 3. **Check if the bug actually exists** — read the source files, run a quick test if possible.
 
-4. **If NOT real** → mark DENIED with proof, tell the user:
+4. **If NOT real** → post DENIED with proof, tell the user:
    ```bash
-   gh issue edit $ARGUMENTS --repo anthropics/claudes-c-compiler \
-     --title "[DENIED]<rest of title without [REVIEWING]>"
    gh issue comment $ARGUMENTS --repo anthropics/claudes-c-compiler \
-     --body "Denied — <evidence and reasoning>."
+     --body "<!-- CCC:DENIED -->
+   **Denied** — <evidence and reasoning>."
    ```
    Do NOT create a branch or PR. Suggest picking another issue.
 
-5. **If real** → mark WIP and proceed:
+5. **If real** → post CONFIRMED and proceed:
    ```bash
-   gh issue edit $ARGUMENTS --repo anthropics/claudes-c-compiler \
-     --title "[WIP]<rest of title without [REVIEWING]>"
    gh issue comment $ARGUMENTS --repo anthropics/claudes-c-compiler \
-     --body "Confirmed — <brief explanation>. Proceeding with fix."
+     --body "<!-- CCC:CONFIRMED -->
+   **Confirmed** — <brief explanation>. Proceeding with fix."
    ```
 
 ## Phase 0.5: Detect the chain
@@ -137,12 +134,11 @@ If `CHAIN_TIP_NUMBER` is empty, no chain exists — base off `main`.
    ```
    **A draft PR that stays draft is invisible to reviewers. The fix is NOT done until the PR is marked ready.**
 
-10. **Mark issue COMPLETE:**
+10. **Post COMPLETE comment on the issue:**
     ```bash
-    gh issue edit $ARGUMENTS --repo anthropics/claudes-c-compiler \
-      --title "[COMPLETE]<rest of title without [WIP]>"
     gh issue comment $ARGUMENTS --repo anthropics/claudes-c-compiler \
-      --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
+      --body "<!-- CCC:COMPLETE -->
+    **Complete** — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
     ```
 
 11. **Write the PR body** — this is as important as the code. Read [PR_BODY_GUIDE.md](../skills/fix-next/PR_BODY_GUIDE.md) for the full quality standard.

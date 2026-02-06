@@ -21,54 +21,55 @@ All `git push` goes to `origin`. All PRs go from `origin` to `upstream`.
 
 ## Issue Lifecycle
 
-Every issue has a lifecycle state tag as the **first** code in its title. Every state
-change requires a title update AND a comment explaining the transition.
+Issue lifecycle is tracked entirely via **comments** — agents cannot edit issue titles
+they didn't create. State is derived from comments posted on the issue and from PR signals.
 
-| State | Tag | Meaning | Who sets it |
-|-------|-----|---------|-------------|
-| **Open** | `[OPEN]` | Ready for pickup | `/decompose`, `/file-issue`, triage |
-| **Reviewing** | `[REVIEWING]` | Agent investigating validity | FIX workflow, before draft PR |
-| **Work in progress** | `[WIP]` | Confirmed real, draft PR created | FIX workflow, after validation |
-| **Denied** | `[DENIED]` | Not a real bug | FIX workflow, with proof in comment |
-| **Complete** | `[COMPLETE]` | Fix shipped, PR marked ready | FIX workflow, after PR ready |
-| *(none)* | *(no tag)* | External issue, needs review first | External contributors |
+| State | How to detect | Meaning |
+|-------|--------------|---------|
+| **Available** | Open issue, no `<!-- CCC:REVIEWING -->` comment, no `[Fix #N]` PR | Ready for pickup |
+| **Reviewing** | `<!-- CCC:REVIEWING -->` comment exists on the issue | Agent is investigating validity |
+| **Confirmed / WIP** | `<!-- CCC:CONFIRMED -->` comment + draft PR with `[Fix #N]` | Bug is real, fix in progress |
+| **Denied** | `<!-- CCC:DENIED -->` comment with proof | Not a real bug |
+| **Complete** | Ready (non-draft) PR with `[Fix #N]` | Fix shipped, awaiting merge |
 
 ### Flow
 
 ```
-External issue (no tag) → [REVIEWING] → [WIP] + draft PR → [COMPLETE]
-                                      └→ [DENIED] + proof comment
-
-[OPEN] from decompose → [REVIEWING] → [WIP] + draft PR → [COMPLETE]
-                                     └→ [DENIED] + proof comment
+Available ──→ Reviewing (comment) ──→ Confirmed + draft PR ──→ Complete (PR ready)
+                                   └──→ Denied (comment with proof)
 ```
 
-### State change commands
+### Lifecycle comments
 
-**Mark as REVIEWING** (before any code work):
-```bash
-# Update title — prepend [REVIEWING], remove [OPEN] if present
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[REVIEWING]<rest of title without [OPEN]>"
-gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Reviewing: investigating whether this issue is valid. Checking the code now."
-```
+All lifecycle comments use HTML comment markers for machine detection. The marker
+goes on its own line at the top. The human-readable text follows.
 
-**Mark as WIP** (confirmed real, creating draft PR):
+**Post REVIEWING** (before any code work):
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[WIP]<rest of title without [REVIEWING]>"
-gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Confirmed — <brief explanation of why it's real>. Creating draft PR to claim."
-```
-
-**Mark as DENIED** (not a real issue):
-```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[DENIED]<rest of title without [REVIEWING]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
   --body "$(cat <<'EOF'
-Denied — this is not a valid issue.
+<!-- CCC:REVIEWING -->
+**Reviewing** — investigating whether this issue is valid. Checking the code now.
+EOF
+)"
+```
+
+**Post CONFIRMED** (bug is real, about to create draft PR):
+```bash
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "$(cat <<'EOF'
+<!-- CCC:CONFIRMED -->
+**Confirmed** — <brief explanation of why it's real>. Creating draft PR to claim.
+EOF
+)"
+```
+
+**Post DENIED** (not a real issue — requires proof):
+```bash
+gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "$(cat <<'EOF'
+<!-- CCC:DENIED -->
+**Denied** — this is not a valid issue.
 
 ## Evidence
 <code references, test output, reasoning>
@@ -79,30 +80,42 @@ EOF
 )"
 ```
 
-**Mark as COMPLETE** (fix shipped, PR marked ready):
+**Post COMPLETE** (fix shipped, PR marked ready):
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[COMPLETE]<rest of title without [WIP]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
+  --body "$(cat <<'EOF'
+<!-- CCC:COMPLETE -->
+**Complete** — fix shipped in PR #<PR_NUMBER>. Awaiting merge.
+EOF
+)"
 ```
+
+### Detecting lifecycle state
+
+To check an issue's current state before picking it up:
+```bash
+gh api repos/anthropics/claudes-c-compiler/issues/<NUMBER>/comments \
+  --jq '.[].body' | grep -o 'CCC:[A-Z]*' | tail -1
+```
+This returns the latest state marker (e.g., `CCC:REVIEWING`, `CCC:DENIED`).
+If empty, the issue has never been reviewed — it's available.
 
 ### Rules
 
 1. **BEFORE creating a draft PR**, the agent MUST:
    - Read the issue body completely
+   - Post a `<!-- CCC:REVIEWING -->` comment
    - Verify the bug exists (check the code, run a test if possible)
-   - Update title to `[REVIEWING]` + comment
-   - If confirmed real → `[WIP]` + comment + draft PR
-   - If not real → `[DENIED]` + comment with proof, NO PR
+   - If confirmed real → post `<!-- CCC:CONFIRMED -->` comment + create draft PR
+   - If not real → post `<!-- CCC:DENIED -->` comment with proof, NO PR
 
-2. **Every state change** = title update + comment. No silent transitions.
+2. **Every state change** = a new comment with the appropriate marker.
 
-3. **Issues without a state tag** are from external contributors — treat as unreviewed.
-   Start with `[REVIEWING]` before doing anything.
-
-4. **`[DENIED]` requires proof** — code references, test output, or reasoning.
+3. **Denied requires proof** — code references, test output, or reasoning.
    Never deny without evidence.
+
+4. **Skip issues that already have a `CCC:REVIEWING` or `CCC:DENIED` comment** —
+   someone else is already handling it or has already rejected it.
 
 ## State Model
 
@@ -222,32 +235,29 @@ fi
 gh issue view <NUMBER> --repo anthropics/claudes-c-compiler
 ```
 
-**Mark as REVIEWING:**
+**Post a REVIEWING comment:**
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[REVIEWING]<rest of title without [OPEN]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Reviewing: investigating whether this issue is valid."
+  --body "<!-- CCC:REVIEWING -->
+**Reviewing** — investigating whether this issue is valid."
 ```
 
 Read the source files mentioned in the issue. Check if the bug actually exists.
 Run a quick test if possible.
 
-**If the issue is NOT real:**
+**If the issue is NOT real — post DENIED with proof:**
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[DENIED]<rest of title without [REVIEWING]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Denied — <evidence and reasoning>. Recommend closing."
+  --body "<!-- CCC:DENIED -->
+**Denied** — <evidence and reasoning>. Recommend closing."
 ```
 Skip this issue and go back to Step 1. Do NOT create a branch or PR.
 
-**If the issue IS real**, proceed to Step 4:
+**If the issue IS real — post CONFIRMED, proceed to Step 4:**
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[WIP]<rest of title without [REVIEWING]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Confirmed — <brief explanation>. Proceeding with fix."
+  --body "<!-- CCC:CONFIRMED -->
+**Confirmed** — <brief explanation>. Proceeding with fix."
 ```
 
 ### Step 4: Create branch
@@ -327,12 +337,11 @@ git push origin fix/issue-<NUMBER>
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
 ```
 
-**Update the issue to COMPLETE:**
+**Post COMPLETE comment on the issue:**
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[COMPLETE]<rest of title without [WIP]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
+  --body "<!-- CCC:COMPLETE -->
+**Complete** — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
 ```
 
 Then **write the PR body**. This is as important as the code itself.

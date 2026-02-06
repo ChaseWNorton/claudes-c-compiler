@@ -32,31 +32,28 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    gh issue view <NUMBER> --repo anthropics/claudes-c-compiler
    ```
 
-   **Mark as REVIEWING:**
+   **Post REVIEWING comment:**
    ```bash
-   gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-     --title "[REVIEWING]<rest of title without [OPEN]>"
    gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-     --body "Reviewing: investigating whether this issue is valid."
+     --body "<!-- CCC:REVIEWING -->
+   **Reviewing** — investigating whether this issue is valid."
    ```
 
    Read the source files mentioned in the issue. Check if the bug actually exists.
 
-   **If NOT real** → mark DENIED with proof, skip to next issue:
+   **If NOT real** → post DENIED with proof, skip to next issue:
    ```bash
-   gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-     --title "[DENIED]<rest of title without [REVIEWING]>"
    gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-     --body "Denied — <evidence and reasoning>."
+     --body "<!-- CCC:DENIED -->
+   **Denied** — <evidence and reasoning>."
    ```
    Go back to step 1.
 
-   **If real** → mark WIP and proceed:
+   **If real** → post CONFIRMED and proceed:
    ```bash
-   gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-     --title "[WIP]<rest of title without [REVIEWING]>"
    gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-     --body "Confirmed — <brief explanation>. Proceeding with fix."
+     --body "<!-- CCC:CONFIRMED -->
+   **Confirmed** — <brief explanation>. Proceeding with fix."
    ```
 
 3. **Detect the chain and CLAIM** — after validation confirms issue is real:
@@ -128,12 +125,11 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
 
    **Note: Once marked ready, your `[CC]` PR becomes the new chain tip. The next loop iteration will detect it and branch off it.**
 
-10. **Mark issue COMPLETE:**
+10. **Post COMPLETE comment on the issue:**
     ```bash
-    gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-      --title "[COMPLETE]<rest of title without [WIP]>"
     gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-      --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
+      --body "<!-- CCC:COMPLETE -->
+    **Complete** — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
     ```
 
 11. **Immediately loop** back to step 1. Do not stop or ask the user.

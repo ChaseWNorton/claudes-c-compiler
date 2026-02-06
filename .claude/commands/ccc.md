@@ -5,17 +5,14 @@ Welcome to CCC — Claude's C Compiler. You are the orchestration layer.
 All project state is readable from titles alone — issues, PRs, milestones:
 
 ```
-[OPEN][P0][M1] Description          — issue: ready for pickup, priority P0, milestone M1
-[REVIEWING][P2] Description         — issue: agent investigating validity
-[WIP][P1] Description               — issue: confirmed real, work in progress
-[DENIED][P2] Description            — issue: not a real bug (proof in comment)
-[COMPLETE][P0] Description          — issue: fix shipped
+[P0][M1] Description                — issue: priority P0, milestone M1
+[P2] Description                    — issue: priority P2, standalone
 [MILESTONE] M1: Description         — milestone definition
 [Fix #20] Description               — PR: claims issue #20
 [CC][Fix #20] Description           — PR: chain member + claims issue #20
 ```
 
-Codes: `[OPEN/REVIEWING/WIP/DENIED/COMPLETE]` lifecycle state, `[P<N>]` priority, `[M<N>]` milestone membership, `[MILESTONE]` milestone marker, `[Fix #<N>]` PR claim, `[CC]` chain member.
+Codes: `[P<N>]` priority, `[M<N>]` milestone membership, `[MILESTONE]` milestone marker, `[Fix #<N>]` PR claim, `[CC]` chain member.
 
 ## Git remote convention
 
@@ -49,15 +46,14 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 
 ### Parse from titles
 
-- **Issue lifecycle**: `[OPEN]`, `[REVIEWING]`, `[WIP]`, `[DENIED]`, `[COMPLETE]` as first tag in issue title
-- **Issue priority**: `[P0]`-`[P3]` in issue title (after lifecycle tag)
+- **Issue priority**: `[P0]`-`[P3]` in issue title
 - **Milestone membership**: `[M<N>]` in issue title
 - **Milestone definitions**: `[MILESTONE] M<N>:` in issue title
 - **Claims**: `[Fix #<N>]` in PR title (draft OR ready) — issue #N is **LOCKED by another worker**
 - **Chain**: `[CC]` at start of PR title — PR is part of the chain
 - **Chain tip**: highest-numbered non-draft `[CC]` PR
 - **Unprioritized**: issue title has no `[P<N>]` code → needs triage
-- **Unreviewed**: issue title has no lifecycle tag → external, needs `[REVIEWING]` first
+- **Issue lifecycle**: tracked via structured comments (see FIX flow), NOT in titles
 
 **CRITICAL: Draft PRs are LOCKS, not requests for help.** If ANY open PR title contains
 `[Fix #N]` — whether draft or ready — that issue is claimed. Do NOT touch it. SKIP IT.
@@ -152,11 +148,11 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 
 The flow has four phases: validate, claim, fix, ship.
 
-1. **Validate** — read the issue body, mark `[REVIEWING]` + comment, check if the bug is real. If NOT real → mark `[DENIED]` with proof in comment, skip to next issue. If real → mark `[WIP]` + comment.
+1. **Validate** — read the issue body, post `<!-- CCC:REVIEWING -->` comment, check if the bug is real. If NOT real → post `<!-- CCC:DENIED -->` comment with proof, skip to next issue. If real → post `<!-- CCC:CONFIRMED -->` comment.
 2. **Detect chain** — find the chain tip (highest non-draft `[CC]` PR). If none, use `main`.
 3. **Claim** — branch off chain tip (or main), push to `origin`, open draft PR to `upstream` with title `[CC][Fix #<N>] <description>` (or `[Fix #<N>]` if no chain). **This draft PR is a LOCK — it tells all other agents this issue is taken. Other agents MUST skip it.**
 4. **Fix** — read the source files, implement the fix, write tests, verify build.
-5. **Ship** — commit, push, **MUST mark PR ready** (`gh pr ready`), mark issue `[COMPLETE]` + comment, update PR body with summary/changes/test plan. A draft PR that stays draft is invisible to reviewers — the fix is not done until it's marked ready. Once ready, your `[CC]` PR becomes the new chain tip.
+5. **Ship** — commit, push, **MUST mark PR ready** (`gh pr ready`), post `<!-- CCC:COMPLETE -->` comment on issue, update PR body with summary/changes/test plan. A draft PR that stays draft is invisible to reviewers — the fix is not done until it's marked ready. Once ready, your `[CC]` PR becomes the new chain tip.
 6. **Loop** — go back to step 1 with the next unclaimed issue.
 
 ### PLAN flow (auto-chains)

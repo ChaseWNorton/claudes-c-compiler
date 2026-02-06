@@ -15,21 +15,20 @@ Claim and fix the next available issue from `anthropics/claudes-c-compiler`, the
 LOOP:
   1. Find next unclaimed issue (highest priority first)
   2. If none available → STOP (all done!)
-  3. VALIDATE FIRST — read issue, mark [REVIEWING], check if real
-     3a. If NOT real → mark [DENIED] with proof, skip, GOTO 1
-     3b. If real → mark [WIP], continue
+  3. VALIDATE FIRST — post CCC:REVIEWING comment, read code, check if real
+     3a. If NOT real → post CCC:DENIED comment with proof, skip, GOTO 1
+     3b. If real → post CCC:CONFIRMED comment, continue
   4. Detect chain tip (highest non-draft [CC] PR, or main)
   5. CLAIM (branch off chain tip + draft PR with [CC] prefix)
-  6. Read issue body (= the complete work order)
-  7. Read the files mentioned in the issue
-  8. Implement the fix
-  9. Write tests as described in the issue
-  10. Verify: cargo build --release && cargo test --lib
-  11. Push
-  12. **MARK PR READY** (gh pr ready) — NOT OPTIONAL, a draft is invisible
-  13. **MARK ISSUE [COMPLETE]** — update title + comment with PR number
-  14. Your [CC] PR is now the chain tip for the next iteration
-  15. GOTO 1
+  6. Read the files mentioned in the issue
+  7. Implement the fix
+  8. Write tests as described in the issue
+  9. Verify: cargo build --release && cargo test --lib
+  10. Push
+  11. **MARK PR READY** (gh pr ready) — NOT OPTIONAL, a draft is invisible
+  12. Post CCC:COMPLETE comment on the issue with PR number
+  13. Your [CC] PR is now the chain tip for the next iteration
+  14. GOTO 1
 ```
 
 **DO NOT STOP** after fixing one issue. **DO NOT ASK** the user what to do next. Claim the next issue and continue.
@@ -68,34 +67,32 @@ try to help, do NOT open a second PR. Skip it immediately.
 
 Subtract claimed from open. Pick highest priority: `[P0]` > `[P1]` > `[P2]` > `[P3]`.
 Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational).
-Also skip issues tagged `[DENIED]`, `[WIP]`, `[REVIEWING]`, or `[COMPLETE]`.
+Also skip issues that have a `CCC:DENIED` or `CCC:REVIEWING` comment (check via
+`gh api repos/anthropics/claudes-c-compiler/issues/<N>/comments --jq '.[].body'`).
 
 ### Validate the issue (BEFORE creating any branch or PR)
 
 **CRITICAL: You MUST validate the issue before claiming it.**
 
 1. Read the issue body completely
-2. Mark as REVIEWING:
+2. Post REVIEWING comment:
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[REVIEWING]<rest of title without [OPEN]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Reviewing: investigating whether this issue is valid."
+  --body "<!-- CCC:REVIEWING -->
+**Reviewing** — investigating whether this issue is valid."
 ```
 3. Check the source code — does the bug actually exist?
-4. If NOT real → DENIED (with proof in comment), skip to next issue:
+4. If NOT real → post DENIED with proof, skip to next issue:
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[DENIED]<rest of title without [REVIEWING]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Denied — <evidence and reasoning>."
+  --body "<!-- CCC:DENIED -->
+**Denied** — <evidence and reasoning>."
 ```
-5. If real → WIP + proceed to claim:
+5. If real → post CONFIRMED, proceed to claim:
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[WIP]<rest of title without [REVIEWING]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Confirmed — <brief explanation>. Proceeding with fix."
+  --body "<!-- CCC:CONFIRMED -->
+**Confirmed** — <brief explanation>. Proceeding with fix."
 ```
 
 ### Claim an issue (chain-aware, AFTER validation confirms issue is real)
@@ -139,12 +136,11 @@ git push origin fix/issue-<NUMBER>
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
 ```
 
-**Then mark the issue COMPLETE:**
+**Then post COMPLETE comment on the issue:**
 ```bash
-gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler \
-  --title "[COMPLETE]<rest of title without [WIP]>"
 gh issue comment <NUMBER> --repo anthropics/claudes-c-compiler \
-  --body "Complete — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
+  --body "<!-- CCC:COMPLETE -->
+**Complete** — fix shipped in PR #<PR_NUMBER>. Awaiting merge."
 ```
 
 Then write the PR body with four sections: Problem, Approach, Changes, Test plan.
