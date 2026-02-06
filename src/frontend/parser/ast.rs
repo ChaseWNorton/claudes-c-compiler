@@ -446,7 +446,9 @@ pub struct InitDeclarator {
 /// Derived parts of a declarator (pointers, arrays, function params).
 #[derive(Debug, Clone)]
 pub enum DerivedDeclarator {
-    Pointer,
+    /// A pointer derivation. The bool indicates whether a `const` qualifier
+    /// appeared after the `*` (i.e. `int * const p` → `Pointer(true)`).
+    Pointer(bool),
     Array(Option<Box<Expr>>),
     Function(Vec<ParamDecl>, bool), // params, variadic
     /// Function pointer: (*name)(params) - distinguishes from pointer-to-return-type

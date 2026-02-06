@@ -761,7 +761,7 @@ impl<'a> ExprTypeChecker<'a> {
         let mut ctype = self.resolve_type_spec(&f.type_spec);
         for derived in &f.derived {
             match derived {
-                DerivedDeclarator::Pointer => {
+                DerivedDeclarator::Pointer(_) => {
                     ctype = CType::Pointer(Box::new(ctype), AddressSpace::Default);
                 }
                 DerivedDeclarator::Array(Some(size_expr)) => {
@@ -878,7 +878,7 @@ impl<'a> ExprTypeChecker<'a> {
                     let mut ctype = self.resolve_type_spec_with_scope(&decl.type_spec, &local_scope);
                     for derived in &declarator.derived {
                         match derived {
-                            DerivedDeclarator::Pointer => {
+                            DerivedDeclarator::Pointer(_) => {
                                 ctype = CType::Pointer(Box::new(ctype), AddressSpace::Default);
                             }
                             DerivedDeclarator::Array(Some(size_expr)) => {

@@ -410,7 +410,7 @@ impl Lowerer {
         //      matching the logic in compute_decl_info which checks `last_is_array`.
         //   2. Typedef'd pointer with array dimensions.
         let is_array_of_pointers = is_array && {
-            let ptr_pos = derived.iter().position(|d| matches!(d, DerivedDeclarator::Pointer));
+            let ptr_pos = derived.iter().position(|d| matches!(d, DerivedDeclarator::Pointer(_)));
             let last_arr_pos = derived.iter().rposition(|d| matches!(d, DerivedDeclarator::Array(_)));
             let has_derived_ptr_before_last_arr = matches!((ptr_pos, last_arr_pos), (Some(pp), Some(ap)) if pp < ap);
             let typedef_ptr_array = ptr_pos.is_none() && last_arr_pos.is_some() &&
@@ -437,7 +437,7 @@ impl Lowerer {
             base_ty
         };
 
-        let has_derived_ptr = derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer));
+        let has_derived_ptr = derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer(_)));
         let is_bool = self.is_type_bool(type_spec) && !has_derived_ptr && !is_array;
 
         let struct_layout = self.get_struct_layout_for_type(type_spec)
@@ -498,7 +498,7 @@ impl Lowerer {
                         DerivedDeclarator::FunctionPointer(_, _) | DerivedDeclarator::Function(_, _) => {
                             found_fptr = true;
                         }
-                        DerivedDeclarator::Pointer if found_fptr => {
+                        DerivedDeclarator::Pointer(_) if found_fptr => {
                             ptrs_after_fptr += 1;
                         }
                         _ => {}

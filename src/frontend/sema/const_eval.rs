@@ -1201,7 +1201,7 @@ fn ctype_from_type_spec_with_derived(
     }
     for d in derived {
         match d {
-            DerivedDeclarator::Pointer => {
+            DerivedDeclarator::Pointer(_) => {
                 ty = CType::Pointer(Box::new(ty), AddressSpace::Default);
             }
             DerivedDeclarator::Array(Some(size_expr)) => {

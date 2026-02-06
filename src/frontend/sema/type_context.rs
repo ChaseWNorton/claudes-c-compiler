@@ -50,7 +50,7 @@ pub fn extract_fptr_typedef_info(
     })?;
     let ptr_count_before_fptr = derived.iter()
         .take_while(|d| !matches!(d, DerivedDeclarator::FunctionPointer(_, _)))
-        .filter(|d| matches!(d, DerivedDeclarator::Pointer))
+        .filter(|d| matches!(d, DerivedDeclarator::Pointer(_)))
         .count();
     let ret_ptr_count = ptr_count_before_fptr.saturating_sub(1);
     let mut return_type = base_type.clone();

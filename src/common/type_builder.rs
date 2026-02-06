@@ -149,7 +149,7 @@ pub trait TypeConvertContext {
 fn find_function_pointer_core(derived: &[DerivedDeclarator]) -> Option<usize> {
     for i in 0..derived.len() {
         // Look for Pointer followed by FunctionPointer
-        if matches!(&derived[i], DerivedDeclarator::Pointer)
+        if matches!(&derived[i], DerivedDeclarator::Pointer(_))
             && i + 1 < derived.len()
                 && matches!(&derived[i + 1], DerivedDeclarator::FunctionPointer(_, _))
             {
@@ -227,7 +227,7 @@ pub fn build_full_ctype_with_base(
         // We fold prefix Pointer declarators into the base to form the return type.
         let mut result = base;
         for d in &derived[..fp_start] {
-            if matches!(d, DerivedDeclarator::Pointer) {
+            if matches!(d, DerivedDeclarator::Pointer(_)) {
                 result = CType::Pointer(Box::new(result), AddressSpace::Default);
             }
             // Array declarators in prefix are outer wrappers, handled after the core.
@@ -238,7 +238,7 @@ pub fn build_full_ctype_with_base(
         let mut i = fp_start;
         while i < derived.len() {
             match &derived[i] {
-                DerivedDeclarator::Pointer => {
+                DerivedDeclarator::Pointer(_) => {
                     if i + 1 < derived.len()
                         && matches!(
                             &derived[i + 1],
@@ -319,7 +319,7 @@ pub fn build_full_ctype_with_base(
         let mut i = 0;
         while i < derived.len() {
             match &derived[i] {
-                DerivedDeclarator::Pointer => {
+                DerivedDeclarator::Pointer(_) => {
                     result = CType::Pointer(Box::new(result), AddressSpace::Default);
                     i += 1;
                 }

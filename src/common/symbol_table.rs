@@ -24,6 +24,8 @@ pub struct Symbol {
     pub explicit_alignment: Option<usize>,
     /// Linkage as determined by storage-class specifiers at the declaration site.
     pub linkage: Linkage,
+    /// Whether this symbol was declared with the `const` qualifier.
+    pub is_const: bool,
 }
 
 /// A scope in the symbol table.

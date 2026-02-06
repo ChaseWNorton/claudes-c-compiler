@@ -53,9 +53,9 @@ impl Parser {
 
         // Parse pointer(s) with optional qualifiers and attributes
         while self.consume_if(&TokenKind::Star) {
-            derived.push(DerivedDeclarator::Pointer);
-            self.skip_cv_qualifiers();
+            let ptr_is_const = self.skip_cv_qualifiers();
             self.skip_gcc_extensions();
+            derived.push(DerivedDeclarator::Pointer(ptr_is_const));
         }
 
         // Parse the direct-declarator part
@@ -175,8 +175,8 @@ impl Parser {
 
         // Check for function pointer: inner has Pointer(s), outer starts with Function
         let inner_only_ptr_and_array = inner_derived.iter().all(|d|
-            matches!(d, DerivedDeclarator::Pointer | DerivedDeclarator::Array(_)));
-        let inner_has_pointer = inner_derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer));
+            matches!(d, DerivedDeclarator::Pointer(_) | DerivedDeclarator::Array(_)));
+        let inner_has_pointer = inner_derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer(_)));
         let outer_starts_with_function = matches!(outer_suffixes.first(), Some(DerivedDeclarator::Function(_, _)));
 
         if inner_only_ptr_and_array && inner_has_pointer && outer_starts_with_function
@@ -207,19 +207,19 @@ impl Parser {
             // Count inner pointers. The last one is the function pointer syntax marker.
             // All others are extra indirection levels placed AFTER the FunctionPointer.
             let inner_ptr_count = inner_derived.iter()
-                .filter(|d| matches!(d, DerivedDeclarator::Pointer))
+                .filter(|d| matches!(d, DerivedDeclarator::Pointer(_)))
                 .count();
             let extra_indirection_ptrs = if inner_ptr_count > 0 { inner_ptr_count - 1 } else { 0 };
 
             // Emit the function pointer syntax marker + FunctionPointer
-            result.push(DerivedDeclarator::Pointer);
+            result.push(DerivedDeclarator::Pointer(false));
             if let Some(DerivedDeclarator::Function(params, variadic)) = outer_suffixes.into_iter().next() {
                 result.push(DerivedDeclarator::FunctionPointer(params, variadic));
             }
 
             // Emit extra indirection Pointers (beyond the syntax marker)
             for _ in 0..extra_indirection_ptrs {
-                result.push(DerivedDeclarator::Pointer);
+                result.push(DerivedDeclarator::Pointer(false));
             }
 
             // Emit inner arrays (for array of function pointers, e.g., `int (*fps[10])(int)`)
@@ -251,7 +251,7 @@ impl Parser {
             // Split inner_derived at the last Pointer:
             // - pre_ptr_arrays: arrays before the last pointer (part of pointee type)
             // - post_ptr_arrays: arrays after the last pointer (variable's own array dimensions)
-            let last_ptr_idx = inner_derived.iter().rposition(|d| matches!(d, DerivedDeclarator::Pointer))
+            let last_ptr_idx = inner_derived.iter().rposition(|d| matches!(d, DerivedDeclarator::Pointer(_)))
                 .expect("inner_has_pointer is true, so a Pointer must exist");
             let mut result = outer_pointers;
             // 1. Arrays from inner that come before the pointer (pointee array dimensions)
@@ -264,7 +264,7 @@ impl Parser {
             result.extend(outer_suffixes);
             // 3. Pointer(s)
             for d in &inner_derived[..=last_ptr_idx] {
-                if matches!(d, DerivedDeclarator::Pointer) {
+                if matches!(d, DerivedDeclarator::Pointer(_)) {
                     result.push(d.clone());
                 }
             }
@@ -283,7 +283,7 @@ impl Parser {
         //
         // This does NOT match function definitions returning function pointers like
         // `int (*g(int))(int)`, where inner has Function (not FunctionPointer).
-        let inner_starts_with_pointer = matches!(inner_derived.first(), Some(DerivedDeclarator::Pointer));
+        let inner_starts_with_pointer = matches!(inner_derived.first(), Some(DerivedDeclarator::Pointer(_)));
         let inner_has_fptr = inner_derived.iter().any(|d| matches!(d, DerivedDeclarator::FunctionPointer(_, _)));
         if inner_starts_with_pointer && inner_has_fptr && outer_starts_with_function {
             let mut result = outer_pointers;
@@ -293,7 +293,7 @@ impl Parser {
             for suffix in outer_suffixes {
                 match suffix {
                     DerivedDeclarator::Function(params, variadic) => {
-                        result.push(DerivedDeclarator::Pointer);
+                        result.push(DerivedDeclarator::Pointer(false));
                         result.push(DerivedDeclarator::FunctionPointer(params, variadic));
                     }
                     other => result.push(other),

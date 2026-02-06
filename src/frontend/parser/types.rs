@@ -762,7 +762,7 @@ impl Parser {
         let mut i = 0;
         while i < derived.len() {
             match &derived[i] {
-                DerivedDeclarator::Pointer => {
+                DerivedDeclarator::Pointer(_) => {
                     result = TypeSpecifier::Pointer(Box::new(result), AddressSpace::Default);
                     i += 1;
                 }

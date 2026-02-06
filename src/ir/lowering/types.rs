@@ -592,7 +592,7 @@ impl Lowerer {
         // Resolve the type spec through CType for typedef detection
         let resolved_ctype = self.type_spec_to_ctype(ts);
         // Check for pointer declarators (from derived or from the resolved type itself)
-        let has_pointer = derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer))
+        let has_pointer = derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer(_)))
             || matches!(ts, TypeSpecifier::Pointer(_, _))
             || matches!(resolved_ctype, CType::Pointer(_, _));
 
@@ -602,7 +602,7 @@ impl Lowerer {
         // Handle pointer and array combinations
         if has_pointer && !has_array {
             // Simple pointer: int *p, or typedef'd pointer (e.g., typedef struct Foo *FooPtr)
-            let ptr_count = derived.iter().filter(|d| matches!(d, DerivedDeclarator::Pointer)).count();
+            let ptr_count = derived.iter().filter(|d| matches!(d, DerivedDeclarator::Pointer(_))).count();
             let elem_size = if let TypeSpecifier::Pointer(inner, _) = ts {
                 if ptr_count >= 1 {
                     ptr_sz
@@ -637,7 +637,7 @@ impl Lowerer {
 
             // If pointer is from resolved type spec (not in derived), and array is in derived,
             // this is an array of typedef'd pointers
-            let ptr_pos = derived.iter().position(|d| matches!(d, DerivedDeclarator::Pointer));
+            let ptr_pos = derived.iter().position(|d| matches!(d, DerivedDeclarator::Pointer(_)));
             let pointer_from_type_spec = ptr_pos.is_none() && (matches!(ts, TypeSpecifier::Pointer(_, _)) || matches!(resolved_ctype, CType::Pointer(_, _)));
 
             // Check if the outermost (last) derived element is an Array
@@ -653,7 +653,7 @@ impl Lowerer {
                 //   (derived=[Array(3), Pointer, FunctionPointer(...)]):
                 //   Array dims BEFORE the Pointer are the variable's dimensions,
                 //   because the Pointer+FunctionPointer group describes the element type.
-                let last_ptr_pos = derived.iter().rposition(|d| matches!(d, DerivedDeclarator::Pointer));
+                let last_ptr_pos = derived.iter().rposition(|d| matches!(d, DerivedDeclarator::Pointer(_)));
                 let array_dims: Vec<Option<usize>> = if let Some(lpp) = last_ptr_pos {
                     // First try: collect Array dims after the last pointer
                     let after_dims: Vec<Option<usize>> = derived[lpp + 1..].iter().filter_map(|d| {
@@ -703,7 +703,7 @@ impl Lowerer {
             //   Node* (*p)[2]     -> derived=[Pointer, Array(2), Pointer] -> trailing=1, rest=[Pointer, Array(2)]
             //   char (**pp)[2]    -> derived=[Array(2), Pointer, Pointer] -> trailing=2, pp is ptr-to-ptr
             let trailing_ptr_count = derived.iter().rev()
-                .take_while(|d| matches!(d, DerivedDeclarator::Pointer))
+                .take_while(|d| matches!(d, DerivedDeclarator::Pointer(_)))
                 .count();
 
             // When there are multiple trailing pointers (e.g., char (**pp)[2]),
@@ -730,7 +730,7 @@ impl Lowerer {
             // If the non-trailing part has Pointer entries, the element type includes
             // those pointer levels. E.g., for Node* (*p)[2], rest=[Pointer, Array(2)],
             // the Pointer makes the element type Node* (a pointer), so elem size = ptr_sz.
-            let rest_has_pointer = rest.iter().any(|d| matches!(d, DerivedDeclarator::Pointer));
+            let rest_has_pointer = rest.iter().any(|d| matches!(d, DerivedDeclarator::Pointer(_)));
             let base_elem_size = if rest_has_pointer {
                 ptr_sz
             } else {

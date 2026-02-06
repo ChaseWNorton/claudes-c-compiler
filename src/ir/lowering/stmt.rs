@@ -339,7 +339,7 @@ impl Lowerer {
                 // syntax marker (1) plus any return-type pointer indirections.
                 // If there are return-type pointers, the return type is a pointer.
                 let ptr_count_before = declarator.derived[..i].iter()
-                    .filter(|d| matches!(d, DerivedDeclarator::Pointer | DerivedDeclarator::Array(_)))
+                    .filter(|d| matches!(d, DerivedDeclarator::Pointer(_) | DerivedDeclarator::Array(_)))
                     .count();
                 // Subtract 1 for the syntax marker pointer
                 let return_type_ptrs = ptr_count_before.saturating_sub(1);
@@ -500,7 +500,7 @@ impl Lowerer {
         for (i, d) in declarator.derived.iter().enumerate() {
             if let DerivedDeclarator::FunctionPointer(params, _) = d {
                 let ptr_count_before = declarator.derived[..i].iter()
-                    .filter(|d| matches!(d, DerivedDeclarator::Pointer | DerivedDeclarator::Array(_)))
+                    .filter(|d| matches!(d, DerivedDeclarator::Pointer(_) | DerivedDeclarator::Array(_)))
                     .count();
                 let return_type_ptrs = ptr_count_before.saturating_sub(1);
                 let ret_ty = if return_type_ptrs > 0 {
@@ -1335,7 +1335,7 @@ impl Lowerer {
     /// If the outermost (last) derivation is an Array and there's a Pointer
     /// before it, the array elements are pointers (8 bytes on 64-bit).
     fn vla_base_element_size(&self, type_spec: &TypeSpecifier, derived: &[DerivedDeclarator]) -> usize {
-        let has_pointer = derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer));
+        let has_pointer = derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer(_)));
         let has_func_ptr = derived.iter().any(|d| matches!(d,
             DerivedDeclarator::FunctionPointer(_, _) | DerivedDeclarator::Function(_, _)));
         let has_array = derived.iter().any(|d| matches!(d, DerivedDeclarator::Array(_)));

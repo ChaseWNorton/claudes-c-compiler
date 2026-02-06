@@ -39,6 +39,7 @@ use crate::frontend::parser::ast::{
     StructFieldDecl,
     TranslationUnit,
     TypeSpecifier,
+    UnaryOp,
 };
 use crate::frontend::sema::builtins;
 use super::type_context::{TypeContext, FunctionTypedefInfo};
@@ -244,6 +245,7 @@ impl SemanticAnalyzer {
             ty: func_ctype,
             explicit_alignment: None,
             linkage: func_linkage,
+            is_const: false,
         });
 
         // Push scope for function body (both symbol table and type context,
@@ -260,6 +262,7 @@ impl SemanticAnalyzer {
                     ty,
                     explicit_alignment: None,
                     linkage: Linkage::None,
+                    is_const: param.is_const,
                 });
             }
         }
@@ -339,7 +342,7 @@ impl SemanticAnalyzer {
                         declarator.derived.iter().find(|d| matches!(d, DerivedDeclarator::Function(_, _)))
                     {
                         let ptr_count = declarator.derived.iter()
-                            .take_while(|d| matches!(d, DerivedDeclarator::Pointer))
+                            .take_while(|d| matches!(d, DerivedDeclarator::Pointer(_)))
                             .count();
                         let mut return_type = decl.type_spec.clone();
                         for _ in 0..ptr_count {
@@ -362,7 +365,7 @@ impl SemanticAnalyzer {
                         matches!(d, DerivedDeclarator::FunctionPointer(_, _)))
                     {
                         let ptr_count = declarator.derived.iter()
-                            .take_while(|d| matches!(d, DerivedDeclarator::Pointer))
+                            .take_while(|d| matches!(d, DerivedDeclarator::Pointer(_)))
                             .count();
                         let ret_ptr_count = if ptr_count > 0 { ptr_count - 1 } else { 0 };
                         let mut return_type = decl.type_spec.clone();
@@ -520,11 +523,28 @@ impl SemanticAnalyzer {
             if !init_decl.name.is_empty() {
                 self.check_linkage_conflict(&init_decl.name, var_linkage, init_decl.span);
             }
+            // Determine whether the variable itself is const-qualified.
+            // - `const int x`   → decl.is_const()=true, no pointers → const
+            // - `const int *p`  → decl.is_const()=true, has pointer → NOT const (pointee is const)
+            // - `int * const p` → last Pointer(true) → const
+            let has_ptr = init_decl.derived.iter().any(|d| matches!(d, DerivedDeclarator::Pointer(_)));
+            let var_is_const = if has_ptr {
+                // Variable constness comes from the outermost (last) pointer's qualifier
+                init_decl.derived.iter().rev()
+                    .find_map(|d| match d {
+                        DerivedDeclarator::Pointer(c) => Some(*c),
+                        _ => None,
+                    })
+                    .unwrap_or(false)
+            } else {
+                decl.is_const()
+            };
             self.symbol_table.declare(Symbol {
                 name: init_decl.name.clone(),
                 ty: full_type,
                 explicit_alignment,
                 linkage: var_linkage,
+                is_const: var_is_const,
             });
 
             // Analyze array size expressions in derived declarators
@@ -767,6 +787,7 @@ impl SemanticAnalyzer {
                 ty: sym_ty,
                 explicit_alignment: None,
                 linkage: Linkage::None,
+                is_const: false,
             });
             self.enum_counter += 1;
         }
@@ -1427,15 +1448,20 @@ impl SemanticAnalyzer {
                 }
                 self.check_const_expr_warnings(op, lhs, rhs, *span);
             }
-            Expr::UnaryOp(_, operand, _) => {
+            Expr::UnaryOp(op, operand, span) => {
                 self.analyze_expr(operand);
+                if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
+                    self.check_const_modification(operand, *span);
+                }
             }
-            Expr::PostfixOp(_, operand, _) => {
+            Expr::PostfixOp(_, operand, span) => {
                 self.analyze_expr(operand);
+                self.check_const_modification(operand, *span);
             }
             Expr::Assign(lhs, rhs, span) => {
                 self.analyze_expr(lhs);
                 self.analyze_expr(rhs);
+                self.check_const_modification(lhs, *span);
                 // Check for invalid pointer <-> float conversions in assignment
                 let checker = super::type_checker::ExprTypeChecker {
                     symbols: &self.symbol_table,
@@ -1451,9 +1477,10 @@ impl SemanticAnalyzer {
                     self.check_implicit_conversion(&lhs_ty, &rhs_ty, rhs, *span);
                 }
             }
-            Expr::CompoundAssign(_, lhs, rhs, _) => {
+            Expr::CompoundAssign(_, lhs, rhs, span) => {
                 self.analyze_expr(lhs);
                 self.analyze_expr(rhs);
+                self.check_const_modification(lhs, *span);
             }
             Expr::Conditional(cond, then_expr, else_expr, _) => {
                 self.analyze_expr(cond);
@@ -1865,6 +1892,26 @@ impl SemanticAnalyzer {
                 ),
                 span,
             );
+        }
+    }
+
+    /// Check if an lvalue expression refers to a const-qualified variable.
+    /// If so, emit an error: "assignment of read-only variable 'x'" (matches GCC).
+    fn check_const_modification(&self, expr: &Expr, span: Span) {
+        let name = match expr {
+            Expr::Identifier(name, _) => name,
+            // For dereferences, member access, subscripts — the constness
+            // lives in the pointer's pointee type, which we don't track yet.
+            // Focus on the direct variable case for now.
+            _ => return,
+        };
+        if let Some(sym) = self.symbol_table.lookup(name) {
+            if sym.is_const {
+                self.diagnostics.borrow_mut().error(
+                    format!("assignment of read-only variable '{}'", name),
+                    span,
+                );
+            }
         }
     }
 
@@ -2585,5 +2632,120 @@ mod tests {
     #[test]
     fn static_func_accepted() {
         assert_eq!(sema_errors("static int foo(void) { return 42; } int main(void) { return foo(); }"), 0);
+    }
+
+    // ---- const assignment: direct variable ----
+
+    #[test]
+    fn assign_to_const_var_errors() {
+        assert!(sema_errors("int main(void) { const int x = 5; x = 10; return x; }") > 0);
+    }
+
+    #[test]
+    fn assign_to_nonconst_var_no_error() {
+        assert_eq!(sema_errors("int main(void) { int x = 5; x = 10; return x; }"), 0);
+    }
+
+    #[test]
+    fn compound_assign_to_const_errors() {
+        assert!(sema_errors("int main(void) { const int x = 5; x += 1; return x; }") > 0);
+    }
+
+    #[test]
+    fn preinc_const_errors() {
+        assert!(sema_errors("int main(void) { const int x = 5; ++x; return x; }") > 0);
+    }
+
+    #[test]
+    fn predec_const_errors() {
+        assert!(sema_errors("int main(void) { const int x = 5; --x; return x; }") > 0);
+    }
+
+    #[test]
+    fn postinc_const_errors() {
+        assert!(sema_errors("int main(void) { const int x = 5; x++; return x; }") > 0);
+    }
+
+    #[test]
+    fn postdec_const_errors() {
+        assert!(sema_errors("int main(void) { const int x = 5; x--; return x; }") > 0);
+    }
+
+    // ---- const: non-error cases ----
+
+    #[test]
+    fn const_var_read_only_no_error() {
+        // Just reading a const variable is fine
+        assert_eq!(sema_errors("int main(void) { const int x = 42; return x; }"), 0);
+    }
+
+    #[test]
+    fn const_used_in_expression_no_error() {
+        assert_eq!(sema_errors("int main(void) { const int x = 5; int y = x + 1; return y; }"), 0);
+    }
+
+    #[test]
+    fn nonconst_increment_no_error() {
+        assert_eq!(sema_errors("int main(void) { int x = 0; x++; ++x; x--; --x; return x; }"), 0);
+    }
+
+    #[test]
+    fn nonconst_compound_assign_no_error() {
+        assert_eq!(sema_errors("int main(void) { int x = 10; x += 5; x -= 3; x *= 2; return x; }"), 0);
+    }
+
+    // ---- const at global scope ----
+
+    #[test]
+    fn global_const_assign_errors() {
+        assert!(sema_errors("const int g = 42; int main(void) { g = 10; return g; }") > 0);
+    }
+
+    #[test]
+    fn global_nonconst_assign_no_error() {
+        assert_eq!(sema_errors("int g = 42; int main(void) { g = 10; return g; }"), 0);
+    }
+
+    // ---- const parameter ----
+
+    #[test]
+    fn const_param_assign_errors() {
+        assert!(sema_errors("int foo(const int x) { x = 10; return x; } int main(void) { return foo(5); }") > 0);
+    }
+
+    #[test]
+    fn nonconst_param_assign_no_error() {
+        assert_eq!(sema_errors("int foo(int x) { x = 10; return x; } int main(void) { return foo(5); }"), 0);
+    }
+
+    // ---- multiple assignment forms ----
+
+    #[test]
+    fn const_bitwise_compound_assign_errors() {
+        assert!(sema_errors("int main(void) { const int x = 0xFF; x &= 0x0F; return x; }") > 0);
+    }
+
+    #[test]
+    fn const_shift_compound_assign_errors() {
+        assert!(sema_errors("int main(void) { const int x = 1; x <<= 2; return x; }") > 0);
+    }
+
+    // ---- pointer-to-const vs const-pointer ----
+
+    #[test]
+    fn pointer_to_const_int_reassign_pointer_no_error() {
+        // const int *p — pointer to const int; reassigning p itself is fine
+        assert_eq!(
+            sema_errors("int main(void) { int a = 1; int b = 2; const int *p = &a; p = &b; return *p; }"),
+            0
+        );
+    }
+
+    #[test]
+    fn const_pointer_reassign_errors() {
+        // int * const p — the pointer is const, can't reassign p
+        assert!(sema_errors(
+            "int main(void) { int a = 1; int b = 2; int * const p = &a; p = &b; return *p; }"
+        ) > 0);
     }
 }

@@ -65,7 +65,7 @@ impl Lowerer {
     /// For `int a[10]` (type_spec=Int, derived=[Array(10)]): returns Some(I32)
     pub(super) fn compute_pointee_type(&self, type_spec: &TypeSpecifier, derived: &[DerivedDeclarator]) -> Option<IrType> {
         // Count pointer and array levels
-        let ptr_count = derived.iter().filter(|d| matches!(d, DerivedDeclarator::Pointer)).count();
+        let ptr_count = derived.iter().filter(|d| matches!(d, DerivedDeclarator::Pointer(_))).count();
         let has_array = derived.iter().any(|d| matches!(d, DerivedDeclarator::Array(_)));
 
         if ptr_count > 1 {

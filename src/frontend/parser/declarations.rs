@@ -313,7 +313,7 @@ impl Parser {
                             size_expr.clone(),
                         );
                     }
-                    DerivedDeclarator::Pointer => {
+                    DerivedDeclarator::Pointer(_) => {
                         return_type = TypeSpecifier::Pointer(Box::new(return_type), AddressSpace::Default);
                     }
                     _ => {}
@@ -322,7 +322,7 @@ impl Parser {
             // Apply pre-Function derivations
             for d in &derived[..fpos] {
                 match d {
-                    DerivedDeclarator::Pointer => {
+                    DerivedDeclarator::Pointer(_) => {
                         return_type = TypeSpecifier::Pointer(Box::new(return_type), AddressSpace::Default);
                     }
                     DerivedDeclarator::Array(size_expr) => {
@@ -338,7 +338,7 @@ impl Parser {
             // No Function in derived - just apply pointer derivations
             for d in derived {
                 match d {
-                    DerivedDeclarator::Pointer => {
+                    DerivedDeclarator::Pointer(_) => {
                         return_type = TypeSpecifier::Pointer(Box::new(return_type), AddressSpace::Default);
                     }
                     _ => break,
@@ -368,7 +368,7 @@ impl Parser {
                                     DerivedDeclarator::FunctionPointer(_, _) | DerivedDeclarator::Function(_, _) => {
                                         found_fptr = true;
                                     }
-                                    DerivedDeclarator::Pointer if found_fptr => {
+                                    DerivedDeclarator::Pointer(_) if found_fptr => {
                                         ptrs_after += 1;
                                     }
                                     _ => {}
@@ -434,7 +434,7 @@ impl Parser {
             // For `int *(*fp)()`:
             //   pderived = [Pointer, Pointer, FunctionPointer([], false)]
             //   First Pointer is return-type pointer, second is syntax marker.
-            let ptr_count = pderived.iter().filter(|d| matches!(d, DerivedDeclarator::Pointer)).count();
+            let ptr_count = pderived.iter().filter(|d| matches!(d, DerivedDeclarator::Pointer(_))).count();
             // Apply all pointers except the syntax marker (last one)
             for _ in 0..ptr_count.saturating_sub(1) {
                 full_type = TypeSpecifier::Pointer(Box::new(full_type), AddressSpace::Default);
@@ -447,7 +447,7 @@ impl Parser {
         // Not a function pointer - apply all derivations normally.
         // Apply pointers
         for d in pderived {
-            if let DerivedDeclarator::Pointer = d {
+            if let DerivedDeclarator::Pointer(_) = d {
                 full_type = TypeSpecifier::Pointer(Box::new(full_type), AddressSpace::Default);
             }
         }
