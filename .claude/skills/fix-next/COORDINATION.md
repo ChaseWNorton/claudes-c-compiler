@@ -115,11 +115,17 @@ git commit -m "Fix #<NUMBER>: <short description>"
 git push origin fix/issue-<NUMBER>
 ```
 
-### Step 8: Mark PR ready + update body
+### Step 8: CRITICAL — Mark PR ready for review
+
+**DO NOT SKIP THIS. A draft PR is invisible to reviewers. The fix is NOT done until you run this:**
 
 ```bash
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
+```
 
+Then update the body:
+
+```bash
 gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
 ## Summary
 <what was wrong and why — reference C11 section if applicable>

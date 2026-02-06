@@ -125,7 +125,7 @@ The claim and the fix are separate phases:
 
 1. **Claim** — create branch, push to `origin` (your fork), open draft PR to `upstream` with title `[Fix #<N>] <description>`. This is the lock. Do this BEFORE writing any code.
 2. **Fix** — read the issue body (work order), read the source files, implement the fix, write tests, verify build.
-3. **Ship** — commit, push, mark PR ready, update PR body with summary/changes/test plan.
+3. **Ship** — commit, push, **MUST mark PR ready** (`gh pr ready`), update PR body with summary/changes/test plan. A draft PR that stays draft is invisible to reviewers — the fix is not done until it's marked ready.
 4. **Loop** — go back to step 1 with the next unclaimed issue.
 
 ### PLAN flow (auto-chains)

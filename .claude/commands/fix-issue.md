@@ -62,25 +62,30 @@ If any PR title contains `[Fix #$ARGUMENTS]`, it's already claimed. Tell the use
    git push origin fix/issue-$ARGUMENTS
    ```
 
-9. **Mark PR ready and update body:**
+9. **CRITICAL — Convert draft PR to ready for review. DO NOT SKIP THIS STEP:**
    ```bash
    gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
-   gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
-   ## Summary
-   <what was wrong and why>
-
-   ## Changes
-   <what you changed>
-
-   ## Test plan
-   - [x] `cargo build --release` passes
-   - [x] `cargo test --lib` passes
-   - [x] New tests added
-
-   Fixes #$ARGUMENTS
-   EOF
-   )"
    ```
+   **A draft PR that stays draft is invisible to reviewers. The fix is NOT done until the PR is marked ready.**
+
+10. **Update PR body:**
+    ```bash
+    gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
+    ## Summary
+    <what was wrong and why>
+
+    ## Changes
+    <what you changed>
+
+    ## Test plan
+    - [x] `cargo build --release` passes
+    - [x] `cargo test --lib` passes
+    - [x] New tests added
+
+    Fixes #$ARGUMENTS
+    EOF
+    )"
+    ```
 
 ## PR requirements
 

@@ -21,8 +21,9 @@ LOOP:
   6. Implement the fix
   7. Write tests as described in the issue
   8. Verify: cargo build --release && cargo test --lib
-  9. Push, mark PR ready for review
-  10. GOTO 1
+  9. Push
+  10. **MARK PR READY** (gh pr ready) — NOT OPTIONAL, a draft is invisible
+  11. GOTO 1
 ```
 
 **DO NOT STOP** after fixing one issue. **DO NOT ASK** the user what to do next. Claim the next issue and continue.
@@ -55,17 +56,24 @@ gh pr create --repo anthropics/claudes-c-compiler \
   --body "WIP — Fixes #<NUMBER>" --draft
 ```
 
-### Complete and finalize
+### Complete and push
 
 ```bash
 cargo build --release && cargo test --lib   # Must pass
 git add <specific-files>
 git commit -m "Fix #<NUMBER>: <short description>"
 git push origin fix/issue-<NUMBER>
+```
+
+### CRITICAL: Mark PR ready for review
+
+**DO NOT SKIP THIS. A draft PR is invisible to reviewers. The fix is NOT done until you run this:**
+
+```bash
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
 ```
 
-Update PR body with Summary, Changes, Test plan. End with `Fixes #<NUMBER>`.
+Then update PR body with Summary, Changes, Test plan. End with `Fixes #<NUMBER>`.
 
 ## Implementation Rules
 

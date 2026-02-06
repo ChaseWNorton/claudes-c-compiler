@@ -51,14 +51,19 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    cargo build --release && cargo test --lib
    ```
 
-8. **Push and finalize the PR:**
+8. **Push:**
    ```bash
    git add <specific-files>
    git commit -m "Fix #<NUMBER>: <short description>"
    git push origin fix/issue-<NUMBER>
+   ```
+
+9. **CRITICAL — Convert draft PR to ready for review. DO NOT SKIP THIS STEP:**
+   ```bash
    gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
    ```
-   Update the PR body with Summary, Changes, and Test plan sections. End body with `Fixes #<NUMBER>`.
+   Then update the PR body with Summary, Changes, and Test plan sections. End body with `Fixes #<NUMBER>`.
+   **A draft PR that stays draft is invisible to reviewers. The fix is NOT done until the PR is marked ready.**
 
 9. **Immediately loop** back to step 1. Do not stop or ask the user.
 
