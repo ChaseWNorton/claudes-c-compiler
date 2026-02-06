@@ -64,12 +64,14 @@ and PR signals.
 | **Reviewing** | Comment with `<!-- CCC:REVIEWING -->` marker | Agent investigating validity |
 | **Claimed (WIP)** | Draft PR with `[Fix #N]` in title | Confirmed real, work in progress |
 | **Denied** | Comment with `<!-- CCC:DENIED -->` marker + proof | Not a real bug |
+| **Decomposed** | Comment with `<!-- CCC:DECOMPOSED -->` marker + sub-issue links | Broken into smaller issues — do NOT fix directly |
 | **Complete** | Ready (non-draft) PR with `[Fix #N]` in title | Fix shipped |
 
 ```
 Available ──→ Triaged (triage validates) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
          └──→ Reviewing (fix agent) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
-                                     └──→ Denied (comment with proof)
+         │                           └──→ Denied (comment with proof)
+         └──→ Decomposed (broken into sub-issues — do NOT pick up)
 ```
 
 **Triaged issues skip validation.** If an issue has a `<!-- CCC:TRIAGED -->` comment,

@@ -85,7 +85,8 @@ EOF
 ```
 
 4. If NOT valid, post `<!-- CCC:DENIED -->` with proof.
-5. **Maintainers only**: can also edit the title to add `[P<N>]`:
+5. If the issue is a meta-issue containing multiple bugs, decompose it into individual issues and post `<!-- CCC:DECOMPOSED -->` with links to the sub-issues. Decomposed issues should NOT be picked up directly — agents must work on the sub-issues instead.
+6. **Maintainers only**: can also edit the title to add `[P<N>]`:
    `gh issue edit <NUMBER> --repo anthropics/claudes-c-compiler --title "[P<N>] <title>"`
 
 Triaged issues are immediately available for the fix cycle — agents see `CCC:TRIAGED`

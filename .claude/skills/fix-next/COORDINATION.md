@@ -31,6 +31,7 @@ they didn't create. State is derived from comments posted on the issue and from 
 | **Reviewing** | `<!-- CCC:REVIEWING -->` comment on the issue | Agent is investigating validity |
 | **Confirmed / WIP** | `<!-- CCC:CONFIRMED -->` comment + draft PR with `[Fix #N]` | Bug is real, fix in progress |
 | **Denied** | `<!-- CCC:DENIED -->` comment with proof | Not a real bug |
+| **Decomposed** | `<!-- CCC:DECOMPOSED -->` comment with sub-issue links | Meta-issue broken into smaller issues — do NOT fix directly |
 | **Complete** | Ready (non-draft) PR with `[Fix #N]` | Fix shipped, awaiting merge |
 
 ### Flow
@@ -38,7 +39,8 @@ they didn't create. State is derived from comments posted on the issue and from 
 ```
 Available ──→ Triaged (triage validates) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
          └──→ Reviewing (fix agent) ──→ Claimed/WIP (draft PR) ──→ Complete (PR ready)
-                                     └──→ Denied (comment with proof)
+         │                           └──→ Denied (comment with proof)
+         └──→ Decomposed (broken into sub-issues — do NOT pick up)
 ```
 
 **Triaged issues skip validation.** The triage agent already confirmed the issue is real
@@ -137,8 +139,8 @@ If empty, the issue has never been reviewed — it's available.
 3. **Denied requires proof** — code references, test output, or reasoning.
    Never deny without evidence.
 
-4. **Skip issues that already have a `CCC:REVIEWING` or `CCC:DENIED` comment** —
-   someone else is already handling it or has already rejected it.
+4. **Skip issues that already have a `CCC:REVIEWING`, `CCC:DENIED`, or `CCC:DECOMPOSED` comment** —
+   someone else is already handling it, has rejected it, or it's been broken into sub-issues.
 
 5. **`CCC:TRIAGED` issues are ready for pickup** — treat them like any other
    available issue, but skip the validation step since triage already did it.

@@ -68,8 +68,9 @@ try to help, do NOT open a second PR. Skip it immediately.
 
 Subtract claimed from open. Pick highest priority: `[P0]` > `[P1]` > `[P2]` > `[P3]`.
 Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational).
-Also skip issues that have a `CCC:DENIED` or `CCC:REVIEWING` comment. Issues with
-`CCC:TRIAGED` are pre-validated and ready for pickup (skip validation step).
+Also skip issues that have a `CCC:DENIED`, `CCC:REVIEWING`, or `CCC:DECOMPOSED` comment.
+Decomposed issues are meta-issues broken into sub-issues — work on the sub-issues instead.
+Issues with `CCC:TRIAGED` are pre-validated and ready for pickup (skip validation step).
 Check via `gh api repos/anthropics/claudes-c-compiler/issues/<N>/comments --jq '.[].body'`.
 
 ### Validate the issue (BEFORE creating any branch or PR)
