@@ -121,6 +121,9 @@ pub enum WarningKind {
     /// Assignment from incompatible pointer types.
     /// GCC flag: -Wincompatible-pointer-types
     IncompatiblePointerTypes,
+    /// A local variable was declared but never used.
+    /// GCC flag: -Wunused-variable
+    UnusedVariable,
 }
 
 impl WarningKind {
@@ -137,6 +140,7 @@ impl WarningKind {
             WarningKind::ShiftCountOverflow => "shift-count-overflow",
             WarningKind::IntConversion => "int-conversion",
             WarningKind::IncompatiblePointerTypes => "incompatible-pointer-types",
+            WarningKind::UnusedVariable => "unused-variable",
         }
     }
 
@@ -155,6 +159,7 @@ impl WarningKind {
             "shift-count-overflow" => Some(WarningKind::ShiftCountOverflow),
             "int-conversion" => Some(WarningKind::IntConversion),
             "incompatible-pointer-types" => Some(WarningKind::IncompatiblePointerTypes),
+            "unused-variable" => Some(WarningKind::UnusedVariable),
             _ => None,
         }
     }
@@ -171,6 +176,7 @@ impl WarningKind {
             WarningKind::ShiftCountOverflow,
             WarningKind::IntConversion,
             WarningKind::IncompatiblePointerTypes,
+            WarningKind::UnusedVariable,
             // WarningKind::Undeclared is now a hard error, not a warning
         ]
     }
@@ -194,6 +200,7 @@ impl WarningKind {
             WarningKind::ShiftCountOverflow,
             WarningKind::IntConversion,
             WarningKind::IncompatiblePointerTypes,
+            WarningKind::UnusedVariable,
         ]
     }
 }

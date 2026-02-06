@@ -152,6 +152,11 @@ pub struct SemanticAnalyzer {
     /// Return type of the function currently being analyzed.
     /// Used to diagnose `return expr;` in void functions (C11 §6.8.6.4p1).
     current_return_type: Option<CType>,
+    /// Local variable declarations in the current function: (name, span).
+    /// Used for -Wunused-variable diagnostics.
+    local_declarations: Vec<(String, Span)>,
+    /// Set of variable names referenced in expressions within the current function.
+    used_variables: FxHashSet<String>,
 }
 
 impl SemanticAnalyzer {
@@ -165,6 +170,8 @@ impl SemanticAnalyzer {
             switch_cases: Vec::new(),
             switch_default_spans: Vec::new(),
             current_return_type: None,
+            local_declarations: Vec::new(),
+            used_variables: FxHashSet::default(),
         };
         // Pre-populate with common implicit declarations
         analyzer.declare_implicit_functions();
@@ -311,6 +318,19 @@ impl SemanticAnalyzer {
         }
 
         self.current_return_type = prev_return_type;
+
+        // -Wunused-variable: warn about local variables that were declared but never used.
+        // Skip variables prefixed with '_' (convention for intentionally unused).
+        for (name, span) in self.local_declarations.drain(..) {
+            if !self.used_variables.contains(&name) && !name.starts_with('_') {
+                self.diagnostics.borrow_mut().warning_with_kind(
+                    &format!("unused variable '{}'", name),
+                    span,
+                    crate::common::error::WarningKind::UnusedVariable,
+                );
+            }
+        }
+        self.used_variables.clear();
 
         // Pop function scope
         self.result.type_context.pop_scope();
@@ -569,6 +589,14 @@ impl SemanticAnalyzer {
                 linkage: var_linkage,
                 is_const: var_is_const,
             });
+
+            // Track local variable declarations for -Wunused-variable.
+            // Skip globals, extern declarations, functions, and unnamed declarators.
+            if !_is_global && !decl.is_extern() && !init_decl.name.is_empty()
+                && var_linkage == Linkage::None
+            {
+                self.local_declarations.push((init_decl.name.clone(), init_decl.span));
+            }
 
             // Analyze array size expressions in derived declarators
             // (catches undeclared identifiers in e.g. `int arr[UNDECLARED];`)
@@ -1488,6 +1516,8 @@ impl SemanticAnalyzer {
     fn analyze_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Identifier(name, span) => {
+                // Track variable usage for -Wunused-variable
+                self.used_variables.insert(name.clone());
                 // Check if it's a known symbol
                 if self.symbol_table.lookup(name).is_none()
                     && !self.result.type_context.enum_constants.contains_key(name)
@@ -2612,13 +2642,13 @@ mod tests {
     #[test]
     fn null_pointer_constant_zero_no_warn() {
         // int *p = 0; is a valid null pointer constant — no warning
-        assert_eq!(sema_warnings("int main(void) { int *p = 0; return 0; }"), 0);
+        assert_eq!(sema_warnings("int main(void) { int *p = 0; (void)p; return 0; }"), 0);
     }
 
     #[test]
     fn null_pointer_constant_void_cast_no_warn() {
         // int *p = (void*)0; is a valid null pointer constant — no warning
-        assert_eq!(sema_warnings("int main(void) { int *p = (void*)0; return 0; }"), 0);
+        assert_eq!(sema_warnings("int main(void) { int *p = (void*)0; (void)p; return 0; }"), 0);
     }
 
     #[test]
@@ -2658,7 +2688,7 @@ mod tests {
     fn void_pointer_compatible_no_warn() {
         // void* ↔ int* — no warning (C11 6.3.2.3p1)
         assert_eq!(
-            sema_warnings("int main(void) { int x = 42; void *p = &x; return 0; }"),
+            sema_warnings("int main(void) { int x = 42; void *p = &x; (void)p; return 0; }"),
             0
         );
     }
@@ -2667,7 +2697,7 @@ mod tests {
     fn pointer_from_void_no_warn() {
         // int* = void* — no warning
         assert_eq!(
-            sema_warnings("int main(void) { void *v = (void*)0; int *p = v; return 0; }"),
+            sema_warnings("int main(void) { void *v = (void*)0; int *p = v; (void)p; return 0; }"),
             0
         );
     }
@@ -3048,5 +3078,31 @@ mod tests {
     fn empty_return_in_void_function_ok() {
         let (_, w) = sema_counts("void f(void) { return; }");
         assert_eq!(w, 0, "empty return in void function should not warn");
+    }
+
+    // ---- -Wunused-variable ----
+
+    #[test]
+    fn unused_local_variable() {
+        let (_, w) = sema_counts("int f(void) { int x = 42; return 0; }");
+        assert!(w > 0, "unused variable should warn");
+    }
+
+    #[test]
+    fn used_variable_no_warning() {
+        let (_, w) = sema_counts("int f(void) { int x = 42; return x; }");
+        assert_eq!(w, 0, "used variable should not warn");
+    }
+
+    #[test]
+    fn underscore_prefix_no_warning() {
+        let (_, w) = sema_counts("int f(void) { int _unused = 42; return 0; }");
+        assert_eq!(w, 0, "_ prefixed variable should not warn");
+    }
+
+    #[test]
+    fn void_cast_suppresses_unused() {
+        let (_, w) = sema_counts("int f(void) { int x = 42; (void)x; return 0; }");
+        assert_eq!(w, 0, "(void)x should count as use");
     }
 }
