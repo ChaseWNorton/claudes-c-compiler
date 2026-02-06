@@ -18,7 +18,9 @@ An issue is **claimed** if any open PR body contains `Fixes #<number>`. Parse th
 
 ## Step 3: Present the issues
 
-Group by priority (look for [P0], [P1], [P2], [P3] prefixes in titles):
+Parse title codes: `[P0]`-`[P3]` = priority, `[M<N>]` = milestone membership.
+
+Group by priority:
 - **P0 (Critical)** — correctness bugs that any C compiler should catch
 - **P1 (High)** — important bugs and infrastructure gaps
 - **P2 (Medium)** — correctness and feature gaps
@@ -26,6 +28,7 @@ Group by priority (look for [P0], [P1], [P2], [P3] prefixes in titles):
 
 For each issue show:
 - Issue number and title
+- Milestone (if `[M<N>]` is in the title)
 - Status: **AVAILABLE** or **CLAIMED** (with link to the PR)
 - A one-line summary of effort required (small/medium/large)
 

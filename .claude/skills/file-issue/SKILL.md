@@ -126,14 +126,19 @@ ISSUE
 ### Title format
 
 ```
-[P<N>] <Short description>
+[P<N>] <Short description>              — standalone issue
+[P<N>][M<N>] <Short description>        — issue belonging to a milestone
 ```
 
 Examples:
 - `[P0] Duplicate case labels not detected in switch`
+- `[P0][M1] Duplicate case labels not detected in switch`
 - `[P1] CLI flags -MF, -MT silently ignore missing argument`
 - `[P2] -Wshadow not implemented`
 - `[P3] Backend codegen has zero unit tests`
+
+The `[M<N>]` code is added when filing issues as part of a milestone decomposition.
+For standalone issues found during audits, omit it.
 
 ## Batch Filing
 

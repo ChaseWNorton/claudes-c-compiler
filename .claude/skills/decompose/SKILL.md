@@ -52,11 +52,11 @@ Don't create issues that already exist. If an existing issue partially overlaps,
 
 ### 5. File each issue
 
-Use the structured format from the `file-issue` skill templates:
+Title format: `[P<N>][M<N>] <Short description>` — priority code + milestone code.
 
 ```bash
 gh issue create --repo anthropics/claudes-c-compiler \
-  --title "[P<N>] <Short description>" \
+  --title "[P<N>][M<N>] <Short description>" \
   --body "$(cat <<'ISSUE'
 ## Problem
 <specific problem>
@@ -89,7 +89,8 @@ ISSUE
 )"
 ```
 
-Note the last line: `Part of [MILESTONE] M<N>: <milestone name> (#<MILESTONE_NUMBER>)` — this links the issue to its milestone.
+The `[M<N>]` in the title is the machine-readable link. The `Part of [MILESTONE]...` line
+in the body is the human-readable link. Both point to the same milestone.
 
 ### 6. Report
 
@@ -109,12 +110,13 @@ Progress is computed dynamically — no need to edit the milestone issue.
 ```
 
 **Do NOT edit the milestone issue body.** The milestone is write-once. Sub-issues link
-back to it. Progress is computed by querying which sub-issues are open vs closed:
+back to it. Progress is computed from titles — no need to read bodies:
 
 ```bash
-# Find all issues that belong to milestone #42
-gh issue list --repo anthropics/claudes-c-compiler --state all --search "Part of [MILESTONE]" --json number,title,state --limit 100
-# Then filter for those whose body references #42
+# Find all issues belonging to milestone M1 (open and closed)
+gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
+gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
+# Filter titles containing [M1]
 ```
 
 This works regardless of who created the milestone — no edit permissions needed.

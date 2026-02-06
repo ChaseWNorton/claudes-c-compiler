@@ -5,23 +5,23 @@ Show the current status of all issues and PRs on the CCC compiler project.
 Run these commands in parallel:
 
 ```bash
-# All open issues (includes milestones)
-gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 100
+# All issues — titles encode priority, milestone membership, milestone markers
+gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
+gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# All closed issues (for milestone progress)
-gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title,body --limit 100
-
-# All open PRs (shows claimed/in-progress work)
+# Open PRs (need body for "Fixes #N" claim detection)
 gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body,author,url --limit 50
 
-# Recently merged PRs
+# Merged PRs
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title,url --limit 20
 ```
 
-## Step 2: Correlate
+## Step 2: Parse from titles
 
-- For each open PR, extract the issue number from `Fixes #N` in the body → claimed issues
-- For each `[MILESTONE]` issue, find all issues (open + closed) whose body contains `Part of [MILESTONE]` referencing it → milestone progress
+- **Milestones**: titles matching `[MILESTONE] M<N>:`
+- **Milestone sub-issues**: titles containing `[M<N>]` — count open vs closed per milestone
+- **Priority**: `[P0]`-`[P3]` in title
+- **Claimed**: open PR body contains `Fixes #<issue_number>`
 
 ## Step 3: Display dashboard
 

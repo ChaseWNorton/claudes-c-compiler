@@ -44,7 +44,8 @@ gh pr list --repo anthropics/claudes-c-compiler --state open --json body --jq '.
 
 Subtract claimed from open issues. Pick the highest-priority unclaimed one.
 
-Priority sort: titles prefixed `[P0]` first, then `[P1]`, `[P2]`, `[P3]`, then unprefixed.
+Priority sort: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`, then unprefixed.
+Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational, doesn't affect priority).
 
 ### Step 2: Switch to clean main
 

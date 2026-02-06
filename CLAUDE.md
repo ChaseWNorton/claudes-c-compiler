@@ -32,6 +32,13 @@ You never need to memorize individual commands. `/ccc` is the only entry point.
 ### Coordination protocol
 
 GitHub Issues and PRs are the shared state — no external tools needed.
+All project state is readable from titles alone:
+
+```
+[P0] Description                    — standalone issue, priority 0
+[P2][M1] Description                — issue belonging to milestone M1
+[MILESTONE] M1: Description         — milestone definition
+```
 
 | State | How it looks on GitHub |
 |-------|----------------------|

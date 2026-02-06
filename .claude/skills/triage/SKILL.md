@@ -15,27 +15,23 @@ Use this skill when:
 ### 1. Fetch current state
 
 ```bash
-# All open issues (includes milestones)
-gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 100
+# All issues — titles encode everything: priority, milestone membership, milestone markers
+gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
+gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# All closed issues (for milestone progress — sub-issues may be closed)
-gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title,body --limit 100
-
-# All open PRs (shows claimed work)
+# Open PRs (need body for "Fixes #N" claim detection)
 gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body,author,updatedAt --limit 50
 
-# Recently merged PRs
+# Merged PRs
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
 ```
 
-### 1b. Compute milestone progress
+### 1b. Parse from titles
 
-For each issue with `[MILESTONE]` in the title:
-1. Get its number (e.g., #42)
-2. Search all issues (open + closed) for bodies containing `Part of [MILESTONE]` referencing #42
-3. Count open vs closed sub-issues
-4. Milestone with zero sub-issues → needs decomposition
-5. All sub-issues closed → milestone complete
+- **Priority**: `[P0]`-`[P3]` in title. Unprefixed → needs triage.
+- **Milestones**: titles matching `[MILESTONE] M<N>:`
+- **Milestone sub-issues**: titles containing `[M<N>]` — count open vs closed per milestone
+- **Claimed**: open PR body contains `Fixes #<number>`
 
 ### 2. Categorize issues
 

@@ -35,6 +35,7 @@ gh pr list --repo anthropics/claudes-c-compiler --state open --json body --jq '.
 ```
 
 Subtract claimed from open. Pick highest priority: `[P0]` > `[P1]` > `[P2]` > `[P3]`.
+Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational).
 
 ### Claim an issue
 

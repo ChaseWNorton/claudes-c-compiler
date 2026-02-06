@@ -2,6 +2,8 @@
 
 Copy-paste templates for filing different categories of issues.
 
+**Title format**: `[P<N>] <description>` or `[P<N>][M<N>] <description>` if part of a milestone.
+
 ## Diagnostic Issue (missing error/warning)
 
 ```markdown

@@ -1,41 +1,54 @@
 Welcome to CCC — Claude's C Compiler. You are the orchestration layer.
 
+## Title codes
+
+All project state is readable from issue/PR titles alone:
+
+```
+[P0] Description                    — standalone issue, priority 0 (critical)
+[P2][M1] Description                — issue belonging to milestone M1
+[MILESTONE] M1: Description         — milestone definition
+```
+
+Codes: `[P0]`-`[P3]` priority, `[M<N>]` milestone membership, `[MILESTONE]` milestone marker.
+
 ## Step 1: Detect access level
 
 ```bash
-# Check if user has write access (can push, edit issues, create releases)
 gh api repos/anthropics/claudes-c-compiler/collaborators/$( gh api user --jq '.login' )/permission --jq '.permission' 2>/dev/null || echo "none"
 ```
 
-If the result is `admin` or `write` → this is a **maintainer**.
-Otherwise → this is a **contributor** (fork-based workflow).
+`admin` or `write` → **maintainer**. Otherwise → **contributor** (fork-based).
 
 ## Step 2: Assess the situation
 
-Fetch the current project state (run all in parallel):
-
 ```bash
-# Open issues (includes milestones — look for [MILESTONE] in title)
-gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 100
+# All issues — titles only is enough for routing decisions
+gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
+gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# Open PRs (shows claimed work — look for "Fixes #N" in body)
+# Open PRs (look for "Fixes #N" in body to detect claims)
 gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 50
-
-# Closed issues (for milestone progress — sub-issues may be closed)
-gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title,body --limit 100
 
 # Merged PRs (for release scope)
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
 ```
 
+### Parse from titles
+
+- **Milestones**: titles matching `[MILESTONE] M<N>:` — extract M-number
+- **Milestone sub-issues**: titles containing `[M<N>]` — group by M-number
+- **Priority**: titles containing `[P0]`-`[P3]`
+- **Claimed**: open PR body contains `Fixes #<issue_number>`
+
 ### Compute milestone progress
 
-For each open issue with `[MILESTONE]` in the title:
-1. Get its issue number (e.g., #42)
-2. Search ALL issues (open + closed) for bodies containing `Part of [MILESTONE]` referencing #42
-3. Count open vs closed → that's the progress
+For each open `[MILESTONE]` issue, count matching `[M<N>]` issues across open + closed.
+No need to read bodies. Everything is in titles.
 
-A milestone with sub-issues is **decomposed**. A milestone with zero sub-issues **needs decomposition**. A milestone where all sub-issues are closed is **complete**.
+- Zero `[M<N>]` issues → needs decomposition
+- Some open, some closed → in progress (show X/Y)
+- All closed → complete
 
 ## Step 3: Present the menu
 
@@ -71,12 +84,12 @@ If milestones exist, show their progress inline:
 ```
   MILESTONES:
     M1: Core Diagnostic Coverage — 2/6 done    (4 available to fix)
-    M2: CLI Reliability — needs decomposition   (0 sub-issues filed)
+    M2: CLI Reliability — needs decomposition   (0 sub-issues)
 ```
 
 **Recommend the most impactful action** based on state:
 - No milestones exist? → Recommend PLAN
-- Milestones exist but not decomposed (zero sub-issues)? → Recommend PLAN (it will auto-decompose)
+- Milestones with zero sub-issues? → Recommend PLAN (it will auto-decompose)
 - Many available issues? → Recommend FIX
 - PRs awaiting review? → Recommend REVIEW
 - 10+ merged PRs, no release? (maintainer only) → Recommend RELEASE
@@ -101,14 +114,14 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 
 PLAN is not a single step — it's a pipeline:
 
-1. **Roadmap** — Analyze the compiler, identify strategic gaps, create `[MILESTONE]` issues
-2. **Decompose** — For each milestone just created, immediately break it into sub-issues. Each sub-issue links back via `Part of [MILESTONE] M<N> (#number)` in its body.
-3. **Report** — Show what was created: milestones, sub-issues per milestone, and recommend FIX
+1. **Roadmap** — Analyze the compiler, identify strategic gaps, create `[MILESTONE] M<N>:` issues
+2. **Decompose** — For each milestone, break into sub-issues. Title each `[P<N>][M<N>] <description>`. Body includes `Part of [MILESTONE] M<N> (#number)` for human readability.
+3. **Report** — Show what was created: milestones, sub-issues per milestone, recommend FIX
 
 Do NOT stop after creating milestones. Do NOT ask the user to run a separate command.
 The user said PLAN — that means milestones AND their sub-issues, ready for workers.
 
-If milestones already exist and have undecomposed ones (zero sub-issues), decompose those.
+If milestones already exist and have undecomposed ones (zero `[M<N>]` sub-issues), decompose those.
 If all milestones are fully decomposed, do a roadmap refresh — assess what's changed, create new milestones if needed.
 
 **CRITICAL**: This command is the single entry point. After the user picks, execute the full workflow. The user should never need to know that individual commands exist.

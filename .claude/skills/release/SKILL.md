@@ -101,9 +101,8 @@ EOF
 
 ### 7. Close completed milestones (maintainer only)
 
-Check each open `[MILESTONE]` issue: find all sub-issues (bodies containing
-`Part of [MILESTONE]` referencing it). If all sub-issues are closed, the milestone
-is complete — close it:
+Check each open `[MILESTONE] M<N>:` issue. Find all issues with `[M<N>]` in their title
+(open + closed). If all are closed, the milestone is complete — close it:
 
 ```bash
 gh issue close <MILESTONE_NUMBER> --repo anthropics/claudes-c-compiler \
