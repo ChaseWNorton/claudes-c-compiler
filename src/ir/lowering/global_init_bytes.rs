@@ -1467,4 +1467,23 @@ mod tests {
             T a[] = {1, 10000, 0x12345, 0xff000001};
         "#);
     }
+
+    #[test]
+    fn struct_with_fam_global_init_no_panic() {
+        // Issue #79: slice OOB in global initializer for struct with flexible array member
+        compile_to_ir(r#"
+            static const struct foo {
+                char *s;
+                double d;
+                long l;
+            } foo[] = {{"hello world1", 3.14159, 101L},
+                       {"hello world2", 3.14159, 102L}};
+            static const struct bar {
+                char *s;
+                const struct foo f[];
+            } bar[] = {{"hello world10",
+                        {{"hello1", 3.14159, 201L},
+                         {"hello2", 3.14159, 202L}}}};
+        "#);
+    }
 }

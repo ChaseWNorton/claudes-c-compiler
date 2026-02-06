@@ -460,6 +460,17 @@ impl Lowerer {
         total_size: usize,
     ) -> GlobalInit {
         ptr_ranges.sort_by_key(|&(off, _)| off);
+        // Ensure the byte buffer is large enough for all pointer offsets and total_size.
+        // This can happen with structs containing flexible array members (FAM) where
+        // pointer offsets reference FAM data beyond the declared struct size.
+        let ptr_sz = crate::common::types::target_ptr_size();
+        let max_ptr_end = ptr_ranges.iter().map(|(off, _)| off + ptr_sz).max().unwrap_or(0);
+        let needed = total_size.max(max_ptr_end);
+        let mut bytes = bytes;
+        if bytes.len() < needed {
+            bytes.resize(needed, 0);
+        }
+        let total_size = needed;
         // Deduplicate overlapping pointer ranges that can arise from:
         // 1. Duplicate designated initializers for the same field (C allows
         //    later designators to override earlier ones, e.g.,
@@ -468,7 +479,6 @@ impl Lowerer {
         //    multiple branches are recorded due to sequential field processing
         // For same-offset duplicates, keep the last entry (C last-designator-wins).
         // For overlapping ranges at different offsets, keep the first (already placed).
-        let ptr_sz = crate::common::types::target_ptr_size();
         let mut deduped: Vec<(usize, GlobalInit)> = Vec::new();
         for (off, init) in ptr_ranges {
             if let Some(last) = deduped.last_mut() {
