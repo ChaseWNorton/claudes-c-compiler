@@ -1455,6 +1455,20 @@ impl SemanticAnalyzer {
                 match arg.as_ref() {
                     SizeofArg::Expr(inner) => {
                         self.analyze_expr(inner);
+                        // Check for sizeof on function-typed expressions.
+                        // sizeof(func_name) where func_name is a function is a GCC
+                        // extension (returns 1) — warn under -Wpointer-arith.
+                        if let Expr::Identifier(ref name, _) = *inner {
+                            if let Some(sym) = self.symbol_table.lookup(name) {
+                                if matches!(sym.ty, CType::Function(_)) {
+                                    self.diagnostics.borrow_mut().warning_with_kind(
+                                        "invalid application of 'sizeof' to a function type",
+                                        *span,
+                                        crate::common::error::WarningKind::PointerArith,
+                                    );
+                                }
+                            }
+                        }
                     }
                     SizeofArg::Type(ts) => {
                         // Check for sizeof on incomplete struct/union types.
@@ -1762,6 +1776,15 @@ impl SemanticAnalyzer {
             // Arrays of incomplete element types - check the element type
             TypeSpecifier::Array(elem, _) => {
                 self.check_sizeof_incomplete_type(elem, span);
+            }
+            // sizeof on a bare function type is invalid per C11 6.5.3.4.
+            // GCC accepts it as an extension (returns 1) but warns under -Wpointer-arith.
+            TypeSpecifier::BareFunction(_, _, _) => {
+                self.diagnostics.borrow_mut().warning_with_kind(
+                    "invalid application of 'sizeof' to a function type",
+                    span,
+                    crate::common::error::WarningKind::PointerArith,
+                );
             }
             _ => {}
         }

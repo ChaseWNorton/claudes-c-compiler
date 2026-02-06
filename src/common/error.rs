@@ -103,6 +103,9 @@ pub enum WarningKind {
     /// not return a value in all control paths.
     /// GCC flag: -Wreturn-type
     ReturnType,
+    /// Sizeof or pointer arithmetic on function types or void.
+    /// GCC flag: -Wpointer-arith
+    PointerArith,
     // Future categories (add as warnings are implemented):
     // UnusedVariable,         // -Wunused-variable
     // UnusedFunction,         // -Wunused-function
@@ -122,6 +125,7 @@ impl WarningKind {
             WarningKind::ImplicitFunctionDeclaration => "implicit-function-declaration",
             WarningKind::Cpp => "cpp",
             WarningKind::ReturnType => "return-type",
+            WarningKind::PointerArith => "pointer-arith",
         }
     }
 
@@ -134,6 +138,7 @@ impl WarningKind {
             "implicit" => Some(WarningKind::ImplicitFunctionDeclaration),
             "cpp" => Some(WarningKind::Cpp),
             "return-type" => Some(WarningKind::ReturnType),
+            "pointer-arith" => Some(WarningKind::PointerArith),
             _ => None,
         }
     }
@@ -144,6 +149,7 @@ impl WarningKind {
             WarningKind::ImplicitFunctionDeclaration,
             WarningKind::Cpp,
             WarningKind::ReturnType,
+            WarningKind::PointerArith,
             // WarningKind::Undeclared is now a hard error, not a warning
         ]
     }
@@ -161,6 +167,7 @@ impl WarningKind {
             WarningKind::ImplicitFunctionDeclaration,
             WarningKind::Cpp,
             WarningKind::ReturnType,
+            WarningKind::PointerArith,
         ]
     }
 }
