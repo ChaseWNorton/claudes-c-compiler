@@ -15,18 +15,27 @@ Use this skill when:
 ### 1. Fetch current state
 
 ```bash
-# All open issues
-gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 50
+# All open issues (includes milestones)
+gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 100
+
+# All closed issues (for milestone progress — sub-issues may be closed)
+gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title,body --limit 100
 
 # All open PRs (shows claimed work)
 gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body,author,updatedAt --limit 50
 
-# Recently closed issues (completed work)
-gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 20
-
 # Recently merged PRs
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
 ```
+
+### 1b. Compute milestone progress
+
+For each issue with `[MILESTONE]` in the title:
+1. Get its number (e.g., #42)
+2. Search all issues (open + closed) for bodies containing `Part of [MILESTONE]` referencing #42
+3. Count open vs closed sub-issues
+4. Milestone with zero sub-issues → needs decomposition
+5. All sub-issues closed → milestone complete
 
 ### 2. Categorize issues
 
@@ -88,6 +97,10 @@ STALE CLAIMS (no activity in 24+ hours):
 
 DUPLICATES DETECTED:
   #XX and #YY — <description>
+
+MILESTONES:
+  M1: Core Diagnostic Coverage — 2/6 done (33%)
+      Done: #25, #22 | Open: #20, #21, #23, #24
 
 PROGRESS:
   Open: XX | Claimed: XX | Available: XX | Completed: XX

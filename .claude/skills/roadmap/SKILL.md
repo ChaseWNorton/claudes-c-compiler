@@ -72,11 +72,6 @@ gh issue create --repo anthropics/claudes-c-compiler \
 
 <What's included and what's explicitly excluded>
 
-## Issues
-
-<Checklist of issues — may be empty initially, filled by /decompose>
-- [ ] Issue descriptions (to be filed)
-
 ## Success criteria
 
 <How to know the milestone is complete — concrete, testable>
@@ -91,6 +86,11 @@ gh issue create --repo anthropics/claudes-c-compiler \
 EOF
 )"
 ```
+
+**Milestones are write-once.** They define the goal and success criteria. They do NOT
+contain a checklist of sub-issues. Instead, sub-issues link back to the milestone via
+`Part of [MILESTONE] M<N>: <name> (#number)` in their body. Progress is computed
+dynamically by querying which sub-issues are open vs closed.
 
 **Milestone naming convention:**
 - `M1`, `M2`, `M3`... in priority order

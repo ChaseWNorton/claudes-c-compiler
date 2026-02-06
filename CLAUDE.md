@@ -62,8 +62,8 @@ Every role in the product lifecycle is a command backed by a skill.
 
 | Command | What it does |
 |---------|-------------|
-| `/roadmap` | Analyze the compiler, create strategic milestones |
-| `/decompose <milestone>` | Break a milestone into concrete issues |
+| `/roadmap` | Analyze the compiler, create milestones, then decompose them into issues |
+| `/decompose <milestone>` | Break a specific milestone into issues (called automatically by /roadmap) |
 | `/audit [path]` | Deep-dive a module, find every gap, file issues |
 | `/file-issue [path]` | File a single well-structured issue |
 
@@ -101,14 +101,16 @@ Skills provide deep context for each workflow. Claude Code loads them automatica
 
 ### Milestones
 
-Milestones are GitHub issues with `[MILESTONE]` prefix and checklists. GitHub auto-checks
-boxes when linked issues close. No special permissions needed — anyone can create them.
+Milestones are GitHub issues with `[MILESTONE]` prefix. They define the goal and success
+criteria. They're write-once — no one needs to edit them after creation.
 
+Sub-issues link back to their milestone:
 ```
-[MILESTONE] M1: Core Diagnostic Coverage
-  - [ ] #20 Duplicate case labels
-  - [x] #25 Fix sema TODO comment    ← auto-checked when #25 closes
+Part of [MILESTONE] M1: Core Diagnostic Coverage (#42)
 ```
+
+Progress is computed dynamically by querying which sub-issues are open vs closed.
+No checklist to maintain, no edit permissions needed.
 
 ## Code conventions
 

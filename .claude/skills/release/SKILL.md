@@ -99,13 +99,15 @@ EOF
 )"
 ```
 
-### 7. Close completed milestones
+### 7. Close completed milestones (maintainer only)
 
-If this release completes a milestone, close the milestone issue:
+Check each open `[MILESTONE]` issue: find all sub-issues (bodies containing
+`Part of [MILESTONE]` referencing it). If all sub-issues are closed, the milestone
+is complete — close it:
 
 ```bash
 gh issue close <MILESTONE_NUMBER> --repo anthropics/claudes-c-compiler \
-  --comment "Completed in release v<VERSION>."
+  --comment "Completed in release v<VERSION>. All sub-issues resolved."
 ```
 
 ### 8. Report

@@ -91,39 +91,10 @@ ISSUE
 
 Note the last line: `Part of [MILESTONE] M<N>: <milestone name> (#<MILESTONE_NUMBER>)` — this links the issue to its milestone.
 
-### 6. Update the milestone issue
-
-After filing all issues, update the milestone's checklist:
-
-```bash
-gh issue edit <MILESTONE_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
-## Goal
-<preserved from original>
-
-## Scope
-<preserved from original>
-
-## Issues
-- [ ] #<NEW_1> <title>
-- [ ] #<NEW_2> <title>
-- [ ] #<NEW_3> <title>
-...
-
-## Success criteria
-<preserved from original>
-
-## Dependencies
-<preserved from original>
-EOF
-)"
-```
-
-GitHub will auto-check boxes as issues close.
-
-### 7. Report
+### 6. Report
 
 ```
-DECOMPOSED: [MILESTONE] M<N>: <name>
+DECOMPOSED: [MILESTONE] M<N>: <name> (#<MILESTONE_NUMBER>)
 
 Filed X new issues:
   #XX [P0] <title>
@@ -131,10 +102,22 @@ Filed X new issues:
   #XX [P1] <title>
   ...
 
-Milestone issue #<MILESTONE_NUMBER> updated with checklist.
+Each issue links back to the milestone via:
+  "Part of [MILESTONE] M<N>: <name> (#<MILESTONE_NUMBER>)"
 
-Next: Contributors can run /fix-next to start working on these issues.
+Progress is computed dynamically — no need to edit the milestone issue.
 ```
+
+**Do NOT edit the milestone issue body.** The milestone is write-once. Sub-issues link
+back to it. Progress is computed by querying which sub-issues are open vs closed:
+
+```bash
+# Find all issues that belong to milestone #42
+gh issue list --repo anthropics/claudes-c-compiler --state all --search "Part of [MILESTONE]" --json number,title,state --limit 100
+# Then filter for those whose body references #42
+```
+
+This works regardless of who created the milestone — no edit permissions needed.
 
 ## Decomposition Principles
 
