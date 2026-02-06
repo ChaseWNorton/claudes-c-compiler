@@ -20,6 +20,8 @@ use super::parse_object::parse_elf64_object;
 use super::dynamic::register_symbols_elf64;
 use super::resolve_lib::resolve_lib;
 
+type SharedLibCallback<'a> = &'a mut dyn FnMut(&str, &[u8]) -> Result<(), String>;
+
 /// Check if an archive member defines any currently-undefined, non-dynamic symbol.
 fn member_resolves_undefined_generic<G: GlobalSymbolOps>(
     obj: &Elf64Object, globals: &HashMap<String, G>,
@@ -160,7 +162,7 @@ pub fn load_file_elf64<G: GlobalSymbolOps>(
     lib_paths: &[String],
     prefer_static: bool,
     should_replace_extra: fn(&G) -> bool,
-    on_shared_lib: &mut dyn FnMut(&str, &[u8]) -> Result<(), String>,
+    on_shared_lib: SharedLibCallback<'_>,
 ) -> Result<(), String> {
     if std::env::var("LINKER_DEBUG").is_ok() {
         eprintln!("load_file: {}", path);

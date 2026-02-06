@@ -10,6 +10,19 @@ use std::fmt::Write;
 use crate::common::types::IrType;
 use crate::ir::reexports::BlockId;
 
+/// Callback for emitting a single inline asm operand (architecture-specific).
+pub(crate) type EmitOperandFn = fn(
+    result: &mut String,
+    idx: usize,
+    modifier: Option<char>,
+    op_regs: &[String],
+    op_is_memory: &[bool],
+    op_mem_addrs: &[String],
+    op_types: &[IrType],
+    op_imm_values: &[Option<i64>],
+    op_imm_symbols: &[Option<String>],
+);
+
 /// Resolve GCC inline asm dialect alternatives in a template string.
 ///
 /// GCC inline asm supports `{alt0|alt1}` syntax where `alt0` is the AT&T
@@ -178,17 +191,7 @@ pub(crate) fn substitute_x86_asm_operands(
     goto_labels: &[(String, BlockId)],
     op_imm_values: &[Option<i64>],
     op_imm_symbols: &[Option<String>],
-    emit_operand: fn(
-        result: &mut String,
-        idx: usize,
-        modifier: Option<char>,
-        op_regs: &[String],
-        op_is_memory: &[bool],
-        op_mem_addrs: &[String],
-        op_types: &[IrType],
-        op_imm_values: &[Option<i64>],
-        op_imm_symbols: &[Option<String>],
-    ),
+    emit_operand: EmitOperandFn,
 ) -> String {
     // Pre-process GCC dialect alternatives: {att_syntax|intel_syntax}
     // We always target AT&T syntax, so select the first alternative.

@@ -13,7 +13,15 @@ use super::dynsym::*;
 // Phase 1: Argument parsing
 // ══════════════════════════════════════════════════════════════════════════════
 
-pub(super) fn parse_user_args(user_args: &[String]) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, Vec<(String, String)>) {
+pub(super) struct ParsedUserArgs {
+    pub extra_libs: Vec<String>,
+    pub extra_lib_files: Vec<String>,
+    pub extra_lib_paths: Vec<String>,
+    pub extra_objects: Vec<String>,
+    pub defsym_defs: Vec<(String, String)>,
+}
+
+pub(super) fn parse_user_args(user_args: &[String]) -> ParsedUserArgs {
     let mut extra_libs = Vec::new();
     let mut extra_lib_files = Vec::new();
     let mut extra_lib_paths = Vec::new();
@@ -67,7 +75,7 @@ pub(super) fn parse_user_args(user_args: &[String]) -> (Vec<String>, Vec<String>
         }
     }
 
-    (extra_libs, extra_lib_files, extra_lib_paths, extra_objects, defsym_defs)
+    ParsedUserArgs { extra_libs, extra_lib_files, extra_lib_paths, extra_objects, defsym_defs }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

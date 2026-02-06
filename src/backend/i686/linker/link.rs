@@ -28,7 +28,7 @@ pub fn link_builtin(
     let is_static = user_args.iter().any(|a| a == "-static");
 
     // Phase 1: Parse arguments and collect file lists
-    let (extra_libs, extra_lib_files, extra_lib_paths, extra_objects, defsym_defs) = parse_user_args(user_args);
+    let ParsedUserArgs { extra_libs, extra_lib_files, extra_lib_paths, extra_objects, defsym_defs } = parse_user_args(user_args);
 
     let all_lib_dirs: Vec<String> = extra_lib_paths.into_iter()
         .chain(lib_paths.iter().map(|s| s.to_string()))
