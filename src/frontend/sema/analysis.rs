@@ -893,6 +893,26 @@ impl SemanticAnalyzer {
                         *span,
                     );
                 }
+                // C11 §6.8.6.4p3: return expression type must be compatible
+                // with the function return type (as if by assignment).
+                if let Some(ret_ty) = &self.current_return_type {
+                    if !matches!(ret_ty, CType::Void) {
+                        let checker = super::type_checker::ExprTypeChecker {
+                            symbols: &self.symbol_table,
+                            types: &self.result.type_context,
+                            functions: &self.result.functions,
+                            expr_types: Some(&self.result.expr_types),
+                        };
+                        if let Some(expr_ty) = checker.infer_expr_ctype(expr) {
+                            self.check_pointer_float_conversion(
+                                &expr_ty, ret_ty, *span,
+                            );
+                            self.check_implicit_conversion(
+                                ret_ty, &expr_ty, expr, *span,
+                            );
+                        }
+                    }
+                }
             }
             Stmt::Return(None, _) => {}
             Stmt::If(cond, then_br, else_br, _) => {
@@ -2974,5 +2994,31 @@ mod tests {
     fn case_outside_switch_nested_in_if() {
         assert!(sema_errors("int f(void) { if (1) { case 1: return 1; } return 0; }") > 0,
             "case label in if (not in switch) should error");
+    }
+
+    // ---- return type compatibility (C11 §6.8.6.4p3) ----
+
+    #[test]
+    fn return_pointer_from_int_function_warns() {
+        let (_, w) = sema_counts("int f(void) { return \"hello\"; }");
+        assert!(w > 0, "returning char* from int function should warn");
+    }
+
+    #[test]
+    fn return_int_from_int_function_ok() {
+        let (e, _) = sema_counts("int f(void) { return 42; }");
+        assert_eq!(e, 0, "returning int from int function should not error");
+    }
+
+    #[test]
+    fn return_int_from_pointer_function_warns() {
+        let (_, w) = sema_counts("int *f(void) { return 42; }");
+        assert!(w > 0, "returning int from pointer function should warn");
+    }
+
+    #[test]
+    fn return_null_from_pointer_function_ok() {
+        let (_, w) = sema_counts("int *f(void) { return 0; }");
+        assert_eq!(w, 0, "returning null pointer constant should not warn");
     }
 }
