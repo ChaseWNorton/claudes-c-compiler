@@ -2,6 +2,11 @@
 
 Common problems during the fix-next cycle and how to recover.
 
+## Git remote convention
+
+- `origin` = your fork (pushable)
+- `upstream` = anthropics/claudes-c-compiler (read-only)
+
 ## Contents
 
 - Build failures
@@ -79,7 +84,7 @@ self.diagnostics.borrow_mut().error(msg, span);
 **Symptom**: When you push, you discover another PR exists for the same issue.
 
 **Fix**:
-1. Check who was first: `gh pr list --repo anthropics/claudes-c-compiler --state open --json number,createdAt,body`
+1. Check who was first: `gh pr list --repo anthropics/claudes-c-compiler --state open --json number,createdAt,title`
 2. If you were second, close your PR: `gh pr close <YOUR_PR> --repo anthropics/claudes-c-compiler`
 3. Move on to the next unclaimed issue
 
@@ -95,7 +100,7 @@ gh pr reopen <PR_NUMBER> --repo anthropics/claudes-c-compiler
 # Option B: create new PR from your existing branch
 git push origin fix/issue-<NUMBER>
 gh pr create --repo anthropics/claudes-c-compiler \
-  --title "Fix #<NUMBER>: <title>" \
+  --title "[Fix #<NUMBER>] <description>" \
   --body "Fixes #<NUMBER>" --draft
 ```
 
@@ -117,21 +122,21 @@ git switch -c fix/issue-20
 
 ### Merge conflict with main
 
-**Symptom**: `git pull origin main` fails with merge conflicts.
+**Symptom**: `git pull upstream main` fails with merge conflicts.
 
 **Fix**: You shouldn't need to merge main into your fix branch — each fix is independent. If someone else's merged PR conflicts with yours:
 1. Start fresh from main: create a new branch
 2. Re-apply your changes on top of the latest main
-3. Force-push to your fix branch (it's your WIP branch, this is OK)
+3. Force-push to your fix branch on origin (it's your WIP branch, this is OK)
 
 ### Push rejected
 
-**Symptom**: `git push` is rejected because the remote has changes you don't have.
+**Symptom**: `git push origin fix/issue-<NUMBER>` is rejected because the remote has changes you don't have.
 
 **Fix**: This usually means you force-pushed or amended earlier. Pull and resolve:
 ```bash
 git pull --rebase origin fix/issue-<NUMBER>
-git push
+git push origin fix/issue-<NUMBER>
 ```
 
 ## PR Issues
@@ -141,9 +146,10 @@ git push
 **Symptom**: `gh pr create` returns an error.
 
 **Common causes**:
-- Branch doesn't exist on remote yet: `git push -u origin fix/issue-<NUMBER>` first
+- Branch doesn't exist on your fork yet: `git push -u origin fix/issue-<NUMBER>` first
 - PR already exists for this branch: check with `gh pr list --head fix/issue-<NUMBER>`
 - Authentication: make sure `gh auth status` shows you're logged in
+- Pushing to wrong remote: make sure `origin` is your fork, not the upstream repo
 
 ### PR body formatting is broken
 

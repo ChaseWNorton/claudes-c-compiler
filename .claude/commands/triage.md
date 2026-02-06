@@ -4,8 +4,8 @@ Triage the CCC issue backlog — analyze, prioritize, and manage.
 
 1. **Fetch current state** — run in parallel:
    ```bash
-   gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 50
-   gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body,author,updatedAt --limit 50
+   gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
+   gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,updatedAt --limit 50
    gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 20
    gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
    ```

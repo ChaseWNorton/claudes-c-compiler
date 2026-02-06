@@ -2,15 +2,24 @@ Welcome to CCC — Claude's C Compiler. You are the orchestration layer.
 
 ## Title codes
 
-All project state is readable from issue/PR titles alone:
+All project state is readable from titles alone — issues, PRs, milestones:
 
 ```
-[P0] Description                    — standalone issue, priority 0 (critical)
-[P2][M1] Description                — issue belonging to milestone M1
+[P0][M1] Description                — issue: priority P0, milestone M1
+[P2] Description                    — issue: priority P2, standalone
 [MILESTONE] M1: Description         — milestone definition
+[Fix #20] Description               — PR: claims issue #20
 ```
 
-Codes: `[P0]`-`[P3]` priority, `[M<N>]` milestone membership, `[MILESTONE]` milestone marker.
+Codes: `[P<N>]` priority, `[M<N>]` milestone membership, `[MILESTONE]` milestone marker, `[Fix #<N>]` PR claim.
+
+## Git remote convention
+
+Everyone forks. Remotes are:
+- `origin` = your fork (pushable)
+- `upstream` = `anthropics/claudes-c-compiler` (read-only)
+
+All `git push` goes to `origin`. All PRs go from `origin` to `upstream`.
 
 ## Step 1: Detect access level
 
@@ -22,32 +31,32 @@ gh api repos/anthropics/claudes-c-compiler/collaborators/$( gh api user --jq '.l
 
 ## Step 2: Assess the situation
 
+Titles only — no bodies needed for routing:
+
 ```bash
-# All issues — titles only is enough for routing decisions
+# Issues (open + closed)
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
 gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# Open PRs (look for "Fixes #N" in body to detect claims)
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 50
-
-# Merged PRs (for release scope)
+# PRs (open + merged) — titles contain [Fix #N] for claim detection
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
 ```
 
 ### Parse from titles
 
-- **Milestones**: titles matching `[MILESTONE] M<N>:` — extract M-number
-- **Milestone sub-issues**: titles containing `[M<N>]` — group by M-number
-- **Priority**: titles containing `[P0]`-`[P3]`
-- **Claimed**: open PR body contains `Fixes #<issue_number>`
+- **Issue priority**: `[P0]`-`[P3]` in issue title
+- **Milestone membership**: `[M<N>]` in issue title
+- **Milestone definitions**: `[MILESTONE] M<N>:` in issue title
+- **Claims**: `[Fix #<N>]` in PR title — issue #N is claimed
+- **Unprioritized**: issue title has no `[P<N>]` code → needs triage
 
 ### Compute milestone progress
 
-For each open `[MILESTONE]` issue, count matching `[M<N>]` issues across open + closed.
-No need to read bodies. Everything is in titles.
+For each open `[MILESTONE]` issue, count `[M<N>]` issues across open + closed titles.
 
 - Zero `[M<N>]` issues → needs decomposition
-- Some open, some closed → in progress (show X/Y)
+- Some open, some closed → in progress (X/Y)
 - All closed → complete
 
 ## Step 3: Present the menu
@@ -102,26 +111,29 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 
 | Choice | What happens |
 |--------|-------------|
-| **FIX** | Find highest-priority unclaimed issue, claim it (draft PR), fix it, write tests, verify build, ship PR, loop to next |
+| **FIX** | Claim first (draft PR), then fix. See FIX flow below. |
 | **FIND** | Pick highest-value module (or ask), read it line by line, file issues for every gap found |
-| **PLAN** | Full planning flow — see below |
-| **REVIEW** | Show open PRs, ask which one, fetch PR + linked issue, review against acceptance criteria. **Maintainers**: formal review (approve/request-changes). **Contributors**: post findings as a PR comment. |
+| **PLAN** | Full planning flow — see PLAN flow below |
+| **REVIEW** | Show open PRs, ask which one, fetch PR + linked issue, review against acceptance criteria. **Maintainers**: formal review. **Contributors**: PR comment. |
 | **RELEASE** | Gather merged PRs since last release, generate changelog, create git tag + GitHub release, close completed milestones |
 | **TRIAGE** | Report backlog health — stale claims, unprioritized issues, duplicates — then take action |
 | **STATUS** | Show dashboard with milestone progress, claimed/available/completed counts |
 
+### FIX flow
+
+The claim and the fix are separate phases:
+
+1. **Claim** — create branch, push to `origin` (your fork), open draft PR to `upstream` with title `[Fix #<N>] <description>`. This is the lock. Do this BEFORE writing any code.
+2. **Fix** — read the issue body (work order), read the source files, implement the fix, write tests, verify build.
+3. **Ship** — commit, push, mark PR ready, update PR body with summary/changes/test plan.
+4. **Loop** — go back to step 1 with the next unclaimed issue.
+
 ### PLAN flow (auto-chains)
 
-PLAN is not a single step — it's a pipeline:
-
 1. **Roadmap** — Analyze the compiler, identify strategic gaps, create `[MILESTONE] M<N>:` issues
-2. **Decompose** — For each milestone, break into sub-issues. Title each `[P<N>][M<N>] <description>`. Body includes `Part of [MILESTONE] M<N> (#number)` for human readability.
-3. **Report** — Show what was created: milestones, sub-issues per milestone, recommend FIX
+2. **Decompose** — For each milestone, break into sub-issues titled `[P<N>][M<N>] <description>`.
+3. **Report** — Show what was created, recommend FIX
 
-Do NOT stop after creating milestones. Do NOT ask the user to run a separate command.
-The user said PLAN — that means milestones AND their sub-issues, ready for workers.
-
-If milestones already exist and have undecomposed ones (zero `[M<N>]` sub-issues), decompose those.
-If all milestones are fully decomposed, do a roadmap refresh — assess what's changed, create new milestones if needed.
+Do NOT stop after creating milestones. The user said PLAN — that means milestones AND their sub-issues, ready for workers.
 
 **CRITICAL**: This command is the single entry point. After the user picks, execute the full workflow. The user should never need to know that individual commands exist.

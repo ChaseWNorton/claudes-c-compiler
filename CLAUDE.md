@@ -23,11 +23,20 @@ instances can work on different issues simultaneously without conflicts.
 ### Quick start
 
 1. Fork the repo and clone your fork
-2. Run **`/ccc`**
+2. Set up remotes: `origin` = your fork (pushable), `upstream` = `anthropics/claudes-c-compiler` (read-only)
+3. Run **`/ccc`**
 
 That's it. Claude checks your access level, shows the project state, and asks what you want to do. Pick one and the full workflow runs end-to-end. The menu adapts — contributors see what contributors can do, maintainers see the full set.
 
 You never need to memorize individual commands. `/ccc` is the only entry point.
+
+### Git remote convention
+
+Everyone forks. Remotes are:
+- `origin` = your fork (pushable)
+- `upstream` = `anthropics/claudes-c-compiler` (read-only)
+
+All `git push` goes to `origin`. All PRs go from `origin` to `upstream`.
 
 ### Coordination protocol
 
@@ -38,14 +47,15 @@ All project state is readable from titles alone:
 [P0] Description                    — standalone issue, priority 0
 [P2][M1] Description                — issue belonging to milestone M1
 [MILESTONE] M1: Description         — milestone definition
+[Fix #20] Description               — PR: claims issue #20
 ```
 
 | State | How it looks on GitHub |
 |-------|----------------------|
-| **Available** | Open issue, no open PR references it |
-| **Claimed** | Open draft PR with `Fixes #N` in the body |
+| **Available** | Open issue, no open PR title contains `[Fix #N]` |
+| **Claimed** | Open PR with `[Fix #N]` in the title |
 | **Done** | PR merged, issue auto-closed |
-| **Abandoned** | Close the draft PR to release the claim |
+| **Abandoned** | Close the PR to release the claim |
 
 ### The Product Lifecycle
 

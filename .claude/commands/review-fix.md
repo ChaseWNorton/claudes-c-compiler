@@ -1,12 +1,17 @@
 Review pull request #$ARGUMENTS on the CCC compiler project.
 
+## Git remote convention
+
+- `origin` = your fork (pushable)
+- `upstream` = anthropics/claudes-c-compiler (read-only)
+
 ## Steps
 
 1. **Fetch the PR and its linked issue**:
    ```bash
    gh pr view $ARGUMENTS --repo anthropics/claudes-c-compiler --json title,body,files
    ```
-   Extract the issue number from `Fixes #N` in the PR body, then:
+   Extract the issue number from `[Fix #N]` in the PR title or `Fixes #N` in the PR body, then:
    ```bash
    gh issue view <ISSUE_NUMBER> --repo anthropics/claudes-c-compiler
    ```

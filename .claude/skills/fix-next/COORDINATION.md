@@ -2,6 +2,13 @@
 
 Detailed reference for the multiplayer claim/release system using GitHub as shared state.
 
+## Git remote convention
+
+- `origin` = your fork (pushable)
+- `upstream` = anthropics/claudes-c-compiler (read-only)
+
+All `git push` goes to `origin`. All PRs go from `origin` to `upstream`.
+
 ## Contents
 
 - State model
@@ -16,8 +23,8 @@ Every issue exists in exactly one state:
 
 | State | Signal on GitHub | What it means |
 |-------|-----------------|---------------|
-| **Available** | Open issue, no open PR body contains `Fixes #N` | No one is working on it |
-| **Claimed** | Open PR (usually draft) with `Fixes #N` in body | Someone is actively working |
+| **Available** | Open issue, no open PR title contains `[Fix #N]` | No one is working on it |
+| **Claimed** | Open PR with `[Fix #N]` in title | Someone is actively working |
 | **Done** | PR merged; issue auto-closed by GitHub | Fix is complete |
 | **Abandoned** | PR closed without merge | Claim released, issue available again |
 
@@ -37,11 +44,11 @@ Available ──claim──→ Claimed ──merge──→ Done
 # Get all open issues
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 
-# Get all issue numbers already claimed by open PRs
-gh pr list --repo anthropics/claudes-c-compiler --state open --json body --jq '.[].body' \
-  | grep -oP 'Fixes #\K[0-9]+' | sort -u
+# Get all open PRs — titles contain [Fix #N] for claim detection
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 ```
 
+An issue is **claimed** if any open PR title contains `[Fix #<number>]`.
 Subtract claimed from open issues. Pick the highest-priority unclaimed one.
 
 Priority sort: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`, then unprefixed.
@@ -51,7 +58,7 @@ Title codes: `[P<N>]` = priority, `[M<N>]` = milestone membership (informational
 
 ```bash
 git switch main
-git pull origin main
+git pull upstream main
 ```
 
 Always start from a fresh main. Never branch off another fix branch.
@@ -67,10 +74,10 @@ Branch naming convention: `fix/issue-<NUMBER>`. This makes it easy to identify w
 ### Step 4: Create draft PR (= the claim)
 
 ```bash
-git commit --allow-empty -m "WIP: Fix #<NUMBER>: <title>"
+git commit --allow-empty -m "WIP: claiming issue #<NUMBER>"
 git push -u origin fix/issue-<NUMBER>
 gh pr create --repo anthropics/claudes-c-compiler \
-  --title "Fix #<NUMBER>: <title>" \
+  --title "[Fix #<NUMBER>] <description from issue title, without priority/milestone codes>" \
   --body "$(cat <<'EOF'
 ## Summary
 Work in progress — implementing fix.
@@ -86,7 +93,7 @@ EOF
 )" --draft
 ```
 
-The moment this PR exists, other workers will see `Fixes #<NUMBER>` and skip this issue.
+The moment this PR exists, other workers will see `[Fix #<NUMBER>]` in the title and skip this issue.
 
 ### Step 5: Do the work
 
@@ -105,7 +112,7 @@ Both must pass with zero failures before proceeding.
 ```bash
 git add <specific-files>
 git commit -m "Fix #<NUMBER>: <short description>"
-git push
+git push origin fix/issue-<NUMBER>
 ```
 
 ### Step 8: Mark PR ready + update body
@@ -134,7 +141,7 @@ EOF
 
 ### Voluntary release (you want to stop working on it)
 
-Close the draft PR. This removes the `Fixes #N` signal and makes the issue available again.
+Close the draft PR. This removes the `[Fix #N]` signal from PR titles and makes the issue available again.
 
 ```bash
 gh pr close <PR_NUMBER> --repo anthropics/claudes-c-compiler
@@ -147,7 +154,7 @@ A claim is **stale** if the draft PR has had no commits or updates for an extend
 ```bash
 # List open draft PRs with their last update time
 gh pr list --repo anthropics/claudes-c-compiler --state open --draft \
-  --json number,title,updatedAt,body --limit 50
+  --json number,title,updatedAt --limit 50
 ```
 
 Look at `updatedAt`. If a draft PR hasn't been updated in >24 hours and is still draft, the worker likely crashed or abandoned it. Close the PR to release the claim:
@@ -161,12 +168,12 @@ gh pr close <PR_NUMBER> --repo anthropics/claudes-c-compiler \
 
 ### Two workers claim the same issue simultaneously
 
-This is unlikely but possible. Both create draft PRs with `Fixes #N` at nearly the same time.
+This is unlikely but possible. Both create draft PRs with `[Fix #N]` at nearly the same time.
 
 **Detection**: When you run the claim check and find an existing PR for your issue that isn't yours:
 ```bash
 gh pr list --repo anthropics/claudes-c-compiler --state open \
-  --json body,url,author --jq '.[] | select(.body | test("Fixes #<NUMBER>\\b"))'
+  --json title,url,author --jq '.[] | select(.title | test("\\[Fix #<NUMBER>\\]"))'
 ```
 
 **Resolution**: If you see another PR already claiming the issue, close yours and move on:
@@ -196,7 +203,7 @@ Before starting any issue, always verify it's not already claimed:
 
 ```bash
 gh pr list --repo anthropics/claudes-c-compiler --state open \
-  --json body,url --jq '.[] | select(.body | test("Fixes #<NUMBER>\\b")) | .url'
+  --json title,url --jq '.[] | select(.title | test("\\[Fix #<NUMBER>\\]")) | .url'
 ```
 
 If this returns a URL, someone else is working on it. Pick a different issue.

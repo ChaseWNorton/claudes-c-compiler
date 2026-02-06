@@ -6,15 +6,15 @@ Run both of these commands:
 
 ```bash
 # All open issues
-gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 50
+gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 
-# All open PRs (to detect claimed issues)
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body --limit 50
+# All open PRs — titles contain [Fix #N] for claim detection
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 ```
 
 ## Step 2: Determine which issues are claimed
 
-An issue is **claimed** if any open PR body contains `Fixes #<number>`. Parse the PR bodies to build a set of claimed issue numbers.
+An issue is **claimed** if any open PR title contains `[Fix #<number>]`. Parse PR titles to build a set of claimed issue numbers.
 
 ## Step 3: Present the issues
 

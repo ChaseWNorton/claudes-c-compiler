@@ -19,8 +19,8 @@ Use this skill when:
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
 gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# Open PRs (need body for "Fixes #N" claim detection)
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body,author,updatedAt --limit 50
+# Open PRs — titles contain [Fix #N] for claim detection
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,updatedAt --limit 50
 
 # Merged PRs
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
@@ -31,7 +31,7 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 - **Priority**: `[P0]`-`[P3]` in title. Unprefixed → needs triage.
 - **Milestones**: titles matching `[MILESTONE] M<N>:`
 - **Milestone sub-issues**: titles containing `[M<N>]` — count open vs closed per milestone
-- **Claimed**: open PR body contains `Fixes #<number>`
+- **Claimed**: open PR title contains `[Fix #<number>]`
 
 ### 2. Categorize issues
 
@@ -45,8 +45,8 @@ Group open issues by:
 - Unprefixed — needs triage
 
 **Status**:
-- **Available** — no open PR references it
-- **Claimed** — open PR body contains `Fixes #N`
+- **Available** — no open PR title contains `[Fix #N]`
+- **Claimed** — open PR title contains `[Fix #N]`
 - **Stale claim** — claimed but PR hasn't been updated in 24+ hours
 
 **Category** (from issue body):

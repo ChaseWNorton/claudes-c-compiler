@@ -1,68 +1,90 @@
 Work on fixing GitHub issue #$ARGUMENTS from the anthropics/claudes-c-compiler repository.
 
+## Git remote convention
+
+- `origin` = your fork (pushable)
+- `upstream` = anthropics/claudes-c-compiler (read-only)
+
 ## Pre-flight: Check if already claimed
 
-Before starting, verify no one else is working on this issue:
+Check PR titles for `[Fix #$ARGUMENTS]`:
 ```bash
-gh pr list --repo anthropics/claudes-c-compiler --state open --json body,url --jq '.[] | select(.body | test("Fixes #$ARGUMENTS\\b")) | .url'
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 ```
-If an open PR already references `Fixes #$ARGUMENTS`, tell the user it's already claimed and suggest running `/pick-issue` to find another.
+If any PR title contains `[Fix #$ARGUMENTS]`, it's already claimed. Tell the user and suggest picking another issue.
 
-## Workflow
+## Phase 1: Claim (before writing any code)
 
-1. **Fetch the issue details** (this is your complete work order):
+1. **Fetch the issue title** for the PR:
+   ```bash
+   gh issue view $ARGUMENTS --repo anthropics/claudes-c-compiler --json title --jq '.title'
    ```
+
+2. **Create branch and draft PR**:
+   ```bash
+   git switch main && git pull upstream main
+   git switch -c fix/issue-$ARGUMENTS
+   git commit --allow-empty -m "WIP: claiming issue #$ARGUMENTS"
+   git push -u origin fix/issue-$ARGUMENTS
+   gh pr create --repo anthropics/claudes-c-compiler \
+     --title "[Fix #$ARGUMENTS] <description from issue title without priority codes>" \
+     --body "WIP — Fixes #$ARGUMENTS" --draft
+   ```
+   The draft PR is your claim. The `[Fix #$ARGUMENTS]` in the title lets other workers detect it from titles alone.
+
+## Phase 2: Fix
+
+3. **Read the issue body** (this is the complete work order):
+   ```bash
    gh issue view $ARGUMENTS --repo anthropics/claudes-c-compiler
    ```
 
-2. **Read the issue body** to understand the problem, reproduction steps, suggested approach, and files to modify.
-
-3. **Claim it** — create a branch and draft PR:
-   ```
-   git switch main && git pull origin main
-   git switch -c fix/issue-$ARGUMENTS
-   git commit --allow-empty -m "WIP: Fix #$ARGUMENTS: <title>"
-   git push -u origin fix/issue-$ARGUMENTS
-   gh pr create --repo anthropics/claudes-c-compiler --title "Fix #$ARGUMENTS: <title>" --body "WIP — Fixes #$ARGUMENTS" --draft
-   ```
-   The draft PR is your claim. Other workers will see it and skip this issue.
-
 4. **Read the files** mentioned in the issue to understand the existing code.
 
-5. **Implement the fix** following the suggested approach in the issue. Follow the patterns described in CLAUDE.md.
+5. **Implement the fix** following the suggested approach in the issue. Follow CLAUDE.md patterns.
 
-6. **Write tests** as described in the issue. Use the existing test helpers:
+6. **Write tests** as described in the issue:
    - `sema_error_count("C code")` / `sema_warning_count("C code")` for frontend diagnostic tests
    - `compile_to_ir("C code")` for IR-level tests
    - Add tests in `#[cfg(test)] mod tests` at the bottom of the modified file
-   If test helpers don't exist yet, create them (see issue #36 for the pattern).
 
 7. **Verify:**
-   ```
+   ```bash
    cargo build --release && cargo test --lib
    ```
 
-8. **Commit** with a descriptive message:
-   ```
+## Phase 3: Ship
+
+8. **Commit and push:**
+   ```bash
    git add <specific-files>
    git commit -m "Fix #$ARGUMENTS: <short description>"
+   git push origin fix/issue-$ARGUMENTS
    ```
 
-9. **Push and mark PR ready:**
-   ```
-   git push
+9. **Mark PR ready and update body:**
+   ```bash
    gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
-   ```
+   gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
+   ## Summary
+   <what was wrong and why>
 
-10. **Update the PR body** with the final description:
-    ```
-    gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "..."
-    ```
+   ## Changes
+   <what you changed>
+
+   ## Test plan
+   - [x] `cargo build --release` passes
+   - [x] `cargo test --lib` passes
+   - [x] New tests added
+
+   Fixes #$ARGUMENTS
+   EOF
+   )"
+   ```
 
 ## PR requirements
 
-- Title: `Fix #$ARGUMENTS: <short description>`
-- Body has: Summary, Changes, and Test plan sections
+- Title: `[Fix #$ARGUMENTS] <description>`
 - Body ends with: `Fixes #$ARGUMENTS`
 - All existing tests pass + new tests for the fix
 - Clean build with no new warnings

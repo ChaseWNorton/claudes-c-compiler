@@ -9,8 +9,8 @@ Run these commands in parallel:
 gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 100
 gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
-# Open PRs (need body for "Fixes #N" claim detection)
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,body,author,url --limit 50
+# Open PRs — titles contain [Fix #N] for claim detection
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,author,url --limit 50
 
 # Merged PRs
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title,url --limit 20
@@ -21,7 +21,7 @@ gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,tit
 - **Milestones**: titles matching `[MILESTONE] M<N>:`
 - **Milestone sub-issues**: titles containing `[M<N>]` — count open vs closed per milestone
 - **Priority**: `[P0]`-`[P3]` in title
-- **Claimed**: open PR body contains `Fixes #<issue_number>`
+- **Claimed**: open PR title contains `[Fix #<issue_number>]`
 
 ## Step 3: Display dashboard
 

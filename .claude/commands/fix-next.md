@@ -3,18 +3,24 @@
 Claim and fix the next available issue, then loop until no unclaimed work remains.
 **Continue in a loop until all issues are claimed or fixed.**
 
+## Git remote convention
+
+- `origin` = your fork (pushable)
+- `upstream` = anthropics/claudes-c-compiler (read-only)
+
 ## Instructions
 
 **LOOP until no unclaimed work available:**
 
-1. **Find unclaimed issues** — an issue is unclaimed if no open PR references it:
+1. **Find unclaimed issues** — titles only:
    ```bash
-   # Get open issues
+   # Open issues
    gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 
-   # Get issue numbers already claimed (referenced by open PRs)
-   gh pr list --repo anthropics/claudes-c-compiler --state open --json body --jq '.[].body' | grep -oP 'Fixes #\K[0-9]+'
+   # Claimed issue numbers (parse [Fix #N] from PR titles)
+   gh pr list --repo anthropics/claudes-c-compiler --state open --json title --limit 50
    ```
+   An issue is claimed if any open PR title contains `[Fix #<number>]`.
    Pick the highest-priority unclaimed issue: `[P0]` first, then `[P1]`, `[P2]`, `[P3]`.
    If no unclaimed issues remain, report that and stop.
 
@@ -23,13 +29,15 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    gh issue view <NUMBER> --repo anthropics/claudes-c-compiler
    ```
 
-3. **Claim it** by creating a branch and draft PR:
+3. **CLAIM FIRST** — before writing any code, create branch and draft PR:
    ```bash
-   git switch main && git pull origin main
+   git switch main && git pull upstream main
    git switch -c fix/issue-<NUMBER>
-   git commit --allow-empty -m "WIP: Fix #<NUMBER>: <title>"
+   git commit --allow-empty -m "WIP: claiming issue #<NUMBER>"
    git push -u origin fix/issue-<NUMBER>
-   gh pr create --repo anthropics/claudes-c-compiler --title "Fix #<NUMBER>: <title>" --body "WIP — Fixes #<NUMBER>" --draft
+   gh pr create --repo anthropics/claudes-c-compiler \
+     --title "[Fix #<NUMBER>] <description from issue title, without priority/milestone codes>" \
+     --body "WIP — Fixes #<NUMBER>" --draft
    ```
 
 4. **Read the files** mentioned in the issue to understand the existing code.
@@ -47,10 +55,10 @@ Claim and fix the next available issue, then loop until no unclaimed work remain
    ```bash
    git add <specific-files>
    git commit -m "Fix #<NUMBER>: <short description>"
-   git push
+   git push origin fix/issue-<NUMBER>
    gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
    ```
-   Update the PR body with Summary, Changes, and Test plan sections. End with `Fixes #<NUMBER>`.
+   Update the PR body with Summary, Changes, and Test plan sections. End body with `Fixes #<NUMBER>`.
 
 9. **Immediately loop** back to step 1. Do not stop or ask the user.
 
