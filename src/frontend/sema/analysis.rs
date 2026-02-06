@@ -4,16 +4,19 @@
 //! - Build a scoped symbol table of declarations
 //! - Track function signatures for call validation
 //! - Resolve typedef names and typeof(expr) via ExprTypeChecker
+//! - Perform type checking: diagnose type errors, invalid conversions,
+//!   storage class conflicts, linkage violations, and other constraints
+//! - Emit warnings for suspicious patterns (-Wall/-Wextra categories)
 //! - Collect information needed by the IR lowering phase
 //! - Map __builtin_* identifiers to their libc equivalents
 //!
 //! Expression CType inference is available via `type_checker::ExprTypeChecker`,
 //! which uses SymbolTable + TypeContext + FunctionInfo to infer types without
 //! depending on lowering state. This enables typeof(expr) resolution and
-//! will eventually support type annotations on AST nodes.
+//! type annotations on AST nodes.
 //!
-//! This pass does NOT reject programs with type errors (yet); it collects
-//! information for the lowerer. Full type checking is TODO.
+//! Programs with errors are rejected (analyze() returns Err with error count).
+//! The diagnostic engine handles warning filtering (-Wno-*) and -Werror promotion.
 
 use crate::common::error::DiagnosticEngine;
 use crate::common::source::Span;
