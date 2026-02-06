@@ -17,18 +17,22 @@ pub fn is_ident_cont(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$'
 }
 
-/// Check if a byte can start a C identifier (ASCII letter, underscore, or dollar sign).
+/// Check if a byte can start a C identifier (ASCII letter, underscore, dollar sign, or
+/// non-ASCII byte). Non-ASCII bytes (>= 0x80) are accepted to support UTF-8 encoded
+/// identifiers from UCN expansion (C11 §6.4.2.1) and literal UTF-8 source.
 /// GCC extension: '$' is allowed in identifiers (-fdollars-in-identifiers, on by default).
 #[inline(always)]
 pub fn is_ident_start_byte(b: u8) -> bool {
-    b.is_ascii_alphabetic() || b == b'_' || b == b'$'
+    b.is_ascii_alphabetic() || b == b'_' || b == b'$' || b >= 0x80
 }
 
-/// Check if a byte can continue a C identifier (ASCII alphanumeric, underscore, or dollar sign).
+/// Check if a byte can continue a C identifier (ASCII alphanumeric, underscore, dollar sign,
+/// or non-ASCII byte). Non-ASCII bytes (>= 0x80) are accepted to support UTF-8 continuation
+/// bytes in multi-byte identifier characters from UCN expansion or literal UTF-8 source.
 /// GCC extension: '$' is allowed in identifiers (-fdollars-in-identifiers, on by default).
 #[inline(always)]
 pub fn is_ident_cont_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
 }
 
 /// Extract a `&str` slice from `bytes[start..end]`.
@@ -109,4 +113,31 @@ pub fn copy_literal_bytes_to_string(bytes: &[u8], start: usize, quote: u8, resul
         .expect("literal copy produced non-UTF8");
     result.push_str(slice);
     i
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf8_bytes_are_ident_cont() {
+        // UTF-8 continuation bytes (0x80-0xBF) and leading bytes (0xC0-0xFF)
+        // must be accepted as identifier characters to prevent infinite loops
+        // when UCN-expanded or literal UTF-8 appears in macro parameters.
+        assert!(is_ident_cont_byte(0x80));
+        assert!(is_ident_cont_byte(0xBF));
+        assert!(is_ident_cont_byte(0xC3)); // leading byte of Á (U+00C1)
+        assert!(is_ident_cont_byte(0x81)); // continuation byte of Á
+        assert!(is_ident_start_byte(0xC3));
+    }
+
+    #[test]
+    fn ucn_macro_param_no_hang() {
+        // Issue #80: UCN in macro parameter caused preprocessor infinite loop.
+        // The Á character (U+00C1) is 0xC3 0x81 in UTF-8.
+        let mut pp = crate::frontend::preprocessor::Preprocessor::new();
+        let result = pp.preprocess("#define m2(\u{00c1}) \u{00c1}\nint i = m2(0);\n");
+        // Should complete without hanging; the exact output doesn't matter
+        assert!(result.contains("int i"));
+    }
 }
