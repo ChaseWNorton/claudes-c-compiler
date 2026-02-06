@@ -66,7 +66,18 @@ gh pr checkout <PR_NUMBER>
 cargo build --release && cargo test --lib
 ```
 
-### 5. Submit review
+### 5. Detect access level
+
+```bash
+gh api repos/anthropics/claudes-c-compiler/collaborators/$( gh api user --jq '.login' )/permission --jq '.permission' 2>/dev/null || echo "none"
+```
+
+If `admin` or `write` → use formal reviews (approve / request-changes).
+Otherwise → post findings as a PR comment.
+
+### 6. Submit review
+
+#### Maintainers (formal review):
 
 **If all checks pass:**
 ```bash
@@ -88,6 +99,41 @@ gh pr review <PR_NUMBER> --repo anthropics/claudes-c-compiler --request-changes 
 - <what to change>
 
 Please address and push updates.
+EOF
+)"
+```
+
+#### Contributors (comment-based review):
+
+**If all checks pass:**
+```bash
+gh pr comment <PR_NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "$(cat <<'EOF'
+## Community Review
+
+All acceptance criteria met. Looks good to merge.
+
+**Checklist:**
+- [x] Fix addresses the linked issue
+- [x] Tests present and cover the fix
+- [x] Code follows existing patterns
+- [x] Build and tests pass locally
+EOF
+)"
+```
+
+**If issues found:**
+```bash
+gh pr comment <PR_NUMBER> --repo anthropics/claudes-c-compiler \
+  --body "$(cat <<'EOF'
+## Community Review
+
+### Issues found:
+- <specific issue 1>
+- <specific issue 2>
+
+### Suggested fixes:
+- <what to change>
 EOF
 )"
 ```

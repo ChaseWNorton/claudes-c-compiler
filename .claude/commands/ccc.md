@@ -44,6 +44,7 @@ CCC — What do you want to do?
   FIND       Audit the codebase and discover new bugs     (file issues for what you find)
   PLAN       Create a strategic roadmap with milestones   (X milestones exist)
   DECOMPOSE  Break a milestone into actionable issues     (requires milestone #)
+  REVIEW     Review a pull request                        (X PRs open)
   STATUS     See who's working on what                    (quick overview)
 ```
 
@@ -66,7 +67,7 @@ CCC — What do you want to do?
 - No milestones exist? → Recommend PLAN
 - Milestones exist but empty checklists? → Recommend DECOMPOSE
 - Many available issues? → Recommend FIX
-- PRs awaiting review? (maintainer only) → Recommend REVIEW
+- PRs awaiting review? → Recommend REVIEW
 - 10+ merged PRs, no release? (maintainer only) → Recommend RELEASE
 
 Ask the user which they'd like to do.
@@ -81,7 +82,7 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 | **FIND** | Pick highest-value module (or ask), read it line by line, file issues for every gap found |
 | **PLAN** | Analyze the compiler against C11 standards and GCC parity, create `[MILESTONE]` issues on GitHub |
 | **DECOMPOSE** | Ask which milestone #, read it, break into individual issues, update milestone checklist |
-| **REVIEW** | Show open PRs, ask which one, fetch PR + linked issue, review against acceptance criteria, submit review |
+| **REVIEW** | Show open PRs, ask which one, fetch PR + linked issue, review against acceptance criteria. **Maintainers**: submit formal review (approve/request-changes). **Contributors**: post findings as a PR comment. |
 | **RELEASE** | Gather merged PRs since last release, generate changelog, create git tag + GitHub release, close completed milestones |
 | **TRIAGE** | Report backlog health — stale claims, unprioritized issues, duplicates — then take action |
 | **STATUS** | Show dashboard: claimed, available, completed, with counts |

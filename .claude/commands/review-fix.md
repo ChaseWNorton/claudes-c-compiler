@@ -29,8 +29,8 @@ Review pull request #$ARGUMENTS on the CCC compiler project.
    cargo build --release && cargo test --lib
    ```
 
-5. **Submit your review**:
-   - Approve if all checks pass
-   - Request changes with specific feedback if issues found
+5. **Submit your review** (adapts to your access level):
+   - **Maintainers**: formal review — approve or request changes
+   - **Contributors**: post findings as a PR comment
 
 See the review-fix skill for the full checklist by issue category.
