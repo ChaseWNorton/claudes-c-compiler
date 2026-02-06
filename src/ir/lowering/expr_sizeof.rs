@@ -288,8 +288,8 @@ impl Lowerer {
             }
 
             // sizeof(sizeof(...)) or sizeof(_Alignof(...)) -> size_t
-            Expr::Sizeof(_, _) | Expr::Alignof(_, _) | Expr::AlignofExpr(_, _)
-            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofExpr(_, _) => crate::common::types::target_ptr_size(),
+            Expr::Sizeof(_, _) | Expr::Alignof(_, _) | Expr::AlignofVal(_, _)
+            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofVal(_, _) => crate::common::types::target_ptr_size(),
 
             // Cast: size of the target type
             Expr::Cast(target_type, _, _) => {
@@ -393,7 +393,7 @@ impl Lowerer {
             }
 
             // Statement expression: type of the last expression in the block
-            Expr::StmtExpr(_, _) => {
+            Expr::Statement(_, _) => {
                 if let Some(ctype) = self.get_expr_ctype(expr) {
                     self.ctype_size(&ctype)
                 } else {

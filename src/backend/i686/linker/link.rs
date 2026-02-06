@@ -175,7 +175,7 @@ pub fn link_shared(
     let (mut output_sections, section_name_to_idx, section_map) = merge_sections(&inputs);
 
     // Resolve symbols (no dynamic library symbols for shared lib output)
-    let dynlib_syms: HashMap<String, (String, u8, u32, Option<String>, bool, u8)> = HashMap::new();
+    let dynlib_syms: HashMap<String, DynLibSym> = HashMap::new();
     let (mut global_symbols, _sym_resolution) = resolve_symbols(
         &inputs, &output_sections, &section_map, &dynlib_syms,
     );

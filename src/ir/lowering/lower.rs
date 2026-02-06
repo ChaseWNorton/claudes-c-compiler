@@ -41,6 +41,9 @@ use crate::ir::reexports::{
     Value,
 };
 use crate::common::types::{AddressSpace, IrType, CType};
+
+/// Cache entry for memoized expression CType lookups: (discriminant for ABA detection, resolved type).
+type ExprCTypeEntry = (Discriminant<Expr>, Option<CType>);
 use crate::backend::Target;
 use super::definitions::*;
 use super::func_state::FunctionBuildState;
@@ -124,7 +127,7 @@ pub struct Lowerer {
     ///
     /// TODO: Once ExprId is backed by a counter-based scheme instead of pointer
     /// addresses, the ABA discriminant check can be removed entirely.
-    pub(super) expr_ctype_cache: RefCell<FxHashMap<ExprId, (Discriminant<Expr>, Option<CType>)>>,
+    pub(super) expr_ctype_cache: RefCell<FxHashMap<ExprId, ExprCTypeEntry>>,
     /// Diagnostic engine for emitting structured errors and warnings during lowering.
     /// Threaded from the driver through the compilation pipeline so that lowering-phase
     /// diagnostics get the same source location rendering and warning control as

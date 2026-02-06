@@ -305,7 +305,7 @@ impl<'a> SemaConstEval<'a> {
             // Per C11 6.2.8p3, if the expression names a variable declared with
             // _Alignas or __attribute__((aligned(N))), the result reflects the
             // declared alignment (max of natural and explicit).
-            Expr::AlignofExpr(ref inner_expr, _) => {
+            Expr::AlignofVal(ref inner_expr, _) => {
                 // Check for explicit alignment on a variable identifier
                 if let Expr::Identifier(name, _) = inner_expr.as_ref() {
                     if let Some(sym) = self.symbols.lookup(name) {
@@ -321,7 +321,7 @@ impl<'a> SemaConstEval<'a> {
             }
 
             // __alignof__(expr) via GnuAlignof path - returns preferred alignment
-            Expr::GnuAlignofExpr(ref inner_expr, _) => {
+            Expr::GnuAlignofVal(ref inner_expr, _) => {
                 if let Expr::Identifier(name, _) = inner_expr.as_ref() {
                     if let Some(sym) = self.symbols.lookup(name) {
                         if let Some(explicit_align) = sym.explicit_alignment {

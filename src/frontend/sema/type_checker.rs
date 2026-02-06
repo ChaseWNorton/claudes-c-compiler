@@ -174,8 +174,8 @@ impl<'a> ExprTypeChecker<'a> {
             }
 
             // Sizeof and Alignof always produce size_t (unsigned long on 64-bit)
-            Expr::Sizeof(_, _) | Expr::Alignof(_, _) | Expr::AlignofExpr(_, _)
-            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofExpr(_, _) => Some(CType::ULong),
+            Expr::Sizeof(_, _) | Expr::Alignof(_, _) | Expr::AlignofVal(_, _)
+            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofVal(_, _) => Some(CType::ULong),
 
             // Address-of wraps in Pointer
             Expr::AddressOf(inner, _) => {
@@ -312,7 +312,7 @@ impl<'a> ExprTypeChecker<'a> {
             }
 
             // Statement expression: type of the last expression statement
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 if let Some(BlockItem::Statement(Stmt::Expr(Some(expr)))) = compound.items.last() {
                     if let Some(ctype) = self.infer_expr_ctype(expr) {
                         return Some(ctype);

@@ -20,6 +20,24 @@ use crate::ir::reexports::{
 use crate::common::types::{AddressSpace, IrType, CType, target_int_ir_type};
 use super::lower::Lowerer;
 
+/// Collected argument information from `lower_call_arguments`.
+pub(super) struct CallArgInfo {
+    pub arg_vals: Vec<Operand>,
+    pub arg_types: Vec<IrType>,
+    pub struct_arg_sizes: Vec<Option<usize>>,
+    pub struct_arg_aligns: Vec<Option<usize>>,
+    pub struct_arg_classes: Vec<Vec<crate::common::types::EightbyteClass>>,
+    pub riscv_float_classes: Vec<Option<crate::common::types::RiscvFloatClass>>,
+}
+
+/// Parameter type information extracted from a function pointer expression's CType.
+struct FnPtrParamInfo {
+    param_types: Vec<IrType>,
+    param_ctypes: Vec<CType>,
+    param_bool_flags: Vec<bool>,
+    is_variadic: bool,
+}
+
 impl Lowerer {
     /// Classify a struct return size into sret (hidden pointer) or two-register return.
     /// Returns (sret_size, two_reg_size).
@@ -189,7 +207,11 @@ impl Lowerer {
         };
 
         // Lower arguments with implicit casts
-        let (mut arg_vals, mut arg_types, mut struct_arg_sizes, mut struct_arg_aligns, mut struct_arg_classes, mut struct_arg_riscv_float_classes) = self.lower_call_arguments(effective_func, args);
+        let CallArgInfo {
+            mut arg_vals, mut arg_types, mut struct_arg_sizes,
+            mut struct_arg_aligns, mut struct_arg_classes,
+            riscv_float_classes: mut struct_arg_riscv_float_classes,
+        } = self.lower_call_arguments(effective_func, args);
 
         // Detect variadic status early (needed for complex arg decomposition)
         let call_is_variadic = if let Expr::Identifier(name, _) = stripped_func {
@@ -423,7 +445,7 @@ impl Lowerer {
     /// Returns (arg_vals, arg_types, struct_arg_sizes, struct_arg_aligns, struct_arg_classes) where struct_arg_sizes[i] is
     /// Some(size) if the ith argument is a struct/union passed by value, and struct_arg_aligns[i]
     /// is Some(align) for struct args.
-    pub(super) fn lower_call_arguments(&mut self, func: &Expr, args: &[Expr]) -> (Vec<Operand>, Vec<IrType>, Vec<Option<usize>>, Vec<Option<usize>>, Vec<Vec<crate::common::types::EightbyteClass>>, Vec<Option<crate::common::types::RiscvFloatClass>>) {
+    pub(super) fn lower_call_arguments(&mut self, func: &Expr, args: &[Expr]) -> CallArgInfo {
         // Extract function name from direct calls, or the underlying variable name
         // from indirect calls through function pointers (e.g., (*afp)(args) -> "afp").
         let func_name = match func {
@@ -464,14 +486,14 @@ impl Lowerer {
         // all arguments need default argument promotions (float->double, char/short->int).
         let is_unprototyped = sig.is_some_and(|s| s.param_types.is_empty());
         let param_types: Option<Vec<IrType>> = sig.map(|s| s.param_types.clone()).filter(|v| !v.is_empty())
-            .or_else(|| inferred_from_ctype.as_ref().map(|(pt, _, _, _)| pt.clone()).filter(|v| !v.is_empty()));
+            .or_else(|| inferred_from_ctype.as_ref().map(|info| info.param_types.clone()).filter(|v| !v.is_empty()));
         let param_ctypes: Option<Vec<CType>> = sig.map(|s| s.param_ctypes.clone()).filter(|v| !v.is_empty())
-            .or_else(|| inferred_from_ctype.as_ref().map(|(_, pc, _, _)| pc.clone()).filter(|v| !v.is_empty()));
+            .or_else(|| inferred_from_ctype.as_ref().map(|info| info.param_ctypes.clone()).filter(|v| !v.is_empty()));
         let param_bool_flags: Option<Vec<bool>> = sig.map(|s| s.param_bool_flags.clone()).filter(|v| !v.is_empty())
-            .or_else(|| inferred_from_ctype.as_ref().map(|(_, _, pb, _)| pb.clone()).filter(|v| !v.is_empty()));
+            .or_else(|| inferred_from_ctype.as_ref().map(|info| info.param_bool_flags.clone()).filter(|v| !v.is_empty()));
         let pre_call_variadic = func_name.is_some_and(|name|
             self.is_function_variadic(name)
-        ) || inferred_from_ctype.as_ref().is_some_and(|(_, _, _, variadic)| *variadic);
+        ) || inferred_from_ctype.as_ref().is_some_and(|info| info.is_variadic);
 
         let mut arg_types = Vec::with_capacity(args.len());
         // Track argument indices where a complex expression was converted to a
@@ -697,7 +719,14 @@ impl Lowerer {
             args.iter().map(|_a| None).collect()
         };
 
-        (arg_vals, arg_types, struct_arg_sizes, struct_arg_aligns, struct_arg_classes, struct_arg_riscv_float_classes)
+        CallArgInfo {
+            arg_vals,
+            arg_types,
+            struct_arg_sizes,
+            struct_arg_aligns,
+            struct_arg_classes,
+            riscv_float_classes: struct_arg_riscv_float_classes,
+        }
     }
 
     /// Infer SysV ABI eightbyte classification for a struct argument expression.
@@ -1062,7 +1091,7 @@ impl Lowerer {
     ///
     /// Returns `Some((param_types, param_ctypes, param_bool_flags))` if the
     /// callee's CType is a function pointer with known parameter types.
-    fn extract_fn_ptr_param_info(&self, func_expr: &Expr) -> Option<(Vec<IrType>, Vec<CType>, Vec<bool>, bool)> {
+    fn extract_fn_ptr_param_info(&self, func_expr: &Expr) -> Option<FnPtrParamInfo> {
         let ctype = self.get_expr_ctype(func_expr)?;
         let ft = ctype.get_function_type()?;
         if ft.params.is_empty() {
@@ -1071,6 +1100,6 @@ impl Lowerer {
         let param_types: Vec<IrType> = ft.params.iter().map(|(ct, _)| IrType::from_ctype(ct)).collect();
         let param_ctypes: Vec<CType> = ft.params.iter().map(|(ct, _)| ct.clone()).collect();
         let param_bool_flags: Vec<bool> = ft.params.iter().map(|(ct, _)| matches!(ct, CType::Bool)).collect();
-        Some((param_types, param_ctypes, param_bool_flags, ft.variadic))
+        Some(FnPtrParamInfo { param_types, param_ctypes, param_bool_flags, is_variadic: ft.variadic })
     }
 }

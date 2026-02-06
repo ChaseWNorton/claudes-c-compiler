@@ -18,7 +18,7 @@ pub(super) fn emit_executable(
     section_map: &SectionMap,
     global_symbols: &mut HashMap<String, LinkerSymbol>,
     _sym_resolution: &HashMap<(usize, usize), String>,
-    _dynlib_syms: &HashMap<String, (String, u8, u32, Option<String>, bool, u8)>,
+    _dynlib_syms: &HashMap<String, DynLibSym>,
     plt_symbols: &[String],
     got_dyn_symbols: &[String],
     got_local_symbols: &[String],

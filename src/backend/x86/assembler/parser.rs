@@ -1569,7 +1569,7 @@ fn expand_gas_macros_with_state(
         // .macro name param1:req param2:req ...
         if trimmed.starts_with(".macro ") || trimmed.starts_with(".macro\t") {
             let rest = trimmed[".macro".len()..].trim();
-            let (name, params) = parse_macro_def(rest)?;
+            let MacroDef { name, params } = parse_macro_def(rest)?;
             let mut body = Vec::new();
             let mut depth = 1;
             i += 1;
@@ -1886,8 +1886,14 @@ fn expand_gas_macros_with_state(
     Ok(result)
 }
 
+/// A parsed `.macro` definition header: name and parameter list.
+struct MacroDef {
+    name: String,
+    params: Vec<(String, Option<String>)>,
+}
+
 /// Parse a .macro definition header: "name param1:req param2:req ..."
-fn parse_macro_def(rest: &str) -> Result<(String, Vec<(String, Option<String>)>), String> {
+fn parse_macro_def(rest: &str) -> Result<MacroDef, String> {
     let parts: Vec<&str> = rest.split_whitespace().collect();
     if parts.is_empty() {
         return Err(".macro: missing name".to_string());
@@ -1909,7 +1915,7 @@ fn parse_macro_def(rest: &str) -> Result<(String, Vec<(String, Option<String>)>)
             params.push((part.to_string(), None));
         }
     }
-    Ok((name, params))
+    Ok(MacroDef { name, params })
 }
 
 /// Parse macro invocation arguments: "param1=val1, param2=val2" or positional

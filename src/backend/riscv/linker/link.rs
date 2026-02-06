@@ -140,7 +140,7 @@ pub fn link_builtin(
         symbols::check_undefined_symbols(&global_syms, &HashMap::new())?;
     }
 
-    let (got_symbols, tls_got_symbols, local_got_sym_info) =
+    let symbols::GotEntries { got_symbols, tls_got_symbols, local_got_sym_info } =
         symbols::collect_got_entries(&input_objs);
 
     // Sort sections by canonical order
@@ -261,7 +261,7 @@ pub fn link_shared(
     );
 
     // Identify GOT entries needed
-    let (got_symbols, tls_got_symbols, local_got_sym_info) =
+    let symbols::GotEntries { got_symbols, tls_got_symbols, local_got_sym_info } =
         symbols::collect_got_entries(&input_objs);
 
     // ── Phase 4+: Emit shared library ───────────────────────────────

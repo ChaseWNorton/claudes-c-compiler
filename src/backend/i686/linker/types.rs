@@ -233,6 +233,17 @@ pub(super) struct DynSymInfo {
     pub is_default_ver: bool,
 }
 
+/// Information about a symbol imported from a shared library.
+/// The key in the HashMap is the symbol name.
+pub(super) struct DynLibSym {
+    pub lib_soname: String,
+    pub sym_type: u8,
+    pub size: u32,
+    pub version: Option<String>,
+    pub is_default_ver: bool,
+    pub binding: u8,
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 pub(super) fn align_up(value: u32, align: u32) -> u32 {

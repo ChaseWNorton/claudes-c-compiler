@@ -1075,7 +1075,7 @@ impl Parser {
             }
             // __alignof__(expr): parser-level can't always determine type alignment
             // from an expression, so return None (let sema/lowerer handle it)
-            Expr::AlignofExpr(_, _) | Expr::GnuAlignofExpr(_, _) => None,
+            Expr::AlignofVal(_, _) | Expr::GnuAlignofVal(_, _) => None,
             _ => None,
         }
     }
@@ -1104,7 +1104,7 @@ impl Parser {
             // sizeof yields size_t (unsigned). _Alignof yields size_t (unsigned).
             // These are unsigned per C11 6.5.3.4 and 6.5.3.
             Expr::Sizeof(..) | Expr::Alignof(..) | Expr::GnuAlignof(..)
-            | Expr::AlignofExpr(..) | Expr::GnuAlignofExpr(..) => true,
+            | Expr::AlignofVal(..) | Expr::GnuAlignofVal(..) => true,
             _ => false,
         }
     }

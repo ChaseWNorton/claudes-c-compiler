@@ -316,7 +316,7 @@ impl Parser {
                     // GCC extension: __alignof__(expr) - alignment of expression's type
                     let expr = self.parse_assignment_expr();
                     self.expect_closing(&TokenKind::RParen, open);
-                    Expr::AlignofExpr(Box::new(expr), span)
+                    Expr::AlignofVal(Box::new(expr), span)
                 }
             }
             TokenKind::GnuAlignof => {
@@ -333,7 +333,7 @@ impl Parser {
                 } else {
                     let expr = self.parse_assignment_expr();
                     self.expect_closing(&TokenKind::RParen, open);
-                    Expr::GnuAlignofExpr(Box::new(expr), span)
+                    Expr::GnuAlignofVal(Box::new(expr), span)
                 }
             }
             _ => self.parse_postfix_expr(),
@@ -616,7 +616,7 @@ impl Parser {
                     let span = self.peek_span();
                     let compound = self.parse_compound_stmt();
                     self.expect_closing(&TokenKind::RParen, open);
-                    Expr::StmtExpr(compound, span)
+                    Expr::Statement(compound, span)
                 } else {
                     let expr = self.parse_expr();
                     self.expect_closing(&TokenKind::RParen, open);

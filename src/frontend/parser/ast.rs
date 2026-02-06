@@ -713,19 +713,19 @@ pub enum Expr {
     PointerMemberAccess(Box<Expr>, String, Span),
     Cast(TypeSpecifier, Box<Expr>, Span),
     CompoundLiteral(TypeSpecifier, Box<Initializer>, Span),
-    StmtExpr(CompoundStmt, Span),
+    Statement(CompoundStmt, Span),
     Sizeof(Box<SizeofArg>, Span),
     /// __builtin_va_arg(ap, type): extract next variadic argument of given type
     VaArg(Box<Expr>, TypeSpecifier, Span),
     /// _Alignof(type) - C11 standard, returns minimum ABI alignment
     Alignof(TypeSpecifier, Span),
     /// _Alignof(expr) - alignment of expression's type (via _Alignof macro path)
-    AlignofExpr(Box<Expr>, Span),
+    AlignofVal(Box<Expr>, Span),
     /// __alignof(type) / __alignof__(type) - GCC extension, returns preferred alignment
     /// On i686: __alignof__(long long) == 8, _Alignof(long long) == 4
     GnuAlignof(TypeSpecifier, Span),
     /// __alignof__(expr) - GCC extension, preferred alignment of expression's type
-    GnuAlignofExpr(Box<Expr>, Span),
+    GnuAlignofVal(Box<Expr>, Span),
     Comma(Box<Expr>, Box<Expr>, Span),
     AddressOf(Box<Expr>, Span),
     Deref(Box<Expr>, Span),
@@ -833,10 +833,10 @@ impl Expr {
             | Expr::GnuConditional(_, _, s)
             | Expr::FunctionCall(_, _, s) | Expr::ArraySubscript(_, _, s)
             | Expr::MemberAccess(_, _, s) | Expr::PointerMemberAccess(_, _, s)
-            | Expr::Cast(_, _, s) | Expr::CompoundLiteral(_, _, s) | Expr::StmtExpr(_, s)
+            | Expr::Cast(_, _, s) | Expr::CompoundLiteral(_, _, s) | Expr::Statement(_, s)
             | Expr::Sizeof(_, s) | Expr::VaArg(_, _, s) | Expr::Alignof(_, s)
-            | Expr::AlignofExpr(_, s) | Expr::GnuAlignof(_, s)
-            | Expr::GnuAlignofExpr(_, s) | Expr::Comma(_, _, s)
+            | Expr::AlignofVal(_, s) | Expr::GnuAlignof(_, s)
+            | Expr::GnuAlignofVal(_, s) | Expr::Comma(_, _, s)
             | Expr::AddressOf(_, s) | Expr::Deref(_, s)
             | Expr::GenericSelection(_, _, s) | Expr::LabelAddr(_, s)
             | Expr::BuiltinTypesCompatibleP(_, _, s) => *s,

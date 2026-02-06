@@ -11,13 +11,23 @@
 use crate::common::fx_hash::{FxHashMap, FxHashSet};
 use crate::ir::reexports::{GlobalInit, Instruction, IrModule};
 
+/// Compact index mapping symbol names to integer IDs for efficient reachability analysis.
+struct SymbolIndex<'a> {
+    name_to_id: FxHashMap<&'a str, u32>,
+    next_id: u32,
+    id_func_idx: Vec<Option<usize>>,
+    id_global_idx: Vec<Option<usize>>,
+    func_id: Vec<u32>,
+    global_id: Vec<u32>,
+}
+
 /// Remove internal-linkage (static) functions and globals that are unreachable.
 ///
 /// Uses reachability analysis from roots (non-static symbols) to find all live symbols,
 /// then removes unreachable static functions and globals.
 pub(crate) fn eliminate_dead_static_functions(module: &mut IrModule) {
     // Phase 1: Build name-to-index mapping for all symbols.
-    let (mut name_to_id, mut next_id, id_func_idx, id_global_idx, func_id, global_id) =
+    let SymbolIndex { mut name_to_id, mut next_id, id_func_idx, id_global_idx, func_id, global_id } =
         build_symbol_index(module);
 
     // Phase 2: Build reference lists per function and global (using symbol IDs).
@@ -45,12 +55,7 @@ pub(crate) fn eliminate_dead_static_functions(module: &mut IrModule) {
 }
 
 /// Phase 1: Assign compact integer IDs to all function and global names.
-/// Returns (name_to_id, next_id, id_func_idx, id_global_idx, func_id, global_id).
-fn build_symbol_index(module: &IrModule) -> (
-    FxHashMap<&str, u32>, u32,
-    Vec<Option<usize>>, Vec<Option<usize>>,
-    Vec<u32>, Vec<u32>,
-) {
+fn build_symbol_index(module: &IrModule) -> SymbolIndex<'_> {
     let mut name_to_id: FxHashMap<&str, u32> = FxHashMap::default();
     let mut next_id: u32 = 0;
     let mut id_func_idx: Vec<Option<usize>> = Vec::new();
@@ -82,7 +87,7 @@ fn build_symbol_index(module: &IrModule) -> (
         global_id.push(id);
     }
 
-    (name_to_id, next_id, id_func_idx, id_global_idx, func_id, global_id)
+    SymbolIndex { name_to_id, next_id, id_func_idx, id_global_idx, func_id, global_id }
 }
 
 /// Look up or create an ID for a name that may not already exist.

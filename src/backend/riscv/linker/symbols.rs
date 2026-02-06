@@ -164,13 +164,20 @@ pub fn mark_plt_and_copy_symbols(
     (plt_symbols, copy_symbols)
 }
 
+/// Collected GOT entry information from relocation scanning.
+pub struct GotEntries {
+    pub got_symbols: Vec<String>,
+    pub tls_got_symbols: HashSet<String>,
+    pub local_got_sym_info: HashMap<String, (usize, usize, i64)>,
+}
+
 /// Identify GOT entries needed by scanning for GOT_HI20 and TLS GOT relocations.
 ///
 /// Returns the ordered list of GOT symbol keys, the set of TLS GOT symbols,
 /// and a map of local GOT symbol info for resolving local GOT entries.
 pub fn collect_got_entries(
     input_objs: &[(String, ElfObject)],
-) -> (Vec<String>, HashSet<String>, HashMap<String, (usize, usize, i64)>) {
+) -> GotEntries {
     let mut got_symbols: Vec<String> = Vec::new();
     let mut tls_got_symbols: HashSet<String> = HashSet::new();
     let mut local_got_sym_info: HashMap<String, (usize, usize, i64)> = HashMap::new();
@@ -205,7 +212,7 @@ pub fn collect_got_entries(
         }
     }
 
-    (got_symbols, tls_got_symbols, local_got_sym_info)
+    GotEntries { got_symbols, tls_got_symbols, local_got_sym_info }
 }
 
 /// Build local symbol virtual address table for relocation resolution.

@@ -25,6 +25,11 @@ use crate::ir::reexports::{
     Value,
 };
 
+/// A redirection entry: (old_target, new_target, phi_lookup_block).
+type EdgeRedirection = (BlockId, BlockId, BlockId);
+/// Collected redirections per block: (block_idx, list of edge changes).
+type BlockRedirections = Vec<(usize, Vec<EdgeRedirection>)>;
+
 /// Maximum depth for resolving transitive jump chains (A→B→C→...),
 /// to prevent pathological cases.
 const MAX_CHAIN_DEPTH: u32 = 32;
@@ -469,7 +474,7 @@ fn collect_thread_redirections(
     func: &IrFunction,
     resolved: &FxHashMap<BlockId, (BlockId, BlockId)>,
     label_to_idx: &FxHashMap<BlockId, usize>,
-) -> Vec<(usize, Vec<(BlockId, BlockId, BlockId)>)> {
+) -> BlockRedirections {
     let mut redirections = Vec::new();
 
     for block_idx in 0..func.blocks.len() {
@@ -522,7 +527,7 @@ fn collect_thread_redirections(
 /// Apply collected thread redirections: update terminators and phi nodes.
 fn apply_thread_redirections(
     func: &mut IrFunction,
-    redirections: &[(usize, Vec<(BlockId, BlockId, BlockId)>)],
+    redirections: &[(usize, Vec<EdgeRedirection>)],
     label_to_idx: &FxHashMap<BlockId, usize>,
 ) -> usize {
     let mut count = 0;

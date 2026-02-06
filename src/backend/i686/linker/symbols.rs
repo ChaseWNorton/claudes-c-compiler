@@ -13,7 +13,7 @@ pub(super) fn resolve_symbols(
     inputs: &[InputObject],
     _output_sections: &[OutputSection],
     section_map: &SectionMap,
-    dynlib_syms: &HashMap<String, (String, u8, u32, Option<String>, bool, u8)>,
+    dynlib_syms: &HashMap<String, DynLibSym>,
 ) -> (HashMap<String, LinkerSymbol>, HashMap<(usize, usize), String>) {
     let mut global_symbols: HashMap<String, LinkerSymbol> = HashMap::new();
     let mut sym_resolution: HashMap<(usize, usize), String> = HashMap::new();
@@ -92,13 +92,13 @@ pub(super) fn resolve_symbols(
             if sym.section_index == SHN_UNDEF {
                 if global_symbols.contains_key(&sym.name) { continue; }
 
-                if let Some((lib, dyn_sym_type, dyn_size, dyn_ver, _is_default, dyn_binding)) = dynlib_syms.get(&sym.name) {
-                    let is_func = *dyn_sym_type == STT_FUNC || *dyn_sym_type == STT_GNU_IFUNC;
+                if let Some(dls) = dynlib_syms.get(&sym.name) {
+                    let is_func = dls.sym_type == STT_FUNC || dls.sym_type == STT_GNU_IFUNC;
                     global_symbols.insert(sym.name.clone(), LinkerSymbol {
                         address: 0,
-                        size: *dyn_size,
-                        sym_type: *dyn_sym_type,
-                        binding: *dyn_binding,
+                        size: dls.size,
+                        sym_type: dls.sym_type,
+                        binding: dls.binding,
                         visibility: STV_DEFAULT,
                         is_defined: false,
                         needs_plt: is_func,
@@ -108,10 +108,10 @@ pub(super) fn resolve_symbols(
                         plt_index: 0,
                         got_index: 0,
                         is_dynamic: true,
-                        dynlib: lib.clone(),
+                        dynlib: dls.lib_soname.clone(),
                         needs_copy: !is_func,
                         copy_addr: 0,
-                        version: dyn_ver.clone(),
+                        version: dls.version.clone(),
                         uses_textrel: false,
                     });
                 } else {

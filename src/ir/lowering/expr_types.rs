@@ -160,7 +160,7 @@ impl Lowerer {
                     None
                 }
             }
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 // Statement expression: recurse into the last expression statement
                 if let Some(crate::frontend::parser::ast::BlockItem::Statement(
                     crate::frontend::parser::ast::Stmt::Expr(Some(inner_expr))
@@ -831,7 +831,7 @@ impl Lowerer {
                 let (_, field_ty, bf_info) = self.resolve_pointer_member_access_full(base_expr, field_name);
                 bitfield_promoted_type(field_ty, bf_info)
             }
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 // Statement expression: type is the type of the last expression statement.
                 // Try CType-based resolution first (includes sema annotations), which
                 // correctly handles anonymous struct member access inside stmt exprs
@@ -1307,14 +1307,14 @@ impl Lowerer {
             Expr::GenericSelection(controlling, associations, _) => {
                 self.resolve_generic_selection_ctype(controlling, associations)
             }
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 self.get_stmt_expr_ctype(compound, None)
             }
             // sizeof and alignof always produce size_t (unsigned long on 64-bit,
             // unsigned int on 32-bit). This is needed so typeof(sizeof(...)) resolves
             // correctly in kernel macros.
-            Expr::Sizeof(_, _) | Expr::Alignof(_, _) | Expr::AlignofExpr(_, _)
-            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofExpr(_, _) => {
+            Expr::Sizeof(_, _) | Expr::Alignof(_, _) | Expr::AlignofVal(_, _)
+            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofVal(_, _) => {
                 if crate::common::types::target_is_32bit() {
                     Some(CType::UInt)
                 } else {
@@ -1337,7 +1337,7 @@ impl Lowerer {
                 // expressions can reference variables from this compound
                 // (e.g., kernel atomic_cmpxchg: outer declares __ai_ptr,
                 // inner uses typeof(*__ai_ptr)).
-                if let Expr::StmtExpr(inner_compound, _) = expr {
+                if let Expr::Statement(inner_compound, _) = expr {
                     let scope = self.build_compound_scope(compound, parent_scope);
                     if !scope.is_empty() {
                         if let Some(ctype) = self.get_stmt_expr_ctype(inner_compound, Some(&scope)) {
@@ -1502,7 +1502,7 @@ impl Lowerer {
             // (outer + inner declarations) and resolve the last expression.
             // This handles nested stmt exprs like the kernel's cmpxchg macro where
             // the inner compound uses typeof() referencing outer compound variables.
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 if let Some(BlockItem::Statement(Stmt::Expr(Some(expr)))) = compound.items.last() {
                     // First try normal resolution
                     if let Some(ctype) = self.get_expr_ctype(expr) {

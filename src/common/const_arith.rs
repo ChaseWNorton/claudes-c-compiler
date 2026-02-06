@@ -515,8 +515,8 @@ fn is_syntactically_constant(expr: &crate::frontend::parser::ast::Expr) -> bool 
 
         // sizeof and alignof are constant (even when applied to expressions)
         Expr::Sizeof(_, _) | Expr::Alignof(_, _)
-        | Expr::AlignofExpr(_, _) | Expr::GnuAlignof(_, _)
-        | Expr::GnuAlignofExpr(_, _) => true,
+        | Expr::AlignofVal(_, _) | Expr::GnuAlignof(_, _)
+        | Expr::GnuAlignofVal(_, _) => true,
 
         // Casts of constant expressions are constant
         Expr::Cast(_, inner, _) => is_syntactically_constant(inner),

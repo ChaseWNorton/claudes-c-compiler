@@ -41,6 +41,20 @@ const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 
+/// An ELF64 section header entry for construction before serialization.
+struct Shdr64Entry {
+    name: String,
+    sh_type: u32,
+    sh_flags: u64,
+    sh_addr: u64,
+    sh_offset: u64,
+    sh_size: u64,
+    sh_link: u32,
+    sh_info: u32,
+    sh_addralign: u64,
+    sh_entsize: u64,
+}
+
 /// Emit a RISC-V shared library (.so) from pre-resolved linking state.
 ///
 /// `input_objs`, `merged_sections`, `sec_mapping`, `global_syms` etc.
@@ -865,7 +879,7 @@ pub fn emit_shared_library(
 
     // ── Append section headers ──────────────────────────────────────
     let mut shstrtab_data: Vec<u8> = vec![0];
-    let mut section_headers: Vec<(String, u32, u64, u64, u64, u64, u32, u32, u64, u64)> = Vec::new();
+    let mut section_headers: Vec<Shdr64Entry> = Vec::new();
 
     let add_shstrtab_name = |name: &str, strtab: &mut Vec<u8>| -> u32 {
         let off = strtab.len() as u32;
@@ -875,25 +889,25 @@ pub fn emit_shared_library(
     };
 
     // Section 0: null
-    section_headers.push(("".into(), 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    section_headers.push(Shdr64Entry { name: "".into(), sh_type: 0, sh_flags: 0, sh_addr: 0, sh_offset: 0, sh_size: 0, sh_link: 0, sh_info: 0, sh_addralign: 0, sh_entsize: 0 });
 
     // .gnu.hash
     let _sh_name = add_shstrtab_name(".gnu.hash", &mut shstrtab_data);
-    section_headers.push((".gnu.hash".into(), 0x6ffffff6, SHF_ALLOC,
-        gnu_hash_addr, gnu_hash_offset, gnu_hash_size, 3, 0, 8, 0));
+    section_headers.push(Shdr64Entry { name: ".gnu.hash".into(), sh_type: 0x6ffffff6, sh_flags: SHF_ALLOC,
+        sh_addr: gnu_hash_addr, sh_offset: gnu_hash_offset, sh_size: gnu_hash_size, sh_link: 3, sh_info: 0, sh_addralign: 8, sh_entsize: 0 });
 
     // .dynsym
     let _sh_name = add_shstrtab_name(".dynsym", &mut shstrtab_data);
-    section_headers.push((".dynsym".into(), SHT_DYNSYM, SHF_ALLOC,
-        dynsym_addr, dynsym_offset, dynsym_size, 3, 1, 8, 24));
+    section_headers.push(Shdr64Entry { name: ".dynsym".into(), sh_type: SHT_DYNSYM, sh_flags: SHF_ALLOC,
+        sh_addr: dynsym_addr, sh_offset: dynsym_offset, sh_size: dynsym_size, sh_link: 3, sh_info: 1, sh_addralign: 8, sh_entsize: 24 });
 
     // .dynstr
     let _sh_name = add_shstrtab_name(".dynstr", &mut shstrtab_data);
-    section_headers.push((".dynstr".into(), SHT_STRTAB, SHF_ALLOC,
-        dynstr_addr, dynstr_offset, dynstr_size, 0, 0, 1, 0));
+    section_headers.push(Shdr64Entry { name: ".dynstr".into(), sh_type: SHT_STRTAB, sh_flags: SHF_ALLOC,
+        sh_addr: dynstr_addr, sh_offset: dynstr_offset, sh_size: dynstr_size, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 });
 
     // Fix .gnu.hash link to point to .dynsym (index 2)
-    section_headers[1].6 = 2;
+    section_headers[1].sh_link = 2;
 
     // Add merged sections as section headers
     for &si in &sec_indices {
@@ -903,46 +917,46 @@ pub fn emit_shared_library(
         let _sh_name = add_shstrtab_name(&ms.name, &mut shstrtab_data);
         let sh_offset = if ms.sh_type == SHT_NOBITS { 0 } else { ms.vaddr - base_addr };
         let sh_size = ms.data.len() as u64;
-        section_headers.push((ms.name.clone(), ms.sh_type, ms.sh_flags,
-            ms.vaddr, sh_offset, sh_size, 0, 0, ms.align, 0));
+        section_headers.push(Shdr64Entry { name: ms.name.clone(), sh_type: ms.sh_type, sh_flags: ms.sh_flags,
+            sh_addr: ms.vaddr, sh_offset, sh_size, sh_link: 0, sh_info: 0, sh_addralign: ms.align, sh_entsize: 0 });
     }
 
     // .rela.dyn
     let _sh_name = add_shstrtab_name(".rela.dyn", &mut shstrtab_data);
-    section_headers.push((".rela.dyn".into(), SHT_RELA, SHF_ALLOC,
-        rela_dyn_addr, rela_dyn_offset, rela_dyn_size, 2, 0, 8, 24));
+    section_headers.push(Shdr64Entry { name: ".rela.dyn".into(), sh_type: SHT_RELA, sh_flags: SHF_ALLOC,
+        sh_addr: rela_dyn_addr, sh_offset: rela_dyn_offset, sh_size: rela_dyn_size, sh_link: 2, sh_info: 0, sh_addralign: 8, sh_entsize: 24 });
 
     // .dynamic
     let _sh_name = add_shstrtab_name(".dynamic", &mut shstrtab_data);
-    section_headers.push((".dynamic".into(), SHT_DYNAMIC, SHF_ALLOC | SHF_WRITE,
-        dynamic_addr, dynamic_offset, dynamic_size, 3, 0, 8, 16));
+    section_headers.push(Shdr64Entry { name: ".dynamic".into(), sh_type: SHT_DYNAMIC, sh_flags: SHF_ALLOC | SHF_WRITE,
+        sh_addr: dynamic_addr, sh_offset: dynamic_offset, sh_size: dynamic_size, sh_link: 3, sh_info: 0, sh_addralign: 8, sh_entsize: 16 });
 
     // .got
     if got_size > 0 {
         let _sh_name = add_shstrtab_name(".got", &mut shstrtab_data);
-        section_headers.push((".got".into(), SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
-            got_vaddr, got_offset, got_size, 0, 0, 8, 8));
+        section_headers.push(Shdr64Entry { name: ".got".into(), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_WRITE,
+            sh_addr: got_vaddr, sh_offset: got_offset, sh_size: got_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 });
     }
 
     // .got.plt
     if got_plt_size > 0 {
         let _sh_name = add_shstrtab_name(".got.plt", &mut shstrtab_data);
-        section_headers.push((".got.plt".into(), SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
-            got_plt_vaddr, got_plt_offset, got_plt_size, 0, 0, 8, 8));
+        section_headers.push(Shdr64Entry { name: ".got.plt".into(), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_WRITE,
+            sh_addr: got_plt_vaddr, sh_offset: got_plt_offset, sh_size: got_plt_size, sh_link: 0, sh_info: 0, sh_addralign: 8, sh_entsize: 8 });
     }
 
     // .plt
     if plt_size > 0 {
         let _sh_name = add_shstrtab_name(".plt", &mut shstrtab_data);
-        section_headers.push((".plt".into(), SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR,
-            plt_vaddr, plt_offset, plt_size, 0, 0, 16, plt_entry_size));
+        section_headers.push(Shdr64Entry { name: ".plt".into(), sh_type: SHT_PROGBITS, sh_flags: SHF_ALLOC | SHF_EXECINSTR,
+            sh_addr: plt_vaddr, sh_offset: plt_offset, sh_size: plt_size, sh_link: 0, sh_info: 0, sh_addralign: 16, sh_entsize: plt_entry_size });
     }
 
     // .rela.plt
     if rela_plt_size > 0 {
         let _sh_name = add_shstrtab_name(".rela.plt", &mut shstrtab_data);
-        section_headers.push((".rela.plt".into(), SHT_RELA, SHF_ALLOC,
-            rela_plt_addr, rela_plt_offset, rela_plt_size, 2, 0, 8, 24));
+        section_headers.push(Shdr64Entry { name: ".rela.plt".into(), sh_type: SHT_RELA, sh_flags: SHF_ALLOC,
+            sh_addr: rela_plt_addr, sh_offset: rela_plt_offset, sh_size: rela_plt_size, sh_link: 2, sh_info: 0, sh_addralign: 8, sh_entsize: 24 });
     }
 
     // .riscv.attributes (non-loadable)
@@ -953,8 +967,8 @@ pub fn emit_shared_library(
         attr_file_offset = elf.len() as u64;
         attr_size = ms.data.len() as u64;
         elf.extend_from_slice(&ms.data);
-        section_headers.push((".riscv.attributes".into(), SHT_RISCV_ATTRIBUTES, 0,
-            0, attr_file_offset, attr_size, 0, 0, 1, 0));
+        section_headers.push(Shdr64Entry { name: ".riscv.attributes".into(), sh_type: SHT_RISCV_ATTRIBUTES, sh_flags: 0,
+            sh_addr: 0, sh_offset: attr_file_offset, sh_size: attr_size, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 });
     }
 
     // .shstrtab
@@ -962,8 +976,8 @@ pub fn emit_shared_library(
     let shstrtab_idx = section_headers.len();
     let shstrtab_file_offset = elf.len() as u64;
     elf.extend_from_slice(&shstrtab_data);
-    section_headers.push((".shstrtab".into(), SHT_STRTAB, 0,
-        0, shstrtab_file_offset, shstrtab_data.len() as u64, 0, 0, 1, 0));
+    section_headers.push(Shdr64Entry { name: ".shstrtab".into(), sh_type: SHT_STRTAB, sh_flags: 0,
+        sh_addr: 0, sh_offset: shstrtab_file_offset, sh_size: shstrtab_data.len() as u64, sh_link: 0, sh_info: 0, sh_addralign: 1, sh_entsize: 0 });
 
     // Write section headers
     while !elf.len().is_multiple_of(8) { elf.push(0); }
@@ -974,11 +988,11 @@ pub fn emit_shared_library(
     let mut name_offsets: Vec<u32> = Vec::new();
     {
         let mut _strtab_pos = 0u32;
-        for (name, ..) in &section_headers {
-            if name.is_empty() {
+        for entry in &section_headers {
+            if entry.name.is_empty() {
                 name_offsets.push(0);
             } else {
-                let name_bytes = name.as_bytes();
+                let name_bytes = entry.name.as_bytes();
                 let mut found = false;
                 for pos in 0..shstrtab_data.len() {
                     if pos + name_bytes.len() < shstrtab_data.len()
@@ -992,23 +1006,23 @@ pub fn emit_shared_library(
                 }
                 if !found { name_offsets.push(_strtab_pos); }
             }
-            _strtab_pos += name.len() as u32 + 1;
+            _strtab_pos += entry.name.len() as u32 + 1;
         }
     }
 
-    for (idx, (_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size, sh_link, sh_info, sh_addralign, sh_entsize)) in section_headers.iter().enumerate() {
+    for (idx, entry) in section_headers.iter().enumerate() {
         let mut shdr = [0u8; 64];
         let name_off = name_offsets[idx];
         shdr[0..4].copy_from_slice(&name_off.to_le_bytes());
-        shdr[4..8].copy_from_slice(&sh_type.to_le_bytes());
-        shdr[8..16].copy_from_slice(&sh_flags.to_le_bytes());
-        shdr[16..24].copy_from_slice(&sh_addr.to_le_bytes());
-        shdr[24..32].copy_from_slice(&sh_offset.to_le_bytes());
-        shdr[32..40].copy_from_slice(&sh_size.to_le_bytes());
-        shdr[40..44].copy_from_slice(&sh_link.to_le_bytes());
-        shdr[44..48].copy_from_slice(&sh_info.to_le_bytes());
-        shdr[48..56].copy_from_slice(&sh_addralign.to_le_bytes());
-        shdr[56..64].copy_from_slice(&sh_entsize.to_le_bytes());
+        shdr[4..8].copy_from_slice(&entry.sh_type.to_le_bytes());
+        shdr[8..16].copy_from_slice(&entry.sh_flags.to_le_bytes());
+        shdr[16..24].copy_from_slice(&entry.sh_addr.to_le_bytes());
+        shdr[24..32].copy_from_slice(&entry.sh_offset.to_le_bytes());
+        shdr[32..40].copy_from_slice(&entry.sh_size.to_le_bytes());
+        shdr[40..44].copy_from_slice(&entry.sh_link.to_le_bytes());
+        shdr[44..48].copy_from_slice(&entry.sh_info.to_le_bytes());
+        shdr[48..56].copy_from_slice(&entry.sh_addralign.to_le_bytes());
+        shdr[56..64].copy_from_slice(&entry.sh_entsize.to_le_bytes());
         elf.extend_from_slice(&shdr);
     }
 

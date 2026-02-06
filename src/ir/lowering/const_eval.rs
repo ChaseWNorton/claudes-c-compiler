@@ -186,7 +186,7 @@ impl Lowerer {
                 let align = self.alignof_type(ts);
                 Some(IrConst::I64(align as i64))
             }
-            Expr::AlignofExpr(ref inner_expr, _) => {
+            Expr::AlignofVal(ref inner_expr, _) => {
                 let align = self.alignof_expr(inner_expr);
                 Some(IrConst::I64(align as i64))
             }
@@ -194,7 +194,7 @@ impl Lowerer {
                 let align = self.preferred_alignof_type(ts);
                 Some(IrConst::I64(align as i64))
             }
-            Expr::GnuAlignofExpr(ref inner_expr, _) => {
+            Expr::GnuAlignofVal(ref inner_expr, _) => {
                 let align = self.preferred_alignof_expr(inner_expr);
                 Some(IrConst::I64(align as i64))
             }

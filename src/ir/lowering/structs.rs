@@ -588,7 +588,7 @@ impl Lowerer {
             Expr::Comma(_, last, _) => {
                 self.expr_produces_packed_struct_data(last)
             }
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 // Statement expression: check if the last expression statement
                 // produces packed struct data (e.g., ({ pfn_pte(...); }))
                 if let Some(crate::frontend::parser::ast::BlockItem::Statement(
@@ -788,7 +788,7 @@ impl Lowerer {
             Expr::Comma(_, last, _) => {
                 self.get_pointed_struct_layout(last)
             }
-            Expr::StmtExpr(..) => {
+            Expr::Statement(..) => {
                 // Statement expression: use CType resolution to find the
                 // pointed-to struct type, since inner variables may not be
                 // in scope yet during layout lookup.
@@ -916,7 +916,7 @@ impl Lowerer {
             Expr::Comma(_, last, _) => {
                 self.get_layout_for_expr(last)
             }
-            Expr::StmtExpr(..) => {
+            Expr::Statement(..) => {
                 // Statement expression: use CType resolution (which handles
                 // inner scopes via sema) to find the struct type, since the
                 // inner variables may not be in scope yet during layout lookup.

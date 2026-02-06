@@ -11,6 +11,17 @@ use crate::frontend::lexer::token::TokenKind;
 use super::ast::*;
 use super::parse::{ModeKind, Parser};
 
+/// Result of parsing a full parameter declarator (name, pointers, arrays, function pointer info).
+pub(super) struct ParamDeclaratorInfo {
+    pub name: Option<String>,
+    pub pointer_depth: u32,
+    pub array_dims: Vec<Option<Box<Expr>>>,
+    pub is_func_ptr: bool,
+    pub ptr_to_array_dims: Vec<Option<Box<Expr>>>,
+    pub fptr_params: Option<Vec<ParamDecl>>,
+    pub fptr_inner_ptr_depth: u32,
+}
+
 /// Result of parsing a parenthesized abstract declarator.
 pub(super) enum ParenAbstractDecl {
     /// Simple pointer/array grouping: (*), (**), (*[3][4])
@@ -358,8 +369,11 @@ impl Parser {
                 // Capture whether the base type (before pointer declarators) was const.
                 // For `const int *p`, parsing_const is true here; the `*` is handled below.
                 let param_is_const = self.attrs.parsing_const();
-                let (name, pointer_depth, array_dims, is_func_ptr, ptr_to_array_dims, fptr_param_decls, inner_ptr_depth) =
-                    self.parse_param_declarator_full();
+                let ParamDeclaratorInfo {
+                    name, pointer_depth, array_dims, is_func_ptr,
+                    ptr_to_array_dims, fptr_params: fptr_param_decls,
+                    fptr_inner_ptr_depth: inner_ptr_depth,
+                } = self.parse_param_declarator_full();
                 self.skip_gcc_extensions();
 
                 // Apply pointer levels
@@ -435,8 +449,7 @@ impl Parser {
     }
 
     /// Parse a parameter declarator with full type information.
-    /// Returns (name, pointer_depth, array_dims, is_func_ptr, ptr_to_array_dims, fptr_params, fptr_inner_ptr_depth).
-    pub(super) fn parse_param_declarator_full(&mut self) -> (Option<String>, u32, Vec<Option<Box<Expr>>>, bool, Vec<Option<Box<Expr>>>, Option<Vec<ParamDecl>>, u32) {
+    pub(super) fn parse_param_declarator_full(&mut self) -> ParamDeclaratorInfo {
         let mut pointer_depth: u32 = 0;
         while self.consume_if(&TokenKind::Star) {
             pointer_depth += 1;
@@ -493,7 +506,7 @@ impl Parser {
             fptr_params = Some(fp_params);
         }
 
-        (name, pointer_depth, array_dims, is_func_ptr, ptr_to_array_dims, fptr_params, fptr_inner_ptr_depth)
+        ParamDeclaratorInfo { name, pointer_depth, array_dims, is_func_ptr, ptr_to_array_dims, fptr_params, fptr_inner_ptr_depth }
     }
 
     /// Parse a parenthesized parameter declarator: (*name)(params), (name), etc.

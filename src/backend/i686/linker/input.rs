@@ -127,8 +127,8 @@ pub(super) fn load_libraries(
     extra_libs: &[String],
     extra_lib_files: &[String],
     all_lib_dirs: &[String],
-) -> (HashMap<String, (String, u8, u32, Option<String>, bool, u8)>, Vec<String>) {
-    let mut dynlib_syms: HashMap<String, (String, u8, u32, Option<String>, bool, u8)> = HashMap::new();
+) -> (HashMap<String, DynLibSym>, Vec<String>) {
+    let mut dynlib_syms: HashMap<String, DynLibSym> = HashMap::new();
     let mut static_lib_objects: Vec<String> = Vec::new();
     let all_lib_refs: Vec<&str> = all_lib_dirs.iter().map(|s| s.as_str()).collect();
 
@@ -201,7 +201,7 @@ pub(super) fn load_libraries(
 pub(super) fn scan_shared_lib(
     lib: &str,
     lib_refs: &[&str],
-    dynlib_syms: &mut HashMap<String, (String, u8, u32, Option<String>, bool, u8)>,
+    dynlib_syms: &mut HashMap<String, DynLibSym>,
 ) -> bool {
     let so_base = format!("lib{}.so", lib);
     for dir in lib_refs {
@@ -240,18 +240,32 @@ pub(super) fn scan_shared_lib(
 }
 
 pub(super) fn insert_dynsym(
-    dynlib_syms: &mut HashMap<String, (String, u8, u32, Option<String>, bool, u8)>,
+    dynlib_syms: &mut HashMap<String, DynLibSym>,
     sym: DynSymInfo,
     lib_soname: &str,
 ) {
     let entry = dynlib_syms.entry(sym.name.clone());
     match entry {
         std::collections::hash_map::Entry::Vacant(e) => {
-            e.insert((lib_soname.to_string(), sym.sym_type, sym.size, sym.version, sym.is_default_ver, sym.binding));
+            e.insert(DynLibSym {
+                lib_soname: lib_soname.to_string(),
+                sym_type: sym.sym_type,
+                size: sym.size,
+                version: sym.version,
+                is_default_ver: sym.is_default_ver,
+                binding: sym.binding,
+            });
         }
         std::collections::hash_map::Entry::Occupied(mut e) => {
-            if sym.is_default_ver && !e.get().4 {
-                e.insert((lib_soname.to_string(), sym.sym_type, sym.size, sym.version, sym.is_default_ver, sym.binding));
+            if sym.is_default_ver && !e.get().is_default_ver {
+                e.insert(DynLibSym {
+                    lib_soname: lib_soname.to_string(),
+                    sym_type: sym.sym_type,
+                    size: sym.size,
+                    version: sym.version,
+                    is_default_ver: sym.is_default_ver,
+                    binding: sym.binding,
+                });
             }
         }
     }

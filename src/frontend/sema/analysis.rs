@@ -1498,7 +1498,7 @@ impl SemanticAnalyzer {
             // A return inside a statement expression returns from the enclosing
             // function, so if the compound body cannot fall through, the
             // expression itself diverges.
-            Expr::StmtExpr(compound, _) => !self.compound_can_fall_through(compound),
+            Expr::Statement(compound, _) => !self.compound_can_fall_through(compound),
             _ => false,
         }
     }
@@ -1704,7 +1704,7 @@ impl SemanticAnalyzer {
                 }
             }
             Expr::Alignof(..) | Expr::GnuAlignof(..) => {} // alignof(type) - no expr to check
-            Expr::AlignofExpr(inner, _) | Expr::GnuAlignofExpr(inner, _) => {
+            Expr::AlignofVal(inner, _) | Expr::GnuAlignofVal(inner, _) => {
                 self.analyze_expr(inner);
             }
             Expr::AddressOf(inner, _) => {
@@ -1720,7 +1720,7 @@ impl SemanticAnalyzer {
             Expr::CompoundLiteral(_, init, _) => {
                 self.analyze_initializer(init);
             }
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 self.analyze_compound_stmt(compound);
             }
             Expr::VaArg(ap_expr, _, _) => {

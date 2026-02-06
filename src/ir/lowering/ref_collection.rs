@@ -276,7 +276,7 @@ impl Lowerer {
             Expr::CompoundLiteral(_, init, _) => {
                 self.collect_refs_from_initializer(init, refs);
             }
-            Expr::StmtExpr(compound, _) => {
+            Expr::Statement(compound, _) => {
                 self.collect_refs_from_compound(compound, refs);
             }
             Expr::GenericSelection(ctrl, assocs, _) => {

@@ -158,7 +158,7 @@ impl Lowerer {
                 let align = self.alignof_type(type_spec);
                 Operand::Const(IrConst::I64(align as i64))
             }
-            Expr::AlignofExpr(ref inner_expr, _) => {
+            Expr::AlignofVal(ref inner_expr, _) => {
                 let align = self.alignof_expr(inner_expr);
                 Operand::Const(IrConst::I64(align as i64))
             }
@@ -166,7 +166,7 @@ impl Lowerer {
                 let align = self.preferred_alignof_type(type_spec);
                 Operand::Const(IrConst::I64(align as i64))
             }
-            Expr::GnuAlignofExpr(ref inner_expr, _) => {
+            Expr::GnuAlignofVal(ref inner_expr, _) => {
                 let align = self.preferred_alignof_expr(inner_expr);
                 Operand::Const(IrConst::I64(align as i64))
             }
@@ -183,7 +183,7 @@ impl Lowerer {
                 self.lower_expr(lhs);
                 self.lower_expr(rhs)
             }
-            Expr::StmtExpr(compound, _) => self.lower_stmt_expr(compound),
+            Expr::Statement(compound, _) => self.lower_stmt_expr(compound),
             Expr::VaArg(ap_expr, type_spec, _) => self.lower_va_arg(ap_expr, type_spec),
             Expr::GenericSelection(controlling, associations, _) => {
                 self.lower_generic_selection(controlling, associations)
