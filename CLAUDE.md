@@ -17,8 +17,8 @@ cargo clippy --all-targets # lint check
 
 ## Contributing with Claude Code
 
-This repo uses a multiplayer coordination system. Multiple Claude Code instances
-can work on different issues simultaneously without conflicts.
+This repo uses a multiplayer coordination system built on skills. Multiple Claude Code
+instances can work on different issues simultaneously without conflicts.
 
 ### Quick start (single issue)
 
@@ -27,7 +27,7 @@ can work on different issues simultaneously without conflicts.
 3. Run `/fix-issue <number>` to claim and fix a specific issue
 4. Your draft PR is the claim — other workers will see it and skip that issue
 
-### Auto-cycle mode (multiple issues)
+### Auto-cycle mode (fix everything)
 
 Run `/fix-next` to enter auto-cycle mode. Claude Code will:
 1. Find the highest-priority unclaimed issue
@@ -54,8 +54,22 @@ GitHub Issues and PRs are the shared state — no external tools needed.
 |---------|-------------|
 | `/pick-issue` | Browse issues, see what's available vs claimed |
 | `/fix-issue <N>` | Claim and fix a specific issue |
-| `/fix-next` | Auto-cycle: claim → fix → PR → next → repeat |
+| `/fix-next` | Auto-cycle: claim, fix, PR, next, repeat |
 | `/issue-status` | Dashboard: claimed, available, completed |
+| `/review-fix <PR>` | Review a PR against its issue's acceptance criteria |
+| `/file-issue [path]` | Audit code and file new well-structured issues |
+| `/triage` | Analyze and manage the issue backlog |
+
+### Skills
+
+Skills provide deep context for each workflow. Claude Code loads them automatically.
+
+| Skill | Purpose | Reference files |
+|-------|---------|----------------|
+| `fix-next` | Auto-cycle issue fixing | COORDINATION.md, CODEBASE_PATTERNS.md, TROUBLESHOOTING.md |
+| `review-fix` | PR review against acceptance criteria | CHECKLIST.md |
+| `file-issue` | Bug discovery and issue creation | TEMPLATES.md |
+| `triage` | Backlog health and prioritization | — |
 
 ## Code conventions
 

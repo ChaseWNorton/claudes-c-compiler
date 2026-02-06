@@ -22,163 +22,74 @@ LOOP:
 
 **DO NOT STOP** after fixing one issue. **DO NOT ASK** the user what to do next. Claim the next issue and continue.
 
-## Coordination Protocol
+## Quick Reference
 
-GitHub Issues + PRs are the shared state. No local state file needed.
-
-### How claiming works
-
-- **Available** = open issue with NO open PR whose body contains `Fixes #N`
-- **Claimed** = an open PR exists with `Fixes #N` in the body
-- **Done** = PR merged → issue auto-closes
-
-### Finding unclaimed work
+### Find unclaimed work
 
 ```bash
-# Step 1: Get all open issues (sorted by priority prefix)
-ISSUES=$(gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50)
+# Open issues
+gh issue list --repo anthropics/claudes-c-compiler --state open --json number,title --limit 50
 
-# Step 2: Get all issue numbers referenced by open PRs
-CLAIMED=$(gh pr list --repo anthropics/claudes-c-compiler --state open --json body --jq '.[].body' | grep -oP 'Fixes #\K[0-9]+' | sort -u)
-
-# Step 3: Find the first unclaimed issue (P0 first, then P1, P2, P3)
-# Parse ISSUES, filter out anything in CLAIMED, pick the highest priority one
+# Already claimed (issue numbers referenced by open PRs)
+gh pr list --repo anthropics/claudes-c-compiler --state open --json body --jq '.[].body' | grep -oP 'Fixes #\K[0-9]+' | sort -u
 ```
 
-Priority order: `[P0]` > `[P1]` > `[P2]` > `[P3]` > unprefixed
+Subtract claimed from open. Pick highest priority: `[P0]` > `[P1]` > `[P2]` > `[P3]`.
 
-### Claiming an issue
-
-The claim is creating a **branch and a draft PR**. This tells other workers "I'm on it."
+### Claim an issue
 
 ```bash
-# Create branch
+git switch main && git pull origin main
 git switch -c fix/issue-<NUMBER>
-
-# Create an empty commit so we can push
 git commit --allow-empty -m "WIP: Fix #<NUMBER>: <title>"
-
-# Push and create draft PR (= the claim)
 git push -u origin fix/issue-<NUMBER>
 gh pr create --repo anthropics/claudes-c-compiler \
   --title "Fix #<NUMBER>: <title>" \
-  --body "$(cat <<'EOF'
-## Summary
-Work in progress — implementing fix.
-
-## Changes
-(will be updated when complete)
-
-## Test plan
-(will be updated when complete)
-
-Fixes #<NUMBER>
-EOF
-)" --draft
+  --body "WIP — Fixes #<NUMBER>" --draft
 ```
 
-### Completing the work
-
-After implementing the fix and verifying tests pass:
+### Complete and finalize
 
 ```bash
-# Stage and commit the actual fix
+cargo build --release && cargo test --lib   # Must pass
 git add <specific-files>
 git commit -m "Fix #<NUMBER>: <short description>"
-
-# Push (updates the draft PR)
 git push
-
-# Mark PR as ready for review (= mark done)
 gh pr ready <PR_NUMBER> --repo anthropics/claudes-c-compiler
-
-# Update PR body with real Summary, Changes, Test plan
-gh pr edit <PR_NUMBER> --repo anthropics/claudes-c-compiler --body "$(cat <<'EOF'
-## Summary
-<what was wrong and why>
-
-## Changes
-<what you changed, file by file>
-
-## Test plan
-- [x] `cargo build --release` — clean build
-- [x] `cargo test --lib` — all tests pass
-- [x] New tests added for the fix
-
-Fixes #<NUMBER>
-EOF
-)"
 ```
 
-### Switching to next issue
-
-After completing one issue, switch back to main before starting the next:
-
-```bash
-git switch main
-git pull origin main
-```
-
-Then find the next unclaimed issue and repeat.
+Update PR body with Summary, Changes, Test plan. End with `Fixes #<NUMBER>`.
 
 ## Implementation Rules
 
-1. **Read the issue body completely** — it contains the full work order: problem, reproduction, suggested approach, files to modify, tests to write, acceptance criteria.
+1. **Read the issue body completely** — it is the full work order.
+2. **Read the source files** before writing any code. See [CODEBASE_PATTERNS.md](CODEBASE_PATTERNS.md) for per-category guidance.
+3. **Follow CLAUDE.md conventions** — tests in `#[cfg(test)] mod tests`, GCC-format error messages, no external deps.
+4. **Write tests** as described in the issue. Check if helpers exist before creating them.
+5. **Verify**: `cargo build --release && cargo test --lib` — both must pass with zero failures.
+6. **One commit per issue** — message format: `Fix #<NUMBER>: <short description>`
 
-2. **Read the files mentioned** before writing any code. Understand existing patterns.
+## Reference Files
 
-3. **Follow CLAUDE.md conventions**:
-   - Tests in `#[cfg(test)] mod tests` at the bottom of the modified file
-   - Match GCC/Clang error message format
-   - No external dependencies
-   - Cite C11 standard sections where relevant
-
-4. **Write tests** as described in the issue. If the issue says to add `sema_error_count` / `sema_warning_count` test helpers, check if they already exist first (a previous issue may have added them).
-
-5. **Verify before marking done**:
-   ```bash
-   cargo build --release && cargo test --lib
-   ```
-   Both must pass with zero failures.
-
-6. **One commit per issue** — keep it clean. The commit message should be:
-   ```
-   Fix #<NUMBER>: <short description>
-   ```
+- **[COORDINATION.md](COORDINATION.md)** — Detailed claim/release protocol, race conditions, stale claim handling
+- **[CODEBASE_PATTERNS.md](CODEBASE_PATTERNS.md)** — How to fix each issue category (diagnostics, CLI, backend, tests)
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Build failures, test failures, claim conflicts, recovery
 
 ## Error Recovery
 
-- **Build fails**: Fix the error, amend is OK since it's your WIP branch.
-- **Tests fail**: Fix the test or the implementation. Don't mark PR ready until tests pass.
-- **Issue is unclear**: Read the reproduction code and suggested approach more carefully. The issues are self-contained work orders — all context is in the body.
-- **Already claimed**: Skip it, move to the next unclaimed issue.
+- **Build fails**: Fix the error. Amend is OK on your WIP branch.
+- **Tests fail**: Fix the implementation. Don't mark PR ready until tests pass.
+- **Already claimed**: Skip it, next unclaimed issue.
+- **Issue unclear**: Re-read the reproduction code and suggested approach in the issue body.
+- **Stuck**: See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed recovery steps.
 
-## Example Auto-Cycle Session
+## Behavior
 
-```
-1. Find unclaimed → #20 [P0] Duplicate case labels
-2. Create branch fix/issue-20, draft PR → claimed
-3. Read issue body, read analysis.rs
-4. Add switch_cases tracking to SemanticAnalyzer
-5. Write tests, cargo build && cargo test → PASS
-6. Push, mark PR ready
-7. Switch to main, pull
-8. Find unclaimed → #21 [P0] Duplicate default labels    ← IMMEDIATELY continue
-9. Create branch fix/issue-21, draft PR → claimed
-10. Read issue body, implement fix
-11. Write tests, verify → PASS
-12. Push, mark PR ready
-13. Switch to main, pull
-14. Find unclaimed → #22 [P0] Void return                ← IMMEDIATELY continue
-... repeat until ...
-N. Find unclaimed → none available                        ← STOP only here
-```
-
-**WRONG behavior:**
+**WRONG:**
 - Fixing one issue then asking "Should I continue?"
 - Stopping after each fix to report progress
 - Waiting for user confirmation
 
-**CORRECT behavior:**
+**CORRECT:**
 - Fix → PR → next → Fix → PR → next → ...
 - Only stop when no unclaimed issues remain
