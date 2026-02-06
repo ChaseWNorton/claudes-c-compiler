@@ -1267,18 +1267,19 @@ impl Lowerer {
     /// Write a bitfield value into a byte buffer at the given offset.
     /// Uses read-modify-write to pack the value at the correct bit position.
     pub(super) fn write_bitfield_to_bytes(&self, bytes: &mut [u8], offset: usize, val: &IrConst, ty: IrType, bit_offset: u32, bit_width: u32) {
-        let int_val = val.to_u64().unwrap_or(0);
-
         let size = ty.size();
-        let mask = if bit_width >= 64 { u64::MAX } else { (1u64 << bit_width) - 1 };
+
+        // Use u128 arithmetic so wide bitfields (__int128, >64-bit) don't overflow.
+        let int_val = val.to_i128().unwrap_or(0) as u128;
+        let mask = if bit_width >= 128 { u128::MAX } else { (1u128 << bit_width) - 1 };
         let field_val = (int_val & mask) << bit_offset;
         let clear_mask = !(mask << bit_offset);
 
         // Read current storage unit value (little-endian)
-        let mut current = 0u64;
+        let mut current = 0u128;
         for i in 0..size {
             if offset + i < bytes.len() {
-                current |= (bytes[offset + i] as u64) << (i * 8);
+                current |= (bytes[offset + i] as u128) << (i * 8);
             }
         }
 
@@ -1397,5 +1398,73 @@ impl Lowerer {
                 self.write_const_to_bytes(bytes, field_offset + comp_size, &imag_const, IrType::F64);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::backend::Target;
+    use crate::common::error::DiagnosticEngine;
+    use crate::common::source::SourceManager;
+    use crate::frontend::preprocessor::Preprocessor;
+    use crate::frontend::lexer::Lexer;
+    use crate::frontend::parser::Parser;
+    use crate::frontend::sema::SemanticAnalyzer;
+    use crate::ir::lowering::Lowerer;
+
+    /// Compile C source through lowering (panics if lowering crashes).
+    fn compile_to_ir(code: &str) {
+        crate::common::types::set_target_ptr_size(8);
+        crate::common::types::set_target_long_double_is_f128(false);
+
+        let mut preprocessor = Preprocessor::new();
+        preprocessor.set_target("x86_64");
+        preprocessor.set_filename("<test>");
+        let preprocessed = preprocessor.preprocess(code);
+
+        let mut source_manager = SourceManager::new();
+        let file_id = source_manager.add_file("<test>".to_string(), preprocessed);
+        source_manager.build_line_map();
+        let macro_expansions = preprocessor.take_macro_expansion_info();
+        source_manager.set_macro_expansions(macro_expansions);
+
+        let mut lexer = Lexer::new(source_manager.get_content(file_id), file_id);
+        lexer.set_gnu_extensions(true);
+        let tokens = lexer.tokenize();
+
+        let mut diagnostics = DiagnosticEngine::new();
+        diagnostics.set_source_manager(source_manager);
+        let mut parser = Parser::new(tokens);
+        parser.set_diagnostics(diagnostics);
+        let ast = parser.parse();
+        assert_eq!(parser.error_count, 0, "parse errors");
+
+        let diagnostics = parser.take_diagnostics();
+        let mut sema = SemanticAnalyzer::new();
+        sema.set_diagnostics(diagnostics);
+        let _ = sema.analyze(&ast);
+        let diagnostics = sema.take_diagnostics();
+        let sema_result = sema.into_result();
+
+        let lowerer = Lowerer::with_type_context(
+            Target::X86_64,
+            sema_result.type_context,
+            sema_result.functions,
+            sema_result.expr_types,
+            sema_result.const_values,
+            diagnostics,
+            false,
+        );
+        let (_module, _) = lowerer.lower(&ast);
+    }
+
+    #[test]
+    fn i128_bitfield_global_init_no_panic() {
+        // Issue #76: index out of bounds when initializing __int128 bitfield
+        compile_to_ir(r#"
+            struct s { __int128 y : 66; };
+            typedef struct s T;
+            T a[] = {1, 10000, 0x12345, 0xff000001};
+        "#);
     }
 }
