@@ -173,9 +173,15 @@ impl<'a> ExprTypeChecker<'a> {
                 Some(self.resolve_type_spec(type_spec))
             }
 
-            // Sizeof and Alignof always produce size_t (unsigned long on 64-bit)
+            // Sizeof and Alignof produce size_t: UInt on ILP32, ULong on LP64
             Expr::Sizeof(_, _) | Expr::Alignof(_, _) | Expr::AlignofVal(_, _)
-            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofVal(_, _) => Some(CType::ULong),
+            | Expr::GnuAlignof(_, _) | Expr::GnuAlignofVal(_, _) => {
+                if crate::common::types::target_is_32bit() {
+                    Some(CType::UInt)
+                } else {
+                    Some(CType::ULong)
+                }
+            }
 
             // Address-of wraps in Pointer
             Expr::AddressOf(inner, _) => {
@@ -378,7 +384,12 @@ impl<'a> ExprTypeChecker<'a> {
                         if *op == BinOp::Sub {
                             if let Some(ref r) = rct {
                                 if r.is_pointer_like() {
-                                    return Some(CType::Long);
+                                    // ptrdiff_t: Int on ILP32, Long on LP64
+                                    return if crate::common::types::target_is_32bit() {
+                                        Some(CType::Int)
+                                    } else {
+                                        Some(CType::Long)
+                                    };
                                 }
                             }
                         }
@@ -388,7 +399,12 @@ impl<'a> ExprTypeChecker<'a> {
                         if *op == BinOp::Sub {
                             if let Some(ref r) = rct {
                                 if r.is_pointer_like() {
-                                    return Some(CType::Long);
+                                    // ptrdiff_t: Int on ILP32, Long on LP64
+                                    return if crate::common::types::target_is_32bit() {
+                                        Some(CType::Int)
+                                    } else {
+                                        Some(CType::Long)
+                                    };
                                 }
                             }
                         }

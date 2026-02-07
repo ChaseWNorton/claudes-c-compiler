@@ -1741,4 +1741,17 @@ mod tests {
             }
         "#);
     }
+
+    #[test]
+    fn sizeof_result_type_lp64() {
+        // Issue #139: sizeof result type should be size_t (ULong on LP64).
+        // This test runs on the default x86_64 target (ptr_size=8).
+        use crate::common::types::IrType;
+        let module = compile_to_ir(r#"
+            unsigned long s = sizeof(int);
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "s").expect("global 's'");
+        // On LP64, sizeof(int) = 4, stored as a u64 (ULong) global
+        assert!(matches!(g.ty, IrType::I64 | IrType::U64), "sizeof result should produce I64/U64 on LP64 target, got {:?}", g.ty);
+    }
 }
