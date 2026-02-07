@@ -1474,6 +1474,45 @@ mod tests {
     use crate::ir::instruction::Instruction;
     use crate::backend::Target;
 
+    fn compile_to_ir_with_diag(code: &str) -> (crate::ir::module::IrModule, DiagnosticEngine) {
+        crate::common::types::set_target_ptr_size(8);
+        crate::common::types::set_target_long_double_is_f128(false);
+        let mut pp = Preprocessor::new();
+        pp.set_target("x86_64");
+        pp.set_filename("<test>");
+        let preprocessed = pp.preprocess(code);
+        let mut sm = SourceManager::new();
+        let fid = sm.add_file("<test>".to_string(), preprocessed);
+        sm.build_line_map();
+        let macro_expansions = pp.take_macro_expansion_info();
+        sm.set_macro_expansions(macro_expansions);
+        let mut lexer = Lexer::new(sm.get_content(fid), fid);
+        lexer.set_gnu_extensions(true);
+        let tokens = lexer.tokenize();
+        let mut diagnostics = DiagnosticEngine::new();
+        diagnostics.set_source_manager(sm);
+        let mut parser = Parser::new(tokens);
+        parser.set_diagnostics(diagnostics);
+        let ast = parser.parse();
+        assert_eq!(parser.error_count, 0, "parse errors");
+        let diagnostics = parser.take_diagnostics();
+        let mut sema = SemanticAnalyzer::new();
+        sema.set_diagnostics(diagnostics);
+        let _ = sema.analyze(&ast);
+        let diagnostics = sema.take_diagnostics();
+        let sema_result = sema.into_result();
+        let lowerer = Lowerer::with_type_context(
+            Target::X86_64,
+            sema_result.type_context,
+            sema_result.functions,
+            sema_result.expr_types,
+            sema_result.const_values,
+            diagnostics,
+            false,
+        );
+        lowerer.lower(&ast)
+    }
+
     fn compile_to_ir(code: &str) -> crate::ir::module::IrModule {
         crate::common::types::set_target_ptr_size(8);
         crate::common::types::set_target_long_double_is_f128(false);
@@ -1878,5 +1917,14 @@ mod tests {
             }
             other => panic!("expected Scalar or Zero, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn error_attr_function_call_emits_warning() {
+        let (_, diag) = compile_to_ir_with_diag(r#"
+            __attribute__((error("do not call"))) void bad(void);
+            void f(void) { bad(); }
+        "#);
+        assert!(diag.warning_count() >= 1, "expected warning for call to error-attributed function, got {}", diag.warning_count());
     }
 }

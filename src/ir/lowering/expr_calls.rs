@@ -180,6 +180,13 @@ impl Lowerer {
             // (eliminating all error function call sites), restore this to emit a
             // compile error (matching GCC behavior) instead of silently dropping.
             if self.error_functions.contains(name) {
+                // Emit a warning so the call isn't silently dropped.
+                if let Expr::Identifier(_, span) = stripped_func {
+                    self.emit_warning(
+                        format!("call to function '{}' declared with attribute error", name),
+                        *span,
+                    );
+                }
                 // No-op: skip the call. The code path should be unreachable after
                 // inlining and constant folding. If it IS reached at runtime,
                 // execution continues harmlessly (which is better than crashing).
