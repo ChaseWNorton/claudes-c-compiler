@@ -821,7 +821,7 @@ impl<'a> SemaConstEval<'a> {
                 }
                 Some(elem_size * n as usize)
             }
-            TypeSpecifier::Array(_, None) => Some(ptr_sz), // incomplete array
+            TypeSpecifier::Array(_, None) => None, // C11 6.5.3.4p1: sizeof on incomplete array is a constraint violation
             TypeSpecifier::Struct(tag, fields, is_packed, pragma_pack, struct_aligned) => {
                 // Look up cached layout for tagged structs
                 if let Some(tag) = tag {
