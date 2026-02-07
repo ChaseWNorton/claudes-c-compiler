@@ -97,7 +97,9 @@ impl Preprocessor {
         if flag.is_empty() {
             return None;
         }
-        // Encode flag name with hyphens replaced by underscores for identifier safety
+        // Encode flag name with hyphens replaced by underscores for identifier safety.
+        // Strip trailing '=' (e.g. -Warray-bounds=) to keep the identifier valid.
+        let flag = flag.trim_end_matches('=');
         let encoded = flag.replace('-', "_");
         Some(format!("__ccc_diag_{}_{} ;\n", action, encoded))
     }

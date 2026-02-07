@@ -1420,6 +1420,10 @@ pub fn parse_define(line: &str) -> Option<MacroDef> {
                 }
 
                 params.push(param);
+            } else {
+                // Unexpected character in macro parameter list (e.g. `*` in
+                // `#define sizeof(void *)`). Skip it to avoid an infinite loop.
+                i += 1;
             }
 
             while i < len && (bytes[i] == b' ' || bytes[i] == b'\t') {

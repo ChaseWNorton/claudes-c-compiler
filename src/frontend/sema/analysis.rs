@@ -616,7 +616,8 @@ impl SemanticAnalyzer {
                 decl.alignment
             };
 
-            let var_linkage = if decl.is_static() {
+            let var_linkage = if decl.is_static() && _is_global {
+                // C11 6.2.2p3: file-scope static → internal linkage
                 Linkage::Internal
             } else if decl.is_extern() {
                 Linkage::Extern
@@ -1023,11 +1024,22 @@ impl SemanticAnalyzer {
             Stmt::Return(Some(expr), span) => {
                 self.analyze_expr(expr);
                 // C11 §6.8.6.4p1: return with expression in void function is an error
+                // UNLESS the expression itself has type void (e.g. `return (void)x;`)
                 if matches!(self.current_return_type, Some(CType::Void)) {
-                    self.diagnostics.borrow_mut().error(
-                        "'return' with a value, in function returning void",
-                        *span,
-                    );
+                    let checker = super::type_checker::ExprTypeChecker {
+                        symbols: &self.symbol_table,
+                        types: &self.result.type_context,
+                        functions: &self.result.functions,
+                        expr_types: Some(&self.result.expr_types),
+                    };
+                    let expr_is_void = checker.infer_expr_ctype(expr)
+                        .map_or(false, |t| matches!(t, CType::Void));
+                    if !expr_is_void {
+                        self.diagnostics.borrow_mut().error(
+                            "'return' with a value, in function returning void",
+                            *span,
+                        );
+                    }
                 }
                 // C11 §6.8.6.4p3: return expression type must be compatible
                 // with the function return type (as if by assignment).
@@ -2463,20 +2475,39 @@ impl SemanticAnalyzer {
             }
             // *p = value — if p is `T * const`, sym.is_const means the pointer
             // is const, not the pointee. Writing through it is legal.
+            // Also: *(const_struct.ptr_member) — const on the struct makes the
+            // pointer member itself const (int *const) but the pointed-to data
+            // is still writable. Only flag writes when the deref doesn't go
+            // through a struct member (which could be a pointer type).
             Expr::Deref(inner, _) => {
-                if let Some(name) = Self::extract_base_identifier(inner) {
-                    if let Some(sym) = self.symbol_table.lookup(&name) {
-                        if sym.is_const && !matches!(sym.ty, CType::Pointer(..)) {
-                            self.diagnostics.borrow_mut().error(
-                                format!("assignment of read-only location '*{}'", name),
-                                span,
-                            );
+                // If the deref target goes through a member access, the member
+                // might be a pointer — dereferencing a pointer member from a
+                // const struct is legal (const applies to the pointer, not the
+                // pointed-to data). C11 6.7.3p3.
+                let through_member = Self::inner_ends_with_member(inner);
+                if !through_member {
+                    if let Some(name) = Self::extract_base_identifier(inner) {
+                        if let Some(sym) = self.symbol_table.lookup(&name) {
+                            if sym.is_const && !matches!(sym.ty, CType::Pointer(..)) {
+                                self.diagnostics.borrow_mut().error(
+                                    format!("assignment of read-only location '*{}'", name),
+                                    span,
+                                );
+                            }
                         }
                     }
                 }
             }
             _ => {}
         }
+    }
+
+    /// Check if the outermost operation on an expression is a member access.
+    /// Used by the Deref const-check: *(const_struct.ptr_member) is writable
+    /// because the member is a pointer and const only makes the pointer itself
+    /// const, not the pointed-to data.
+    fn inner_ends_with_member(expr: &Expr) -> bool {
+        matches!(expr, Expr::MemberAccess(_, _, _) | Expr::PointerMemberAccess(_, _, _))
     }
 
     /// Check if an expression chain contains a pointer dereference (-> or *).
@@ -2714,8 +2745,13 @@ impl SemanticAnalyzer {
         };
 
         let fields = &layout.fields;
-        // Skip unnamed/padding fields for counting purposes
-        let named_fields: Vec<_> = fields.iter().filter(|f| !f.name.is_empty()).collect();
+        // Include named fields and anonymous struct/union members (C11 6.7.2.1p13)
+        // for positional initialization. Exclude unnamed bit-field padding.
+        let named_fields: Vec<_> = fields.iter().filter(|f| {
+            !f.name.is_empty()
+                || (f.bit_width.is_none()
+                    && matches!(f.ty, CType::Struct(_) | CType::Union(_)))
+        }).collect();
         let num_fields = named_fields.len();
 
         // Count non-designated items (positional initializers)

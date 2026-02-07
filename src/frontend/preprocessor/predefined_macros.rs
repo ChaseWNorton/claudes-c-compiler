@@ -408,7 +408,7 @@ impl Preprocessor {
     /// Detect the macOS SDK path via `xcrun --show-sdk-path`.
     /// Result is cached for the process lifetime via OnceLock.
     #[cfg(target_os = "macos")]
-    fn detect_macos_sdk_path() -> Option<PathBuf> {
+    pub(crate) fn detect_macos_sdk_path() -> Option<PathBuf> {
         use std::sync::OnceLock;
         static SDK_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
         SDK_PATH

@@ -685,16 +685,6 @@ impl Preprocessor {
                     }
                 }
             }
-            // Also try relative to the original source file directory
-            if !self.filename.is_empty() {
-                if let Some(parent) = Path::new(&self.filename).parent() {
-                    let candidate = parent.join(include_path);
-                    if candidate.is_file() {
-                        return Some(make_absolute(&candidate));
-                    }
-                }
-            }
-
             // Step 2: Search -iquote paths (quoted includes only)
             for dir in &self.quote_include_paths {
                 let candidate = dir.join(include_path);
@@ -736,6 +726,42 @@ impl Preprocessor {
             }
         }
 
+        // Step 7 (macOS): Framework include resolution
+        // #include <Framework/Header.h> → Framework.framework/Headers/Header.h
+        #[cfg(target_os = "macos")]
+        if let Some(slash_pos) = include_path.find('/') {
+            let framework_name = &include_path[..slash_pos];
+            let header_rest = &include_path[slash_pos + 1..];
+            if let Some(resolved) = self.resolve_framework_include(framework_name, header_rest) {
+                return Some(resolved);
+            }
+        }
+
+        None
+    }
+
+    /// Resolve `#include <Framework/Header.h>` to
+    /// `<dir>/Framework.framework/Headers/Header.h` on macOS.
+    #[cfg(target_os = "macos")]
+    fn resolve_framework_include(&self, framework: &str, header: &str) -> Option<PathBuf> {
+        let framework_dirs: Vec<PathBuf> = {
+            let mut dirs = Vec::new();
+            if let Some(sdk) = Self::detect_macos_sdk_path() {
+                dirs.push(sdk.join("System/Library/Frameworks"));
+            }
+            dirs.push(PathBuf::from("/System/Library/Frameworks"));
+            dirs.push(PathBuf::from("/Library/Frameworks"));
+            dirs
+        };
+        for dir in &framework_dirs {
+            let candidate = dir
+                .join(format!("{}.framework", framework))
+                .join("Headers")
+                .join(header);
+            if candidate.is_file() {
+                return Some(make_absolute(&candidate));
+            }
+        }
         None
     }
 

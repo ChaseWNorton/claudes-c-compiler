@@ -1018,10 +1018,12 @@ impl Parser {
             Expr::UnaryOp(UnaryOp::BitNot, inner, _) => {
                 Self::eval_const_int_expr_with_enums(inner, enum_consts, tag_aligns).map(|v| {
                     let result = !v;
-                    // For unsigned int operands, truncate to 32 bits. The evaluator
+                    // For 32-bit unsigned int operands, truncate to 32 bits. The evaluator
                     // uses i64 for all values, so ~0u produces i64(-1) (all 64 bits set)
                     // instead of the correct 0xFFFFFFFF (32-bit all-ones).
-                    if Self::is_unsigned_int_expr(inner) {
+                    // For 64-bit unsigned (unsigned long long, unsigned long on LP64),
+                    // i64(-1) already correctly represents all-ones — no truncation.
+                    if Self::is_32bit_unsigned_expr(inner) {
                         result & 0xFFFF_FFFF
                     } else {
                         result
@@ -1113,10 +1115,12 @@ impl Parser {
             Expr::Cast(ts, _, _) => {
                 Self::is_unsigned_type_spec(ts)
             }
-            // Unary +/- preserve the signedness of the operand.
-            // In C, -size_t still has type size_t (unsigned wraparound).
+            // Unary +/-/~ preserve the signedness of the operand.
+            // In C, -size_t still has type size_t (unsigned wraparound),
+            // and ~0ULL has type unsigned long long.
             Expr::UnaryOp(UnaryOp::Plus, inner, _)
-            | Expr::UnaryOp(UnaryOp::Neg, inner, _) => Self::is_unsigned_int_expr(inner),
+            | Expr::UnaryOp(UnaryOp::Neg, inner, _)
+            | Expr::UnaryOp(UnaryOp::BitNot, inner, _) => Self::is_unsigned_int_expr(inner),
             // Binary ops: unsigned if either operand is unsigned (C promotion)
             Expr::BinaryOp(_, lhs, rhs, _) => {
                 Self::is_unsigned_int_expr(lhs) || Self::is_unsigned_int_expr(rhs)
@@ -1125,6 +1129,30 @@ impl Parser {
             // These are unsigned per C11 6.5.3.4 and 6.5.3.
             Expr::Sizeof(..) | Expr::Alignof(..) | Expr::GnuAlignof(..)
             | Expr::AlignofVal(..) | Expr::GnuAlignofVal(..) => true,
+            _ => false,
+        }
+    }
+
+    /// Check if an expression is a 32-bit unsigned type (not 64-bit unsigned).
+    /// Used by BitNot to decide whether to truncate to 32 bits: ~0U needs
+    /// truncation to 0xFFFFFFFF, but ~0ULL must NOT be truncated (i64(-1) is
+    /// the correct 64-bit all-ones representation).
+    fn is_32bit_unsigned_expr(expr: &Expr) -> bool {
+        match expr {
+            Expr::UIntLiteral(..) => true,
+            // unsigned long is 64-bit on LP64 (all CCC targets)
+            Expr::ULongLiteral(..) | Expr::ULongLongLiteral(..) => false,
+            Expr::UnaryOp(UnaryOp::Plus, inner, _)
+            | Expr::UnaryOp(UnaryOp::Neg, inner, _)
+            | Expr::UnaryOp(UnaryOp::BitNot, inner, _) => Self::is_32bit_unsigned_expr(inner),
+            Expr::BinaryOp(_, lhs, rhs, _) => {
+                // 32-bit only if both operands are 32-bit unsigned; any 64-bit
+                // operand widens the result
+                Self::is_32bit_unsigned_expr(lhs) && Self::is_32bit_unsigned_expr(rhs)
+            }
+            // sizeof/alignof yield size_t (64-bit on LP64)
+            Expr::Sizeof(..) | Expr::Alignof(..) | Expr::GnuAlignof(..)
+            | Expr::AlignofVal(..) | Expr::GnuAlignofVal(..) => false,
             _ => false,
         }
     }
