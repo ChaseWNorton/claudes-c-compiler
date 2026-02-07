@@ -323,6 +323,7 @@ impl Lowerer {
         let mut local_info = LocalInfo::from_analysis(da, alloca, decl.is_const());
         local_info.var.address_space = decl.address_space;
         local_info.var.is_atomic = decl.is_atomic();
+        local_info.var.is_volatile = decl.is_volatile();
         if explicit_align > 0 {
             local_info.var.explicit_alignment = Some(explicit_align);
         }
@@ -415,6 +416,7 @@ impl Lowerer {
         // This mirrors the same pattern used in lower_global_decl().
         let mut ginfo = GlobalInfo::from_analysis(da);
         ginfo.var.is_atomic = decl.is_atomic();
+        ginfo.var.is_volatile = decl.is_volatile();
         self.globals.insert(static_name.clone(), ginfo);
 
         // Determine initializer (evaluated at compile time for static locals)
@@ -511,6 +513,7 @@ impl Lowerer {
         // emits a fresh GlobalAddr in its own basic block, avoiding unreachable-block issues).
         let mut local_info = LocalInfo::for_static(da, static_name, decl.is_const());
         local_info.var.is_atomic = decl.is_atomic();
+        local_info.var.is_volatile = decl.is_volatile();
         if let Some(ea) = explicit_align {
             local_info.var.explicit_alignment = Some(ea);
         }
@@ -589,11 +592,11 @@ impl Lowerer {
                 let val = self.lower_expr(e);
                 let expr_ty = self.get_expr_type(e);
                 let val = self.emit_implicit_cast(val, expr_ty, comp_ty);
-                self.emit(Instruction::Store { val, ptr: dest_addr, ty: comp_ty , seg_override: AddressSpace::Default });
+                self.emit(Instruction::Store { val, ptr: dest_addr, ty: comp_ty , seg_override: AddressSpace::Default , volatile: false });
             }
         } else {
             let zero = Self::complex_zero(comp_ty);
-            self.emit(Instruction::Store { val: zero, ptr: dest_addr, ty: comp_ty , seg_override: AddressSpace::Default });
+            self.emit(Instruction::Store { val: zero, ptr: dest_addr, ty: comp_ty , seg_override: AddressSpace::Default , volatile: false });
         }
         // Store imag part
         let imag_ptr = self.emit_gep_offset(dest_addr, comp_size, IrType::I8);
@@ -602,11 +605,11 @@ impl Lowerer {
                 let val = self.lower_expr(e);
                 let expr_ty = self.get_expr_type(e);
                 let val = self.emit_implicit_cast(val, expr_ty, comp_ty);
-                self.emit(Instruction::Store { val, ptr: imag_ptr, ty: comp_ty , seg_override: AddressSpace::Default });
+                self.emit(Instruction::Store { val, ptr: imag_ptr, ty: comp_ty , seg_override: AddressSpace::Default , volatile: false });
             }
         } else {
             let zero = Self::complex_zero(comp_ty);
-            self.emit(Instruction::Store { val: zero, ptr: imag_ptr, ty: comp_ty , seg_override: AddressSpace::Default });
+            self.emit(Instruction::Store { val: zero, ptr: imag_ptr, ty: comp_ty , seg_override: AddressSpace::Default , volatile: false });
         }
     }
 
@@ -774,7 +777,7 @@ impl Lowerer {
                             } else {
                                 let val = self.lower_and_cast_init_expr(e, field_ty);
                                 let field_addr = self.emit_gep_offset(base, field_offset, field_ty);
-                                self.emit(Instruction::Store { val, ptr: field_addr, ty: field_ty , seg_override: AddressSpace::Default });
+                                self.emit(Instruction::Store { val, ptr: field_addr, ty: field_ty , seg_override: AddressSpace::Default , volatile: false });
                             }
                         } else if let CType::Struct(ref key) | CType::Union(ref key) = **elem_ty {
                             // Array-of-structs field with flat expression initializer:
@@ -807,7 +810,7 @@ impl Lowerer {
                             let elem_is_bool = **elem_ty == CType::Bool;
                             let val = self.lower_init_expr_bool_aware(e, elem_ir_ty, elem_is_bool);
                             let field_addr = self.emit_gep_offset(base, field_offset, elem_ir_ty);
-                            self.emit(Instruction::Store { val, ptr: field_addr, ty: elem_ir_ty , seg_override: AddressSpace::Default });
+                            self.emit(Instruction::Store { val, ptr: field_addr, ty: elem_ir_ty , seg_override: AddressSpace::Default , volatile: false });
                             // Consume additional items for remaining array elements
                             let mut arr_idx = 1usize;
                             while arr_idx < arr_size && item_idx + 1 < items.len() {
@@ -826,7 +829,7 @@ impl Lowerer {
                                     let next_val = self.lower_init_expr_bool_aware(next_e, elem_ir_ty, elem_is_bool);
                                     let offset = field_offset + arr_idx * elem_size;
                                     let elem_addr = self.emit_gep_offset(base, offset, elem_ir_ty);
-                                    self.emit(Instruction::Store { val: next_val, ptr: elem_addr, ty: elem_ir_ty , seg_override: AddressSpace::Default });
+                                    self.emit(Instruction::Store { val: next_val, ptr: elem_addr, ty: elem_ir_ty , seg_override: AddressSpace::Default , volatile: false });
                                 }
                                 arr_idx += 1;
                             }
@@ -837,7 +840,7 @@ impl Lowerer {
                         if let (Some(bit_offset), Some(bit_width)) = (field.bit_offset, field.bit_width) {
                             self.store_bitfield(field_addr, field_ty, bit_offset, bit_width, val);
                         } else {
-                            self.emit(Instruction::Store { val, ptr: field_addr, ty: field_ty , seg_override: AddressSpace::Default });
+                            self.emit(Instruction::Store { val, ptr: field_addr, ty: field_ty , seg_override: AddressSpace::Default , volatile: false });
                         }
                     }
                 }
@@ -920,7 +923,7 @@ impl Lowerer {
                     if let Initializer::Expr(e) = &first.init {
                         let field_ir_ty = IrType::from_ctype(field_ctype);
                         let val = self.lower_init_expr_bool_aware(e, field_ir_ty, *field_ctype == CType::Bool);
-                        self.emit(Instruction::Store { val, ptr: base, ty: field_ir_ty , seg_override: AddressSpace::Default });
+                        self.emit(Instruction::Store { val, ptr: base, ty: field_ir_ty , seg_override: AddressSpace::Default , volatile: false });
                     }
                 }
             }

@@ -746,14 +746,14 @@ impl Lowerer {
         };
         let alloca = self.fresh_value();
         self.emit(Instruction::Alloca { dest: alloca, ty: IrType::Ptr, size: complex_size, align: 0, volatile: false });
-        self.emit(Instruction::Store { val: real_val, ptr: alloca, ty: comp_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Store { val: real_val, ptr: alloca, ty: comp_ty, seg_override: AddressSpace::Default , volatile: false });
         let imag_ptr = self.fresh_value();
         self.emit(Instruction::GetElementPtr {
             dest: imag_ptr, base: alloca,
             offset: Operand::Const(IrConst::I64(comp_size as i64)),
             ty: IrType::I8,
         });
-        self.emit(Instruction::Store { val: imag_val, ptr: imag_ptr, ty: comp_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Store { val: imag_val, ptr: imag_ptr, ty: comp_ty, seg_override: AddressSpace::Default , volatile: false });
         Some(Operand::Value(alloca))
     }
 

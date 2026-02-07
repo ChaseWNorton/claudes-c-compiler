@@ -228,7 +228,11 @@ impl GvnState {
             // - Float, long double, i128 types: use different register paths in
             //   codegen that complicate Copy instruction handling
             // - AtomicLoad: has ordering semantics (falls through to _ => None)
-            Instruction::Load { dest, ptr, ty, seg_override } => {
+            Instruction::Load { dest, ptr, ty, seg_override, volatile } => {
+                // Volatile loads must not be CSE'd — each access must hit memory.
+                if *volatile {
+                    return None;
+                }
                 if *seg_override != AddressSpace::Default {
                     return None;
                 }
@@ -478,10 +482,12 @@ fn clobbers_memory(inst: &Instruction) -> bool {
 
 /// Check if a Store instruction is eligible for store-to-load forwarding.
 /// Same restrictions as Load CSE: no segment overrides, no float/long-double/i128 types.
+/// Volatile stores are never forwarded — each volatile access must hit memory.
 fn is_forwardable_store(inst: &Instruction) -> bool {
     match inst {
-        Instruction::Store { ty, seg_override, .. } => {
-            *seg_override == AddressSpace::Default
+        Instruction::Store { ty, seg_override, volatile, .. } => {
+            !volatile
+                && *seg_override == AddressSpace::Default
                 && !ty.is_float()
                 && !ty.is_long_double()
                 && !ty.is_128bit()
@@ -1296,12 +1302,14 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Load {
                     dest: Value(2),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(2)))),
@@ -1333,18 +1341,21 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Store {
                     val: Operand::Const(IrConst::I32(42)),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Load {
                     dest: Value(2),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(2)))),
@@ -1369,6 +1380,7 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Call {
                     func: "side_effect".to_string(),
@@ -1393,6 +1405,7 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(3)))),
@@ -1417,6 +1430,7 @@ mod tests {
                         ptr: Value(0),
                         ty: IrType::I32,
                         seg_override: AddressSpace::Default,
+                    volatile: false,
                     },
                 ],
                 terminator: Terminator::Branch(BlockId(1)),
@@ -1430,6 +1444,7 @@ mod tests {
                         ptr: Value(0),
                         ty: IrType::I32,
                         seg_override: AddressSpace::Default,
+                    volatile: false,
                     },
                 ],
                 terminator: Terminator::Return(Some(Operand::Value(Value(2)))),
@@ -1464,6 +1479,7 @@ mod tests {
                         ptr: Value(0),
                         ty: IrType::I32,
                         seg_override: AddressSpace::Default,
+                    volatile: false,
                     },
                 ],
                 terminator: Terminator::CondBranch {
@@ -1482,6 +1498,7 @@ mod tests {
                         ptr: Value(0),
                         ty: IrType::I32,
                         seg_override: AddressSpace::Default,
+                    volatile: false,
                     },
                 ],
                 terminator: Terminator::Branch(BlockId(3)),
@@ -1503,6 +1520,7 @@ mod tests {
                         ptr: Value(0),
                         ty: IrType::I32,
                         seg_override: AddressSpace::Default,
+                    volatile: false,
                     },
                 ],
                 terminator: Terminator::Return(Some(Operand::Value(Value(3)))),
@@ -1534,12 +1552,14 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Load {
                     dest: Value(1),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(1)))),
@@ -1570,12 +1590,14 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Load {
                     dest: Value(2),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(2)))),
@@ -1606,6 +1628,7 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Call {
                     func: "foo".to_string(),
@@ -1630,6 +1653,7 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(2)))),
@@ -1653,18 +1677,21 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Store {
                     val: Operand::Const(IrConst::I32(99)),
                     ptr: Value(1),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Load {
                     dest: Value(2),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(2)))),
@@ -1690,18 +1717,21 @@ mod tests {
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Store {
                     val: Operand::Const(IrConst::I32(99)),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::Load {
                     dest: Value(1),
                     ptr: Value(0),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(1)))),
@@ -1719,5 +1749,52 @@ mod tests {
             }
             other => panic!("Expected Copy of constant 99, got {:?}", other),
         }
+    }
+
+    /// Volatile loads must not be CSE'd by GVN — each access must hit memory.
+    #[test]
+    fn test_volatile_loads_not_cse() {
+        let mut func = IrFunction::new("test".to_string(), IrType::I32, vec![], false);
+        func.blocks.push(BasicBlock {
+            label: BlockId(0),
+            instructions: vec![
+                // Two volatile loads from the same pointer — must NOT be merged
+                Instruction::Load { dest: Value(0), ptr: Value(100), ty: IrType::I32, seg_override: AddressSpace::Default, volatile: true },
+                Instruction::Load { dest: Value(1), ptr: Value(100), ty: IrType::I32, seg_override: AddressSpace::Default, volatile: true },
+            ],
+            terminator: Terminator::Return(Some(Operand::Value(Value(1)))),
+            source_spans: Vec::new(),
+        });
+
+        let mut module = make_module(func);
+        let eliminated = module.for_each_function(run_gvn_function);
+        assert_eq!(eliminated, 0, "GVN must not eliminate volatile loads");
+        // Both loads must survive
+        assert_eq!(module.functions[0].blocks[0].instructions.len(), 2,
+            "Both volatile loads must remain");
+    }
+
+    /// Volatile stores must not participate in store-to-load forwarding.
+    #[test]
+    fn test_volatile_store_no_forwarding() {
+        let mut func = IrFunction::new("test".to_string(), IrType::I32, vec![], false);
+        func.blocks.push(BasicBlock {
+            label: BlockId(0),
+            instructions: vec![
+                // Volatile store followed by a load from the same address
+                Instruction::Store { val: Operand::Const(IrConst::I32(42)), ptr: Value(100), ty: IrType::I32, seg_override: AddressSpace::Default, volatile: true },
+                Instruction::Load { dest: Value(0), ptr: Value(100), ty: IrType::I32, seg_override: AddressSpace::Default, volatile: false },
+            ],
+            terminator: Terminator::Return(Some(Operand::Value(Value(0)))),
+            source_spans: Vec::new(),
+        });
+
+        let mut module = make_module(func);
+        let eliminated = module.for_each_function(run_gvn_function);
+        assert_eq!(eliminated, 0, "GVN must not forward from volatile stores");
+        // Load must survive (not replaced by Copy of constant 42)
+        assert!(matches!(module.functions[0].blocks[0].instructions[1],
+            Instruction::Load { .. }),
+            "Load must not be replaced by forwarded value from volatile store");
     }
 }

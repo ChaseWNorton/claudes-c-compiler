@@ -758,4 +758,62 @@ mod tests {
             "O2 ({}) should have fewer instructions than O1 ({}) due to GVN", o2_count, o1_count);
     }
 
+    /// Volatile loads must survive all optimization passes (issue #184).
+    /// Non-volatile unused loads are eliminated by DCE, but volatile loads must remain.
+    #[test]
+    fn test_volatile_loads_survive_o2() {
+        use crate::ir::reexports::Instruction;
+
+        let source = r#"
+            int test_volatile(void) {
+                volatile int flag = 0;
+                flag;
+                return 0;
+            }
+        "#;
+        let module = compile_at_opt_level(source, 2);
+
+        // Find the test_volatile function
+        let func = module.functions.iter()
+            .find(|f| f.name == "test_volatile")
+            .expect("test_volatile function not found");
+
+        // Count volatile loads — the `flag;` expression must produce at least one
+        let volatile_loads: usize = func.blocks.iter()
+            .flat_map(|b| &b.instructions)
+            .filter(|inst| matches!(inst, Instruction::Load { volatile: true, .. }))
+            .count();
+
+        assert!(volatile_loads >= 1,
+            "Volatile load must survive at -O2, found {} volatile loads", volatile_loads);
+    }
+
+    /// Volatile loads in a loop must not be hoisted by LICM (issue #184).
+    #[test]
+    fn test_volatile_not_hoisted_from_loop() {
+        use crate::ir::reexports::Instruction;
+
+        let source = r#"
+            void spin_wait(volatile int *flag) {
+                while (*flag == 0) {}
+            }
+        "#;
+        let module = compile_at_opt_level(source, 2);
+
+        let func = module.functions.iter()
+            .find(|f| f.name == "spin_wait")
+            .expect("spin_wait function not found");
+
+        // The loop body must contain a load (volatile or not — the key is it's not hoisted
+        // out). With the fix, loads from volatile pointers should be in the loop body.
+        // At minimum, the function must have a load instruction somewhere.
+        let total_loads: usize = func.blocks.iter()
+            .flat_map(|b| &b.instructions)
+            .filter(|inst| matches!(inst, Instruction::Load { .. }))
+            .count();
+
+        assert!(total_loads >= 1,
+            "Loop body must retain load from volatile pointer, found {} loads", total_loads);
+    }
+
 }

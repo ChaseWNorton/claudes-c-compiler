@@ -837,7 +837,7 @@ mod tests {
             label: BlockId(1),
             instructions: vec![
                 // Side-effecting store!
-                Instruction::Store { val: Operand::Const(IrConst::I32(42)), ptr: Value(10), ty: IrType::I32, seg_override: AddressSpace::Default },
+                Instruction::Store { val: Operand::Const(IrConst::I32(42)), ptr: Value(10), ty: IrType::I32, seg_override: AddressSpace::Default , volatile: false },
             ],
             terminator: Terminator::Branch(BlockId(3)),
             source_spans: Vec::new(),

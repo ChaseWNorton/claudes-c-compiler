@@ -539,7 +539,7 @@ impl Lowerer {
                     // load the packed data to match the other packed-data branch
                     if let Operand::Value(ptr) = then_val {
                         let loaded = s.fresh_value();
-                        s.emit(Instruction::Load { dest: loaded, ptr, ty: effective_ty, seg_override: AddressSpace::Default });
+                        s.emit(Instruction::Load { dest: loaded, ptr, ty: effective_ty, seg_override: AddressSpace::Default , volatile: false });
                         Operand::Value(loaded)
                     } else {
                         then_val
@@ -555,7 +555,7 @@ impl Lowerer {
                     // load the packed data to match the other packed-data branch
                     if let Operand::Value(ptr) = else_val {
                         let loaded = s.fresh_value();
-                        s.emit(Instruction::Load { dest: loaded, ptr, ty: effective_ty, seg_override: AddressSpace::Default });
+                        s.emit(Instruction::Load { dest: loaded, ptr, ty: effective_ty, seg_override: AddressSpace::Default , volatile: false });
                         Operand::Value(loaded)
                     } else {
                         else_val
@@ -655,17 +655,17 @@ impl Lowerer {
 
         self.start_block(then_label);
         let then_val = then_fn(self);
-        self.emit(Instruction::Store { val: then_val, ptr: result_alloca, ty: alloca_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Store { val: then_val, ptr: result_alloca, ty: alloca_ty, seg_override: AddressSpace::Default , volatile: false });
         self.terminate(Terminator::Branch(end_label));
 
         self.start_block(else_label);
         let else_val = else_fn(self);
-        self.emit(Instruction::Store { val: else_val, ptr: result_alloca, ty: alloca_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Store { val: else_val, ptr: result_alloca, ty: alloca_ty, seg_override: AddressSpace::Default , volatile: false });
         self.terminate(Terminator::Branch(end_label));
 
         self.start_block(end_label);
         let result = self.fresh_value();
-        self.emit(Instruction::Load { dest: result, ptr: result_alloca, ty: alloca_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Load { dest: result, ptr: result_alloca, ty: alloca_ty, seg_override: AddressSpace::Default , volatile: false });
         Operand::Value(result)
     }
 
@@ -741,7 +741,7 @@ impl Lowerer {
 
         let default_val = if is_and { 0 } else { 1 };
         self.emit(Instruction::Store { val: Operand::Const(make_int_const(default_val)), ptr: result_alloca, ty: int_ty,
-         seg_override: AddressSpace::Default });
+         seg_override: AddressSpace::Default , volatile: false });
 
         let (true_label, false_label) = if is_and {
             (rhs_label, end_label)
@@ -753,12 +753,12 @@ impl Lowerer {
         self.start_block(rhs_label);
         let rhs_val = self.lower_condition_expr(rhs);
         let rhs_bool = self.emit_cmp_val(IrCmpOp::Ne, rhs_val, Operand::Const(make_int_const(0)), int_ty);
-        self.emit(Instruction::Store { val: Operand::Value(rhs_bool), ptr: result_alloca, ty: int_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Store { val: Operand::Value(rhs_bool), ptr: result_alloca, ty: int_ty, seg_override: AddressSpace::Default , volatile: false });
         self.terminate(Terminator::Branch(end_label));
 
         self.start_block(end_label);
         let result = self.fresh_value();
-        self.emit(Instruction::Load { dest: result, ptr: result_alloca, ty: int_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Load { dest: result, ptr: result_alloca, ty: int_ty, seg_override: AddressSpace::Default , volatile: false });
         Operand::Value(result)
     }
 
@@ -809,7 +809,8 @@ impl Lowerer {
         }
 
         if let Some(lv) = self.lower_lvalue(inner) {
-            let loaded = self.load_lvalue_typed(&lv, ty);
+            let is_vol = self.is_expr_volatile(inner);
+            let loaded = self.load_lvalue_typed(&lv, ty, is_vol);
             let loaded_val = self.operand_to_value(loaded);
             let (step, binop_ty) = self.inc_dec_step_and_type(ty, inner);
             let ir_op = if is_inc { IrBinOp::Add } else { IrBinOp::Sub };
@@ -825,7 +826,7 @@ impl Lowerer {
             } else {
                 Operand::Value(result)
             };
-            self.store_lvalue_typed(&lv, store_op, ty);
+            self.store_lvalue_typed(&lv, store_op, ty, is_vol);
             return if return_new { store_op } else { loaded };
         }
         self.lower_expr(inner)

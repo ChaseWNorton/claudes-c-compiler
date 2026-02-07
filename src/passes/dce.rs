@@ -293,6 +293,9 @@ fn has_side_effects(inst: &Instruction) -> bool {
         // StackSave is kept alive by its use in StackRestore (normal DCE liveness).
         Instruction::StackRestore { .. }
     ) || matches!(inst, Instruction::Intrinsic { op, dest_ptr, .. } if !op.is_pure() || dest_ptr.is_some())
+    // Volatile loads are side-effecting: the C standard requires that every
+    // volatile access actually hits memory, even if the result is unused.
+    || matches!(inst, Instruction::Load { volatile: true, .. })
 }
 
 #[cfg(test)]
@@ -316,8 +319,8 @@ mod tests {
                     rhs: Operand::Const(IrConst::I32(4)),
                     ty: IrType::I32,
                 },
-                Instruction::Store { val: Operand::Const(IrConst::I32(42)), ptr: Value(0), ty: IrType::I32, seg_override: AddressSpace::Default },
-                Instruction::Load { dest: Value(2), ptr: Value(0), ty: IrType::I32, seg_override: AddressSpace::Default },
+                Instruction::Store { val: Operand::Const(IrConst::I32(42)), ptr: Value(0), ty: IrType::I32, seg_override: AddressSpace::Default , volatile: false },
+                Instruction::Load { dest: Value(2), ptr: Value(0), ty: IrType::I32, seg_override: AddressSpace::Default , volatile: false },
             ],
             terminator: Terminator::Return(Some(Operand::Value(Value(2)))),
             source_spans: Vec::new(),
@@ -470,5 +473,37 @@ mod tests {
         // Loop header should have no instructions left
         assert!(func.blocks[1].instructions.is_empty(),
                 "Phi should be removed from loop header");
+    }
+
+    /// Volatile loads must survive DCE even when the result is unused.
+    /// This is the core fix for issue #184.
+    #[test]
+    fn test_volatile_load_not_eliminated() {
+        let mut func = IrFunction::new("test_volatile_load".to_string(), IrType::I32, vec![], false);
+        func.blocks.push(BasicBlock {
+            label: BlockId(0),
+            instructions: vec![
+                // alloca for volatile variable
+                Instruction::Alloca { dest: Value(0), ty: IrType::I32, size: 4, align: 4, volatile: true },
+                // Non-volatile load (unused) — should be eliminated
+                Instruction::Load { dest: Value(1), ptr: Value(0), ty: IrType::I32, seg_override: AddressSpace::Default, volatile: false },
+                // Volatile load (unused) — must NOT be eliminated
+                Instruction::Load { dest: Value(2), ptr: Value(0), ty: IrType::I32, seg_override: AddressSpace::Default, volatile: true },
+            ],
+            terminator: Terminator::Return(Some(Operand::Const(IrConst::I32(0)))),
+            source_spans: Vec::new(),
+        });
+
+        let removed = eliminate_dead_code(&mut func);
+        // Only the non-volatile load should be removed
+        assert_eq!(removed, 1, "Only non-volatile unused load should be eliminated");
+        // The volatile load must survive
+        assert!(func.blocks[0].instructions.iter().any(|inst| {
+            matches!(inst, Instruction::Load { volatile: true, .. })
+        }), "Volatile load must survive DCE");
+        // The non-volatile load must be gone
+        assert!(!func.blocks[0].instructions.iter().any(|inst| {
+            matches!(inst, Instruction::Load { volatile: false, .. })
+        }), "Non-volatile unused load should be eliminated");
     }
 }

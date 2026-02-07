@@ -65,6 +65,7 @@ impl Lowerer {
             let mut ginfo = GlobalInfo::from_analysis(&da);
             ginfo.var.address_space = decl.address_space;
             ginfo.var.is_atomic = decl.is_atomic();
+            ginfo.var.is_volatile = decl.is_volatile();
             self.globals.insert(declarator.name.clone(), ginfo);
 
             let init = self.lower_declarator_init(decl, declarator, &da);
@@ -186,6 +187,7 @@ impl Lowerer {
         ginfo.asm_register = Some(reg_name.clone());
         ginfo.var.address_space = decl.address_space;
         ginfo.var.is_atomic = decl.is_atomic();
+        ginfo.var.is_volatile = decl.is_volatile();
         self.globals.insert(declarator.name.clone(), ginfo);
         true
     }
@@ -204,6 +206,7 @@ impl Lowerer {
             let mut ginfo = GlobalInfo::from_analysis(&da);
             ginfo.var.address_space = decl.address_space;
             ginfo.var.is_atomic = decl.is_atomic();
+            ginfo.var.is_volatile = decl.is_volatile();
             self.globals.insert(declarator.name.clone(), ginfo);
         }
         // For extern TLS variables, emit an IrGlobal so codegen uses TLS access patterns.

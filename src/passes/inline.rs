@@ -1314,6 +1314,7 @@ fn inline_call_site(
                 ptr: param_alloca_info[i].0,
                 ty: store_ty,
                 seg_override: AddressSpace::Default,
+            volatile: false,
             });
             if has_spans {
                 entry_block.source_spans.insert(insert_pos, crate::common::source::Span::dummy());
@@ -1521,17 +1522,19 @@ fn remap_instruction(inst: &Instruction, vo: u32, bo: u32) -> Instruction {
             size: remap_operand(size, vo),
             align: *align,
         },
-        Instruction::Store { val, ptr, ty, seg_override } => Instruction::Store {
+        Instruction::Store { val, ptr, ty, seg_override, volatile } => Instruction::Store {
             val: remap_operand(val, vo),
             ptr: remap_value(*ptr, vo),
             ty: *ty,
             seg_override: *seg_override,
+            volatile: *volatile,
         },
-        Instruction::Load { dest, ptr, ty, seg_override } => Instruction::Load {
+        Instruction::Load { dest, ptr, ty, seg_override, volatile } => Instruction::Load {
             dest: remap_value(*dest, vo),
             ptr: remap_value(*ptr, vo),
             ty: *ty,
             seg_override: *seg_override,
+            volatile: *volatile,
         },
         Instruction::BinOp { dest, op, lhs, rhs, ty } => Instruction::BinOp {
             dest: remap_value(*dest, vo),

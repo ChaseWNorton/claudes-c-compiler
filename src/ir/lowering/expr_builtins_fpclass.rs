@@ -84,10 +84,10 @@ impl Lowerer {
         self.emit(Instruction::Alloca { dest: tmp_alloca, size, ty: store_ty, align: 0, volatile: false });
 
         let val_v = self.operand_to_value(val);
-        self.emit(Instruction::Store { val: Operand::Value(val_v), ptr: tmp_alloca, ty: store_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Store { val: Operand::Value(val_v), ptr: tmp_alloca, ty: store_ty, seg_override: AddressSpace::Default , volatile: false });
 
         let result = self.fresh_value();
-        self.emit(Instruction::Load { dest: result, ptr: tmp_alloca, ty: int_ty, seg_override: AddressSpace::Default });
+        self.emit(Instruction::Load { dest: result, ptr: tmp_alloca, ty: int_ty, seg_override: AddressSpace::Default , volatile: false });
 
         (Operand::Value(result), int_ty)
     }

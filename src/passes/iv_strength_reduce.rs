@@ -818,6 +818,7 @@ mod tests {
                     ptr: Value(7),
                     ty: IrType::I32,
                     seg_override: AddressSpace::Default,
+                volatile: false,
                 },
                 Instruction::BinOp {
                     dest: Value(9),

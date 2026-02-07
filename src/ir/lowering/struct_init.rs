@@ -931,7 +931,7 @@ impl Lowerer {
         if let (Some(bit_offset), Some(bit_width)) = (field.bit_offset, field.bit_width) {
             self.store_bitfield(addr, field_ty, bit_offset, bit_width, val);
         } else {
-            self.emit(Instruction::Store { val, ptr: addr, ty: field_ty , seg_override: AddressSpace::Default });
+            self.emit(Instruction::Store { val, ptr: addr, ty: field_ty , seg_override: AddressSpace::Default , volatile: false });
         }
     }
 }

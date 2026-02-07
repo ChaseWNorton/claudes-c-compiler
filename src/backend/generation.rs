@@ -232,7 +232,7 @@ fn build_foldable_global_addr_set(
                         has_non_foldable_use.insert(ptr.0);
                     }
                 }
-                Instruction::Store { val, ptr, ty, seg_override } => {
+                Instruction::Store { val, ptr, ty, seg_override, .. } => {
                     let is_ptr_foldable = global_addr_ids.contains(&ptr.0)
                         && global_addr_map.contains_key(&ptr.0)
                         && !is_wide_int_type(*ty)
@@ -1055,7 +1055,7 @@ fn generate_instruction(cg: &mut dyn ArchCodegen, inst: &Instruction, gep_fold_m
         // which sets the reg cache correctly. The accumulator holds dest's
         // value after execution, so we do NOT invalidate.
 
-        Instruction::Load { dest, ptr, ty, seg_override } => {
+        Instruction::Load { dest, ptr, ty, seg_override, .. } => {
             generate_load(cg, dest, ptr, *ty, *seg_override, gep_fold_map, global_addr_map);
         }
         Instruction::BinOp { dest, op, lhs, rhs, ty } => {
@@ -1114,7 +1114,7 @@ fn generate_instruction(cg: &mut dyn ArchCodegen, inst: &Instruction, gep_fold_m
         // These clobber the accumulator unpredictably or don't produce a
         // simple acc → dest result. Each arm invalidates the reg cache.
 
-        Instruction::Store { val, ptr, ty, seg_override } => {
+        Instruction::Store { val, ptr, ty, seg_override, .. } => {
             generate_store(cg, val, ptr, *ty, *seg_override, gep_fold_map, global_addr_map);
             cg.state().reg_cache.invalidate_all();
         }

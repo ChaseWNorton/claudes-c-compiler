@@ -746,8 +746,9 @@ fn hoist_loop_invariants(
                         }
                     }
                     all_invariant
-                } else if let Instruction::Load { ptr, .. } = inst {
-                    is_load_hoistable(ptr, alloca_info, &loop_mem,
+                } else if let Instruction::Load { ptr, volatile, .. } = inst {
+                    // Volatile loads must not be hoisted out of loops.
+                    !volatile && is_load_hoistable(ptr, alloca_info, &loop_mem,
                                              &loop_defined, &invariant,
                                              &global_addr_values)
                 } else {
@@ -1099,7 +1100,7 @@ mod tests {
                     volatile: false,
                 },
                 Instruction::Store { val: Operand::Const(IrConst::I32(42)), ptr: Value(0), ty: IrType::I32,
-                seg_override: AddressSpace::Default },
+                seg_override: AddressSpace::Default , volatile: false },
                 Instruction::Copy {
                     dest: Value(1),
                     src: Operand::Const(IrConst::I32(0)),
@@ -1122,7 +1123,7 @@ mod tests {
                     ],
                 },
                 Instruction::Load { dest: Value(3), ptr: Value(0), ty: IrType::I32,
-                seg_override: AddressSpace::Default },
+                seg_override: AddressSpace::Default , volatile: false },
                 Instruction::Cmp {
                     dest: Value(4),
                     op: IrCmpOp::Slt,
@@ -1201,7 +1202,7 @@ mod tests {
                     volatile: false,
                 },
                 Instruction::Store { val: Operand::Const(IrConst::I32(0)), ptr: Value(0), ty: IrType::I32,
-                seg_override: AddressSpace::Default },
+                seg_override: AddressSpace::Default , volatile: false },
             ],
             terminator: Terminator::Branch(BlockId(1)),
             source_spans: Vec::new(),
@@ -1212,7 +1213,7 @@ mod tests {
             label: BlockId(1),
             instructions: vec![
                 Instruction::Load { dest: Value(1), ptr: Value(0), ty: IrType::I32,
-                seg_override: AddressSpace::Default },
+                seg_override: AddressSpace::Default , volatile: false },
                 Instruction::Cmp {
                     dest: Value(2),
                     op: IrCmpOp::Slt,
@@ -1241,7 +1242,7 @@ mod tests {
                     ty: IrType::I32,
                 },
                 Instruction::Store { val: Operand::Value(Value(3)), ptr: Value(0), ty: IrType::I32,
-                seg_override: AddressSpace::Default },
+                seg_override: AddressSpace::Default , volatile: false },
             ],
             terminator: Terminator::Branch(BlockId(1)),
             source_spans: Vec::new(),
@@ -1333,7 +1334,7 @@ mod tests {
             label: BlockId(2),
             instructions: vec![
                 Instruction::Load { dest: Value(1), ptr: Value(0), ty: IrType::I32,
-                seg_override: AddressSpace::Default },
+                seg_override: AddressSpace::Default , volatile: false },
                 Instruction::Cmp {
                     dest: Value(2),
                     op: IrCmpOp::Eq,

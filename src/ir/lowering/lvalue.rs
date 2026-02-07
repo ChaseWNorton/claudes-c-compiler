@@ -177,19 +177,19 @@ impl Lowerer {
     }
 
     /// Load the value from an lvalue with a specific type.
-    pub(super) fn load_lvalue_typed(&mut self, lv: &LValue, ty: IrType) -> Operand {
+    pub(super) fn load_lvalue_typed(&mut self, lv: &LValue, ty: IrType, volatile: bool) -> Operand {
         let addr = self.lvalue_addr(lv);
         let seg_override = self.lvalue_addr_space(lv);
         let dest = self.fresh_value();
-        self.emit(Instruction::Load { dest, ptr: addr, ty , seg_override });
+        self.emit(Instruction::Load { dest, ptr: addr, ty, seg_override, volatile });
         Operand::Value(dest)
     }
 
     /// Store a value to an lvalue with a specific type.
-    pub(super) fn store_lvalue_typed(&mut self, lv: &LValue, val: Operand, ty: IrType) {
+    pub(super) fn store_lvalue_typed(&mut self, lv: &LValue, val: Operand, ty: IrType, volatile: bool) {
         let addr = self.lvalue_addr(lv);
         let seg_override = self.lvalue_addr_space(lv);
-        self.emit(Instruction::Store { val, ptr: addr, ty , seg_override });
+        self.emit(Instruction::Store { val, ptr: addr, ty, seg_override, volatile });
     }
 
     /// Store a value to an lvalue atomically with SeqCst ordering.
@@ -206,6 +206,19 @@ impl Lowerer {
             }
             if let Some(ginfo) = self.globals.get(name) {
                 return ginfo.var.is_atomic;
+            }
+        }
+        false
+    }
+
+    /// Check whether an expression refers to a `volatile`-qualified variable.
+    pub(super) fn is_expr_volatile(&self, expr: &Expr) -> bool {
+        if let Expr::Identifier(name, _) = expr {
+            if let Some(info) = self.func_state.as_ref().and_then(|fs| fs.locals.get(name)) {
+                return info.var.is_volatile;
+            }
+            if let Some(ginfo) = self.globals.get(name) {
+                return ginfo.var.is_volatile;
             }
         }
         false
@@ -309,7 +322,7 @@ impl Lowerer {
                             return Operand::Value(addr);
                         } else {
                             let loaded = self.fresh_value();
-                            self.emit(Instruction::Load { dest: loaded, ptr: addr, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+                            self.emit(Instruction::Load { dest: loaded, ptr: addr, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
                             return Operand::Value(loaded);
                         }
                     }
@@ -318,7 +331,7 @@ impl Lowerer {
                         return Operand::Value(info.alloca);
                     } else {
                         let loaded = self.fresh_value();
-                        self.emit(Instruction::Load { dest: loaded, ptr: info.alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+                        self.emit(Instruction::Load { dest: loaded, ptr: info.alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
                         return Operand::Value(loaded);
                     }
                 }
@@ -332,7 +345,7 @@ impl Lowerer {
                             return Operand::Value(addr);
                         } else {
                             let loaded = self.fresh_value();
-                            self.emit(Instruction::Load { dest: loaded, ptr: addr, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+                            self.emit(Instruction::Load { dest: loaded, ptr: addr, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
                             return Operand::Value(loaded);
                         }
                     }
@@ -345,7 +358,7 @@ impl Lowerer {
                         return Operand::Value(addr);
                     } else {
                         let loaded = self.fresh_value();
-                        self.emit(Instruction::Load { dest: loaded, ptr: addr, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+                        self.emit(Instruction::Load { dest: loaded, ptr: addr, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
                         return Operand::Value(loaded);
                     }
                 }

@@ -59,6 +59,10 @@ pub(super) struct VarInfo {
     /// Whether this variable was declared with `_Atomic` qualifier.
     /// When true, loads/stores emit AtomicLoad/AtomicStore with SeqCst ordering.
     pub is_atomic: bool,
+    /// Whether this variable was declared with `volatile` qualifier.
+    /// When true, loads/stores must not be eliminated, reordered, or coalesced
+    /// by optimization passes (C11 6.7.3).
+    pub is_volatile: bool,
 }
 
 /// Information about a local variable stored in an alloca.
@@ -416,6 +420,7 @@ impl VarInfo {
             address_space: AddressSpace::Default,
             explicit_alignment: None,
             is_atomic: false,
+            is_volatile: false,
         }
     }
 }

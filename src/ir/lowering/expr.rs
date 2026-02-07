@@ -243,7 +243,7 @@ impl Lowerer {
         });
         // Load the result from the alloca
         let result = self.fresh_value();
-        self.emit(Instruction::Load { dest: result, ptr: tmp_alloca, ty , seg_override: AddressSpace::Default });
+        self.emit(Instruction::Load { dest: result, ptr: tmp_alloca, ty , seg_override: AddressSpace::Default , volatile: false });
         Operand::Value(result)
     }
 
@@ -267,7 +267,7 @@ impl Lowerer {
         if ginfo.is_atomic {
             self.emit(Instruction::AtomicLoad { dest, ptr: Operand::Value(addr), ty: ginfo.ty, ordering: AtomicOrdering::SeqCst });
         } else {
-            self.emit(Instruction::Load { dest, ptr: addr, ty: ginfo.ty, seg_override: ginfo.address_space });
+            self.emit(Instruction::Load { dest, ptr: addr, ty: ginfo.ty, seg_override: ginfo.address_space , volatile: ginfo.is_volatile });
         }
         Operand::Value(dest)
     }
@@ -291,6 +291,7 @@ impl Lowerer {
             let is_complex = info.c_type.as_ref().is_some_and(|ct| ct.is_complex());
             let is_vector = info.c_type.as_ref().is_some_and(|ct| ct.is_vector());
             let is_atomic = info.var.is_atomic;
+            let is_volatile = info.var.is_volatile;
             let static_global_name = info.static_global_name.clone();
             let asm_register = info.asm_register.clone();
             let asm_register_has_init = info.asm_register_has_init;
@@ -322,7 +323,7 @@ impl Lowerer {
                 if is_atomic {
                     self.emit(Instruction::AtomicLoad { dest, ptr: Operand::Value(addr), ty, ordering: AtomicOrdering::SeqCst });
                 } else {
-                    self.emit(Instruction::Load { dest, ptr: addr, ty , seg_override: AddressSpace::Default });
+                    self.emit(Instruction::Load { dest, ptr: addr, ty , seg_override: AddressSpace::Default , volatile: is_volatile });
                 }
                 return Operand::Value(dest);
             }
@@ -336,7 +337,7 @@ impl Lowerer {
             if is_atomic {
                 self.emit(Instruction::AtomicLoad { dest, ptr: Operand::Value(alloca), ty, ordering: AtomicOrdering::SeqCst });
             } else {
-                self.emit(Instruction::Load { dest, ptr: alloca, ty , seg_override: AddressSpace::Default });
+                self.emit(Instruction::Load { dest, ptr: alloca, ty , seg_override: AddressSpace::Default , volatile: is_volatile });
             }
             return Operand::Value(dest);
         }

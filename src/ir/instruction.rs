@@ -117,11 +117,13 @@ pub enum Instruction {
 
     /// Store to memory: store val, ptr (type indicates size of store)
     /// seg_override: segment register override for x86 (%gs:/%fs:) from named address spaces.
-    Store { val: Operand, ptr: Value, ty: IrType, seg_override: AddressSpace },
+    /// `volatile`: when true, this store must not be eliminated, reordered, or coalesced.
+    Store { val: Operand, ptr: Value, ty: IrType, seg_override: AddressSpace, volatile: bool },
 
     /// Load from memory: %dest = load ptr
     /// seg_override: segment register override for x86 (%gs:/%fs:) from named address spaces.
-    Load { dest: Value, ptr: Value, ty: IrType, seg_override: AddressSpace },
+    /// `volatile`: when true, this load must not be eliminated, reordered, or coalesced.
+    Load { dest: Value, ptr: Value, ty: IrType, seg_override: AddressSpace, volatile: bool },
 
     /// Binary operation: %dest = op lhs, rhs
     BinOp { dest: Value, op: IrBinOp, lhs: Operand, rhs: Operand, ty: IrType },

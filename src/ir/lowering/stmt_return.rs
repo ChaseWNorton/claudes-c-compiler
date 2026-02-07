@@ -96,7 +96,7 @@ impl Lowerer {
         if struct_size > sret_threshold {
             let src_addr = self.get_struct_base_addr(e);
             let sret_ptr = self.fresh_value();
-            self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+            self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
             self.emit(Instruction::Memcpy { dest: sret_ptr, src: src_addr, size: struct_size });
             return Some(Operand::Value(sret_ptr));
         }
@@ -119,7 +119,7 @@ impl Lowerer {
             };
             let complex_size = ret_ct.as_ref().unwrap_or(&expr_ct).size();
             let sret_ptr = self.fresh_value();
-            self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+            self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
             self.emit(Instruction::Memcpy { dest: sret_ptr, src: src_addr, size: complex_size });
             return Some(Operand::Value(sret_ptr));
         }
@@ -134,7 +134,7 @@ impl Lowerer {
                 let src_addr = self.operand_to_value(complex_val);
                 let complex_size = rct_clone.size();
                 let sret_ptr = self.fresh_value();
-                self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+                self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
                 self.emit(Instruction::Memcpy { dest: sret_ptr, src: src_addr, size: complex_size });
                 return Some(Operand::Value(sret_ptr));
             }
@@ -179,12 +179,12 @@ impl Lowerer {
         let addr = self.get_struct_base_addr(e);
         // Load low 8 bytes
         let lo = self.fresh_value();
-        self.emit(Instruction::Load { dest: lo, ptr: addr, ty: IrType::I64 , seg_override: AddressSpace::Default });
+        self.emit(Instruction::Load { dest: lo, ptr: addr, ty: IrType::I64 , seg_override: AddressSpace::Default , volatile: false });
         // Load high bytes
         let hi_ptr = self.fresh_value();
         self.emit(Instruction::GetElementPtr { dest: hi_ptr, base: addr, offset: Operand::Const(IrConst::I64(8)), ty: IrType::I64 });
         let hi = self.fresh_value();
-        self.emit(Instruction::Load { dest: hi, ptr: hi_ptr, ty: IrType::I64 , seg_override: AddressSpace::Default });
+        self.emit(Instruction::Load { dest: hi, ptr: hi_ptr, ty: IrType::I64 , seg_override: AddressSpace::Default , volatile: false });
         // Pack into I128: (hi << 64) | lo (zero-extend both halves)
         let hi_wide = self.fresh_value();
         self.emit(Instruction::Cast { dest: hi_wide, src: Operand::Value(hi), from_ty: IrType::U64, to_ty: IrType::I128 });
@@ -221,7 +221,7 @@ impl Lowerer {
         }
         let addr = self.get_struct_base_addr(e);
         let dest = self.fresh_value();
-        self.emit(Instruction::Load { dest, ptr: addr, ty: IrType::I64 , seg_override: AddressSpace::Default });
+        self.emit(Instruction::Load { dest, ptr: addr, ty: IrType::I64 , seg_override: AddressSpace::Default , volatile: false });
         Some(Operand::Value(dest))
     }
 
@@ -266,12 +266,12 @@ impl Lowerer {
                 if self.uses_packed_complex_float() {
                     // x86-64: load packed 8 bytes as F64 for one XMM register return
                     let packed = self.fresh_value();
-                    self.emit(Instruction::Load { dest: packed, ptr: src_ptr, ty: IrType::F64 , seg_override: AddressSpace::Default });
+                    self.emit(Instruction::Load { dest: packed, ptr: src_ptr, ty: IrType::F64 , seg_override: AddressSpace::Default , volatile: false });
                     return Some(Operand::Value(packed));
                 } else if !self.decomposes_complex_float() {
                     // i686: load packed 8 bytes as I64 for eax:edx register return
                     let packed = self.fresh_value();
-                    self.emit(Instruction::Load { dest: packed, ptr: src_ptr, ty: IrType::I64 , seg_override: AddressSpace::Default });
+                    self.emit(Instruction::Load { dest: packed, ptr: src_ptr, ty: IrType::I64 , seg_override: AddressSpace::Default , volatile: false });
                     return Some(Operand::Value(packed));
                 } else {
                     // ARM/RISC-V: return real in first FP reg (F32), imag in second FP reg (F32)
@@ -348,7 +348,7 @@ impl Lowerer {
             let src_addr = self.operand_to_value(complex_val);
             let complex_size = rct_clone.size();
             let sret_ptr = self.fresh_value();
-            self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default });
+            self.emit(Instruction::Load { dest: sret_ptr, ptr: sret_alloca, ty: IrType::Ptr , seg_override: AddressSpace::Default , volatile: false });
             self.emit(Instruction::Memcpy { dest: sret_ptr, src: src_addr, size: complex_size });
             return Some(Operand::Value(sret_ptr));
         }
@@ -359,12 +359,12 @@ impl Lowerer {
             if self.uses_packed_complex_float() {
                 // x86-64: pack into F64 for one XMM register return
                 let packed = self.fresh_value();
-                self.emit(Instruction::Load { dest: packed, ptr, ty: IrType::F64 , seg_override: AddressSpace::Default });
+                self.emit(Instruction::Load { dest: packed, ptr, ty: IrType::F64 , seg_override: AddressSpace::Default , volatile: false });
                 return Some(Operand::Value(packed));
             } else if !self.decomposes_complex_float() {
                 // i686: pack into I64 for eax:edx register return
                 let packed = self.fresh_value();
-                self.emit(Instruction::Load { dest: packed, ptr, ty: IrType::I64 , seg_override: AddressSpace::Default });
+                self.emit(Instruction::Load { dest: packed, ptr, ty: IrType::I64 , seg_override: AddressSpace::Default , volatile: false });
                 return Some(Operand::Value(packed));
             } else {
                 // ARM/RISC-V: return real in first FP reg, imag in second
