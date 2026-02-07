@@ -1192,6 +1192,15 @@ const char *s = MSG;
         let output = preprocess("const char *fmt = PRId64;\n");
         assert!(output.contains("\"ld\""), "PRId64 on x86-64 should be \"ld\", got: {}", output.trim());
     }
+
+    #[test]
+    fn macro_args_block_comment_not_parsed_as_comma() {
+        // Issue #161: block comments inside macro args should not split arguments
+        let output = preprocess("#define ID(x) x\nint a = ID(1 /* , */ + 2);\n");
+        // The comma inside the block comment should not split the argument
+        assert!(!output.contains(","), "block comment in macro arg should not split, got: {}", output.trim());
+        assert!(output.contains("+ 2"), "should preserve the expression after comment, got: {}", output.trim());
+    }
 }
 
 

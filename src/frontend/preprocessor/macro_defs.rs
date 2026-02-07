@@ -694,6 +694,22 @@ impl MacroTable {
                     // text and will be included in the byte span)
                     i = skip_literal_bytes(bytes, i, bytes[i]);
                 }
+                b'/' if i + 1 < len && bytes[i + 1] == b'/' => {
+                    // Line comment: skip to end of line
+                    while i < len && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
+                    // Block comment: skip to */
+                    i += 2;
+                    while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                        i += 1;
+                    }
+                    if i + 1 < len {
+                        i += 2; // skip */
+                    }
+                }
                 _ => {
                     i += 1;
                 }
