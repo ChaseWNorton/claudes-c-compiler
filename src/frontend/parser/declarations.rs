@@ -7,6 +7,7 @@
 // K&R-style function parameters are also handled here, where parameter types
 // are declared separately after the parameter name list.
 
+use crate::common::error::DiagnosticEngine;
 use crate::common::fx_hash::{FxHashMap, FxHashSet};
 use crate::common::source::Span;
 use crate::common::types::AddressSpace;
@@ -864,7 +865,7 @@ impl Parser {
             } else {
                 Some(&self.enum_constants)
             };
-            let items = Self::expand_range_designators(items, enums);
+            let items = Self::expand_range_designators(items, enums, &mut self.diagnostics);
             Initializer::List(items)
         } else {
             Initializer::Expr(self.parse_assignment_expr())
@@ -877,6 +878,7 @@ impl Parser {
     fn expand_range_designators(
         items: Vec<InitializerItem>,
         enum_consts: Option<&FxHashMap<String, i64>>,
+        diagnostics: &mut DiagnosticEngine,
     ) -> Vec<InitializerItem> {
         let mut result = Vec::with_capacity(items.len());
         for item in items {
@@ -886,10 +888,18 @@ impl Parser {
                     let lo = Self::eval_const_int_expr_with_enums(lo_expr, enum_consts, None);
                     let hi = Self::eval_const_int_expr_with_enums(hi_expr, enum_consts, None);
                     if let (Some(lo_val), Some(hi_val)) = (lo, hi) {
+                        let full_count = hi_val.saturating_sub(lo_val).saturating_add(1);
                         // Cap expansion to prevent O(n) clone for huge ranges.
-                        // Ranges beyond 10000 are almost certainly bugs or adversarial
-                        // input — GCC also limits expansion in practice.
-                        let count = (hi_val.saturating_sub(lo_val).saturating_add(1)).min(10_000);
+                        let count = full_count.min(10_000);
+                        if full_count > 10_000 {
+                            diagnostics.warning(
+                                format!(
+                                    "range designator [{} ... {}] truncated to 10000 elements ({} requested)",
+                                    lo_val, hi_val, full_count
+                                ),
+                                lo_expr.span(),
+                            );
+                        }
                         for idx in lo_val..lo_val.saturating_add(count) {
                             let mut new_desigs = item.designators.clone();
                             new_desigs[range_pos] = Designator::Index(
@@ -1435,5 +1445,34 @@ mod tests {
     #[test]
     fn bare_function_no_storage_class() {
         assert_eq!(parse_error_count("int main(void) { return 0; }"), 0);
+    }
+
+    // ---- range designator truncation warning ----
+
+    /// Helper: parse the given C source and return the parser warning count.
+    fn parse_warning_count(src: &str) -> usize {
+        let tokens = Lexer::new(src, 0).tokenize();
+        let mut parser = Parser::new(tokens);
+        let _ = parser.parse();
+        let diag = parser.take_diagnostics();
+        diag.warning_count()
+    }
+
+    #[test]
+    fn range_designator_small_no_warning() {
+        let w = parse_warning_count("int a[100] = {[0 ... 99] = 1};");
+        assert_eq!(w, 0, "small range should not warn");
+    }
+
+    #[test]
+    fn range_designator_at_cap_no_warning() {
+        let w = parse_warning_count("int a[10000] = {[0 ... 9999] = 1};");
+        assert_eq!(w, 0, "range at exactly 10000 should not warn");
+    }
+
+    #[test]
+    fn range_designator_exceeds_cap_warns() {
+        let w = parse_warning_count("int a[20000] = {[0 ... 19999] = 1};");
+        assert!(w > 0, "range exceeding 10000 should warn about truncation");
     }
 }
