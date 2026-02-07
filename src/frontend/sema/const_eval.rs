@@ -487,7 +487,10 @@ impl<'a> SemaConstEval<'a> {
         // Strip qualifiers (CType doesn't carry them) and compare
         match (t1, t2) {
             (CType::Pointer(a, _), CType::Pointer(b, _)) => self.ctypes_compatible(a, b),
-            (CType::Array(a, _), CType::Array(b, _)) => self.ctypes_compatible(a, b),
+            (CType::Array(a, sz_a), CType::Array(b, sz_b)) => {
+                // Array sizes must match: int[5] and int[10] are NOT compatible (GCC behavior)
+                sz_a == sz_b && self.ctypes_compatible(a, b)
+            }
             _ => t1 == t2,
         }
     }

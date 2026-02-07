@@ -1685,4 +1685,38 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn types_compatible_different_array_sizes() {
+        // Issue #142: __builtin_types_compatible_p(int[5], int[10]) should return 0.
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        let module = compile_to_ir(r#"
+            int x = __builtin_types_compatible_p(typeof(int[5]), typeof(int[10]));
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "x").expect("global 'x'");
+        match &g.init {
+            GlobalInit::Scalar(IrConst::I32(v)) => {
+                assert_eq!(*v, 0, "int[5] vs int[10] should be incompatible, got {}", v);
+            }
+            other => panic!("expected Scalar(I32) for global int, got {:?}", std::mem::discriminant(other)),
+        }
+    }
+
+    #[test]
+    fn types_compatible_same_array_sizes() {
+        // __builtin_types_compatible_p(int[5], int[5]) should return 1.
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        let module = compile_to_ir(r#"
+            int y = __builtin_types_compatible_p(typeof(int[5]), typeof(int[5]));
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "y").expect("global 'y'");
+        match &g.init {
+            GlobalInit::Scalar(IrConst::I32(v)) => {
+                assert_eq!(*v, 1, "int[5] vs int[5] should be compatible, got {}", v);
+            }
+            other => panic!("expected Scalar(I32) for global int, got {:?}", std::mem::discriminant(other)),
+        }
+    }
 }
