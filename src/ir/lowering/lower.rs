@@ -1391,7 +1391,40 @@ impl Lowerer {
     }
 
     /// Zero-initialize a region of memory within an alloca at the given byte offset.
+    ///
+    /// For regions >= 64 bytes, emits a call to `memset` to avoid O(n) IR instructions.
+    /// For smaller regions, emits per-element stores (up to 8 GEP+Store pairs).
     pub(super) fn zero_init_region(&mut self, alloca: Value, base_offset: usize, region_size: usize) {
+        // Threshold: emit memset call for regions >= 64 bytes to avoid
+        // generating millions of IR instructions for large arrays.
+        if region_size >= 64 {
+            let ptr = self.emit_gep_offset(alloca, base_offset, IrType::Ptr);
+            let size_ty = crate::common::types::target_int_ir_type();
+            let dest = self.fresh_value();
+            self.emit(Instruction::Call {
+                func: "memset".to_string(),
+                info: CallInfo {
+                    dest: Some(dest),
+                    args: vec![
+                        Operand::Value(ptr),
+                        Operand::Const(IrConst::I32(0)),
+                        Operand::Const(IrConst::ptr_int(region_size as i64)),
+                    ],
+                    arg_types: vec![IrType::Ptr, IrType::I32, size_ty],
+                    return_type: IrType::Ptr,
+                    is_variadic: false,
+                    num_fixed_args: 3,
+                    struct_arg_sizes: vec![None; 3],
+                    struct_arg_aligns: vec![],
+                    struct_arg_classes: Vec::new(),
+                    struct_arg_riscv_float_classes: Vec::new(),
+                    is_sret: false,
+                    is_fastcall: false,
+                    ret_eightbyte_classes: Vec::new(),
+                },
+            });
+            return;
+        }
         let mut offset = base_offset;
         let end = base_offset + region_size;
         while offset + 8 <= end {
@@ -1425,4 +1458,84 @@ impl Lowerer {
         self.zero_init_region(alloca, 0, total_size);
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::common::error::DiagnosticEngine;
+    use crate::common::source::SourceManager;
+    use crate::frontend::lexer::Lexer;
+    use crate::frontend::parser::Parser;
+    use crate::frontend::preprocessor::Preprocessor;
+    use crate::frontend::sema::SemanticAnalyzer;
+    use crate::ir::lowering::Lowerer;
+    use crate::ir::instruction::Instruction;
+    use crate::backend::Target;
+
+    fn compile_to_ir(code: &str) -> crate::ir::module::IrModule {
+        crate::common::types::set_target_ptr_size(8);
+        crate::common::types::set_target_long_double_is_f128(false);
+        let mut pp = Preprocessor::new();
+        pp.set_target("x86_64");
+        pp.set_filename("<test>");
+        let preprocessed = pp.preprocess(code);
+        let mut sm = SourceManager::new();
+        let fid = sm.add_file("<test>".to_string(), preprocessed);
+        sm.build_line_map();
+        let macro_expansions = pp.take_macro_expansion_info();
+        sm.set_macro_expansions(macro_expansions);
+        let mut lexer = Lexer::new(sm.get_content(fid), fid);
+        lexer.set_gnu_extensions(true);
+        let tokens = lexer.tokenize();
+        let mut diagnostics = DiagnosticEngine::new();
+        diagnostics.set_source_manager(sm);
+        let mut parser = Parser::new(tokens);
+        parser.set_diagnostics(diagnostics);
+        let ast = parser.parse();
+        assert_eq!(parser.error_count, 0, "parse errors");
+        let diagnostics = parser.take_diagnostics();
+        let mut sema = SemanticAnalyzer::new();
+        sema.set_diagnostics(diagnostics);
+        let _ = sema.analyze(&ast);
+        let diagnostics = sema.take_diagnostics();
+        let sema_result = sema.into_result();
+        let lowerer = Lowerer::with_type_context(
+            Target::X86_64,
+            sema_result.type_context,
+            sema_result.functions,
+            sema_result.expr_types,
+            sema_result.const_values,
+            diagnostics,
+            false,
+        );
+        let (module, _) = lowerer.lower(&ast);
+        module
+    }
+
+    #[test]
+    fn large_zero_init_uses_memset() {
+        // Issue #81: large zero-initialized arrays should use memset, not per-element stores.
+        let module = compile_to_ir("void f(void) { char buf[1024 * 1024] = {0}; (void)buf; }");
+        let func = module.functions.iter().find(|f| f.name == "f").unwrap();
+        let has_memset = func.blocks.iter().any(|b| {
+            b.instructions.iter().any(|i| matches!(i, Instruction::Call { func, .. } if func == "memset"))
+        });
+        assert!(has_memset, "large zero-init should emit memset call");
+        // Should NOT have thousands of Store instructions
+        let store_count: usize = func.blocks.iter()
+            .map(|b| b.instructions.iter().filter(|i| matches!(i, Instruction::Store { .. })).count())
+            .sum();
+        assert!(store_count < 100, "should not emit per-element stores for large array, got {store_count}");
+    }
+
+    #[test]
+    fn small_zero_init_uses_stores() {
+        // Small arrays should still use per-element stores (no memset overhead).
+        let module = compile_to_ir("void f(void) { char buf[16] = {0}; (void)buf; }");
+        let func = module.functions.iter().find(|f| f.name == "f").unwrap();
+        let has_memset = func.blocks.iter().any(|b| {
+            b.instructions.iter().any(|i| matches!(i, Instruction::Call { func, .. } if func == "memset"))
+        });
+        assert!(!has_memset, "small zero-init should NOT emit memset call");
+    }
 }
