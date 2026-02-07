@@ -856,7 +856,8 @@ impl<'a> ExprTypeChecker<'a> {
             | "__builtin_constant_p" | "__builtin_object_size" => Some(CType::Int),
 
             // Byte-swap builtins return unsigned types (GCC behavior)
-            "__builtin_bswap16" | "__builtin_bswap32" => Some(CType::UInt),
+            "__builtin_bswap16" => Some(CType::UShort),
+            "__builtin_bswap32" => Some(CType::UInt),
             "__builtin_bswap64" => Some(CType::ULongLong),
 
             // __builtin_expect returns long (evaluates both args, returns first)
