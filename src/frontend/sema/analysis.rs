@@ -1130,6 +1130,27 @@ impl SemanticAnalyzer {
                         *span,
                     );
                 }
+                // Check for overlaps with existing case values and register range values.
+                if let (Some(lo), Some(hi)) = (self.eval_const_expr(low), self.eval_const_expr(high)) {
+                    if let Some(case_map) = self.switch_cases.last_mut() {
+                        let range_len = (hi as i128) - (lo as i128) + 1;
+                        if range_len > 0 && range_len <= 10_000 {
+                            for val in lo..=hi {
+                                if let Some(&prev_span) = case_map.get(&val) {
+                                    let diag = crate::common::error::Diagnostic::error(
+                                        format!("duplicate case value '{}'", val)
+                                    ).with_span(*span)
+                                     .with_note(crate::common::error::Diagnostic::note(
+                                        "previous case defined here"
+                                     ).with_span(prev_span));
+                                    self.diagnostics.borrow_mut().emit(&diag);
+                                    break;
+                                }
+                                case_map.insert(val, *span);
+                            }
+                        }
+                    }
+                }
                 self.analyze_stmt(body);
             }
             Stmt::Default(body, span) => {
@@ -4135,5 +4156,33 @@ mod tests {
             void f(void) { }
         "#);
         assert_eq!(e, 0, "unknown pragma diagnostic flag should not cause errors");
+    }
+
+    #[test]
+    fn case_range_overlap_with_single_case() {
+        // Issue #144: case range overlapping with single case should be diagnosed
+        let (e, _) = sema_counts("void f(int x) { switch(x) { case 1 ... 5: break; case 3: break; } }");
+        assert!(e > 0, "case 3 overlaps with range 1...5, should produce duplicate error");
+    }
+
+    #[test]
+    fn case_range_no_overlap() {
+        // Non-overlapping case range and single case should produce no error
+        let (e, _) = sema_counts("void f(int x) { switch(x) { case 1 ... 5: break; case 6: break; } }");
+        assert_eq!(e, 0, "case 6 does not overlap with range 1...5");
+    }
+
+    #[test]
+    fn overlapping_case_ranges() {
+        // Overlapping ranges should be diagnosed
+        let (e, _) = sema_counts("void f(int x) { switch(x) { case 1 ... 5: break; case 3 ... 7: break; } }");
+        assert!(e > 0, "range 3...7 overlaps with range 1...5, should produce duplicate error");
+    }
+
+    #[test]
+    fn single_case_then_overlapping_range() {
+        // Single case followed by a range that covers it should be diagnosed
+        let (e, _) = sema_counts("void f(int x) { switch(x) { case 3: break; case 1 ... 5: break; } }");
+        assert!(e > 0, "range 1...5 covers existing case 3, should produce duplicate error");
     }
 }
