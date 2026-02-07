@@ -450,7 +450,11 @@ impl<'a> SemaConstEval<'a> {
                     CType::Array(elem, _) => (**elem).clone(),
                     _ => return None,
                 };
-                Some(((base_offset as i64 + idx * elem_size as i64) as usize, elem_ty))
+                let offset = base_offset as i64 + idx * elem_size as i64;
+                if offset < 0 {
+                    return None;
+                }
+                Some((offset as usize, elem_ty))
             }
             _ => None,
         }

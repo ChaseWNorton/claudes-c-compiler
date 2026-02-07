@@ -1851,4 +1851,32 @@ mod tests {
             other => panic!("expected Scalar(I32(16)), got {:?}", other),
         }
     }
+
+    #[test]
+    fn offsetof_negative_index_no_wrap() {
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        // offsetof with a negative array index should not produce a huge wrapped value.
+        // The compiler should either produce 0 or a small non-wrapped result.
+        let module = compile_to_ir(r#"
+            struct S { int arr[4]; };
+            unsigned long x = __builtin_offsetof(struct S, arr[-1]);
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "x").expect("global 'x'");
+        match &g.init {
+            GlobalInit::Scalar(c) => {
+                let val = match c {
+                    IrConst::I64(v) => *v as u64,
+                    IrConst::I32(v) => *v as u64,
+                    other => panic!("unexpected const type: {:?}", other),
+                };
+                // Should NOT be a huge wrapped value like 18446744073709551612
+                assert!(val < 1_000_000, "offsetof with negative index should not wrap, got {}", val);
+            }
+            GlobalInit::Zero => {
+                // Returning 0 for a negative-offset offsetof is acceptable
+            }
+            other => panic!("expected Scalar or Zero, got {:?}", other),
+        }
+    }
 }
