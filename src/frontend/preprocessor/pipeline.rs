@@ -1129,6 +1129,21 @@ int c = 3;
     }
 
     #[test]
+    fn defined_inside_string_not_parsed() {
+        // Issue #160: 'defined' inside string/char literals should not be treated
+        // as the defined() operator in #if expressions.
+        // This macro expands to a string containing 'defined', which should be
+        // preserved verbatim and not resolved as defined().
+        let output = preprocess(r#"
+#define X 1
+#define MSG "defined(X) is text"
+const char *s = MSG;
+"#);
+        assert!(output.contains("\"defined(X) is text\""),
+            "string containing 'defined' should be preserved, got: {}", output.trim());
+    }
+
+    #[test]
     fn prid64_is_lld_on_i686() {
         // Issue #145: PRId64 should use "lld" on ILP32 (i686), not "ld"
         let mut pp = Preprocessor::new();

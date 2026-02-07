@@ -105,6 +105,44 @@ impl Preprocessor {
         let mut i = 0;
 
         while i < len {
+            // Skip string literals verbatim (don't interpret 'defined' inside strings)
+            if bytes[i] == b'"' {
+                result.push(bytes[i] as char);
+                i += 1;
+                while i < len && bytes[i] != b'"' {
+                    if bytes[i] == b'\\' && i + 1 < len {
+                        result.push(bytes[i] as char);
+                        i += 1;
+                    }
+                    result.push(bytes[i] as char);
+                    i += 1;
+                }
+                if i < len {
+                    result.push(bytes[i] as char);
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Skip character literals verbatim
+            if bytes[i] == b'\'' {
+                result.push(bytes[i] as char);
+                i += 1;
+                while i < len && bytes[i] != b'\'' {
+                    if bytes[i] == b'\\' && i + 1 < len {
+                        result.push(bytes[i] as char);
+                        i += 1;
+                    }
+                    result.push(bytes[i] as char);
+                    i += 1;
+                }
+                if i < len {
+                    result.push(bytes[i] as char);
+                    i += 1;
+                }
+                continue;
+            }
+
             if is_ident_start_byte(bytes[i]) {
                 let start = i;
                 i += 1;
