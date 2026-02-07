@@ -159,7 +159,7 @@ impl Lowerer {
             }
             _ => {}
         }
-        4 // default: int element
+        4 // last resort: assume int-sized element
     }
 
     /// Get the sizeof for a member access expression.
@@ -402,8 +402,16 @@ impl Lowerer {
                 }
             }
 
-            // Default
-            _ => 4,
+            // Default: try CType-based sizing, then IR type, then pointer size
+            _ => {
+                if let Some(ctype) = self.get_expr_ctype(expr) {
+                    self.ctype_size(&ctype)
+                } else {
+                    let ty = self.get_expr_type(expr);
+                    let sz = ty.size();
+                    if sz > 0 { sz } else { crate::common::types::target_ptr_size() }
+                }
+            }
         }
     }
 

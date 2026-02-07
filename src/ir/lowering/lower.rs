@@ -1754,4 +1754,27 @@ mod tests {
         // On LP64, sizeof(int) = 4, stored as a u64 (ULong) global
         assert!(matches!(g.ty, IrType::I64 | IrType::U64), "sizeof result should produce I64/U64 on LP64 target, got {:?}", g.ty);
     }
+
+    #[test]
+    fn sizeof_offsetof_not_hardcoded_4() {
+        // Issue #137: sizeof catch-all should use type inference, not hardcoded 4.
+        // On LP64, sizeof(size_t) and sizeof values should generally be 8.
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        let module = compile_to_ir(r#"
+            struct S { int x; long y; };
+            unsigned long s = sizeof(__builtin_offsetof(struct S, y));
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "s").expect("global 's'");
+        match &g.init {
+            GlobalInit::Scalar(IrConst::I64(v)) => {
+                // sizeof(offsetof) = sizeof(size_t) = 8 on LP64
+                assert_eq!(*v, 8, "sizeof(offsetof) should be 8 on LP64, got {}", v);
+            }
+            other => {
+                // Even if stored differently, it should not be 4
+                panic!("expected Scalar(I64) for sizeof(offsetof) on LP64, got {:?}", std::mem::discriminant(other));
+            }
+        }
+    }
 }
