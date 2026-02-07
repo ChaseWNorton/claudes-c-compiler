@@ -928,6 +928,13 @@ impl Preprocessor {
     }
 
     fn handle_elif(&mut self, expr: &str) {
+        // Skip expression evaluation when in a nested inactive block or when
+        // a previous branch was already taken. Evaluating would cause side
+        // effects like incrementing __COUNTER__ (C11 6.10.1).
+        if !self.conditionals.should_eval_elif() {
+            self.conditionals.handle_elif(false);
+            return;
+        }
         let resolved = self.resolve_defined_in_expr(expr);
         let expanded = self.macros.expand_line_reuse(&resolved, &mut self.directive_expanding);
         // Resolve again after macro expansion (same reason as handle_if)
@@ -970,6 +977,65 @@ impl Preprocessor {
 impl Default for Preprocessor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn preprocess(code: &str) -> String {
+        let mut pp = Preprocessor::new();
+        pp.set_target("x86_64");
+        pp.set_filename("<test>");
+        pp.preprocess(code)
+    }
+
+    #[test]
+    fn elif_in_inactive_block_no_counter_increment() {
+        // Issue #135: __COUNTER__ in inactive #elif should not be evaluated.
+        let output = preprocess(r#"
+#if 0
+  #if 0
+  #elif __COUNTER__ > 0
+  #endif
+#endif
+int x = __COUNTER__;
+"#);
+        // __COUNTER__ should be 0 — the inactive #elif should not have incremented it.
+        assert!(output.contains("int x = 0"), "expected __COUNTER__ == 0 after inactive #elif, got: {}", output.trim());
+    }
+
+    #[test]
+    fn elif_in_active_block_still_works() {
+        // Active #elif should still evaluate correctly.
+        let output = preprocess(r#"
+#if 0
+int a = 1;
+#elif 1
+int b = 2;
+#endif
+"#);
+        assert!(!output.contains("int a = 1"), "inactive #if branch should be excluded");
+        assert!(output.contains("int b = 2"), "active #elif branch should be included");
+    }
+
+    #[test]
+    fn elif_after_taken_branch_no_counter_increment() {
+        // When a branch was already taken, subsequent #elif should not evaluate.
+        let output = preprocess(r#"
+#if 1
+int first = __COUNTER__;
+#elif __COUNTER__ > 0
+int second = 999;
+#endif
+int third = __COUNTER__;
+"#);
+        // __COUNTER__ should be: 0 (first use), then 1 (third use).
+        // The #elif expression should NOT have incremented it.
+        assert!(output.contains("int first = 0"), "first __COUNTER__ should be 0, got: {}", output.trim());
+        assert!(output.contains("int third = 1"), "third __COUNTER__ should be 1, got: {}", output.trim());
+        assert!(!output.contains("int second"), "taken branch should prevent #elif");
     }
 }
 

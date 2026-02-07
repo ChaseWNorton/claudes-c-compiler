@@ -50,6 +50,17 @@ impl ConditionalStack {
         });
     }
 
+    /// Returns true if a #elif's expression should be evaluated.
+    /// False when the parent context is inactive (nested inactive block)
+    /// or when a previous branch was already taken.
+    pub fn should_eval_elif(&self) -> bool {
+        if let Some(state) = self.stack.last() {
+            state.parent_active && !state.any_branch_taken
+        } else {
+            true
+        }
+    }
+
     /// Handle #elif.
     pub fn handle_elif(&mut self, condition: bool) {
         if let Some(state) = self.stack.last_mut() {
