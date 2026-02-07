@@ -1722,6 +1722,43 @@ impl SemanticAnalyzer {
                         );
                     }
                 }
+                // C11 §6.5.6p2: pointer arithmetic requires pointee to be a complete type.
+                // Reject `p + 1` or `p - q` when p points to an incomplete struct/union.
+                if matches!(op, BinOp::Add | BinOp::Sub) {
+                    let checker3 = super::type_checker::ExprTypeChecker {
+                        symbols: &self.symbol_table,
+                        types: &self.result.type_context,
+                        functions: &self.result.functions,
+                        expr_types: Some(&self.result.expr_types),
+                    };
+                    for operand in [lhs.as_ref(), rhs.as_ref()] {
+                        if let Some(ty) = checker3.infer_expr_ctype(operand) {
+                            let pointee = match &ty {
+                                CType::Pointer(inner, _) => Some(inner.as_ref()),
+                                CType::Array(inner, _) => Some(inner.as_ref()),
+                                _ => None,
+                            };
+                            if let Some(pointee_ty) = pointee {
+                                let is_incomplete = match pointee_ty {
+                                    CType::Struct(key) | CType::Union(key) =>
+                                        !self.defined_structs.borrow().contains(key.as_ref()),
+                                    CType::Void => true,
+                                    _ => false,
+                                };
+                                if is_incomplete {
+                                    self.diagnostics.borrow_mut().error(
+                                        format!(
+                                            "arithmetic on pointer to incomplete type '{}'",
+                                            pointee_ty
+                                        ),
+                                        *span,
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 // Check pointer subtraction type compatibility (C11 6.5.6p3):
                 // both operands must point to compatible types.
                 if *op == BinOp::Sub {
@@ -3699,5 +3736,45 @@ mod tests {
             "struct S { int x; }; void f(void) { struct S a, b; a = b; (void)a; }"
         );
         assert_eq!(e, 0, "assigning same struct type should not produce error");
+    }
+
+    // ---- pointer arithmetic on incomplete types (issue #105) ----
+
+    #[test]
+    fn ptr_arith_incomplete_struct_error() {
+        let e = sema_errors(
+            "struct incomplete; void f(struct incomplete *p) { struct incomplete *q = p + 1; (void)q; }"
+        );
+        assert!(e > 0, "pointer arithmetic on incomplete struct should produce error");
+    }
+
+    #[test]
+    fn ptr_sub_incomplete_struct_error() {
+        let e = sema_errors(
+            "struct incomplete; void f(struct incomplete *p, struct incomplete *q) { long d = p - q; (void)d; }"
+        );
+        assert!(e > 0, "pointer subtraction on incomplete struct should produce error");
+    }
+
+    #[test]
+    fn ptr_arith_void_error() {
+        let e = sema_errors(
+            "void f(void *p) { void *q = p + 1; (void)q; }"
+        );
+        assert!(e > 0, "pointer arithmetic on void* should produce error");
+    }
+
+    #[test]
+    fn ptr_arith_complete_struct_no_error() {
+        let e = sema_errors(
+            "struct S { int x; }; void f(struct S *p) { struct S *q = p + 1; (void)q; }"
+        );
+        assert_eq!(e, 0, "pointer arithmetic on complete struct should not produce error");
+    }
+
+    #[test]
+    fn ptr_arith_int_no_error() {
+        let e = sema_errors("void f(int *p) { int *q = p + 1; (void)q; }");
+        assert_eq!(e, 0, "pointer arithmetic on int* should not produce error");
     }
 }
