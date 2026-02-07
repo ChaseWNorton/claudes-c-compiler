@@ -121,6 +121,17 @@ pub enum TokenKind {
     /// #pragma GCC visibility pop
     PragmaVisibilityPop,
 
+    /// #pragma GCC diagnostic push
+    PragmaDiagPush,
+    /// #pragma GCC diagnostic pop
+    PragmaDiagPop,
+    /// #pragma GCC diagnostic ignored "-Wname" (flag name without -W prefix)
+    PragmaDiagIgnored(String),
+    /// #pragma GCC diagnostic warning "-Wname"
+    PragmaDiagWarning(String),
+    /// #pragma GCC diagnostic error "-Wname"
+    PragmaDiagError(String),
+
     // Punctuation
     LParen,     // (
     RParen,     // )
@@ -297,6 +308,10 @@ impl std::fmt::Display for TokenKind {
             TokenKind::PragmaPackReset => write!(f, "'#pragma pack'"),
             TokenKind::PragmaVisibilityPush(_) | TokenKind::PragmaVisibilityPop =>
                 write!(f, "'#pragma GCC visibility'"),
+            TokenKind::PragmaDiagPush | TokenKind::PragmaDiagPop |
+            TokenKind::PragmaDiagIgnored(_) | TokenKind::PragmaDiagWarning(_) |
+            TokenKind::PragmaDiagError(_) =>
+                write!(f, "'#pragma GCC diagnostic'"),
 
             // Punctuation - shown as quoted symbols
             TokenKind::LParen => write!(f, "'('"),

@@ -7,6 +7,19 @@ pub struct TranslationUnit {
     pub decls: Vec<ExternalDecl>,
 }
 
+/// Action from `#pragma GCC diagnostic push/pop/ignored/warning/error`.
+#[derive(Debug, Clone)]
+pub enum PragmaDiagAction {
+    Push,
+    Pop,
+    /// Suppress a warning: `ignored "-Wflag-name"` (flag name without -W prefix).
+    Ignored(String),
+    /// Re-enable as warning: `warning "-Wflag-name"`.
+    Warning(String),
+    /// Promote to error: `error "-Wflag-name"`.
+    Error(String),
+}
+
 /// Top-level declarations in a translation unit.
 #[derive(Debug)]
 pub enum ExternalDecl {
@@ -14,6 +27,8 @@ pub enum ExternalDecl {
     Declaration(Declaration),
     /// Top-level asm("...") directive - emitted verbatim in assembly output.
     TopLevelAsm(String),
+    /// #pragma GCC diagnostic directive at file scope.
+    PragmaDiag(PragmaDiagAction),
 }
 
 /// Attributes that can be applied to function definitions via storage-class
@@ -620,6 +635,8 @@ pub enum Stmt {
         /// Goto labels for asm goto (e.g., `asm goto("..." : : : : label1, label2)`)
         goto_labels: Vec<String>,
     },
+    /// #pragma GCC diagnostic directive inside a function body.
+    PragmaDiag(PragmaDiagAction),
 }
 
 impl Stmt {
@@ -635,7 +652,8 @@ impl Stmt {
             Stmt::GotoIndirect(_, span) | Stmt::Label(_, _, span) => Some(*span),
             Stmt::Expr(Some(expr)) => Some(expr.span()),
             Stmt::Declaration(decl) => Some(decl.span),
-            Stmt::Expr(None) | Stmt::Compound(_) | Stmt::InlineAsm { .. } => None,
+            Stmt::Expr(None) | Stmt::Compound(_) | Stmt::InlineAsm { .. } |
+            Stmt::PragmaDiag(_) => None,
         }
     }
 }

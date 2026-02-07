@@ -90,6 +90,7 @@ impl Lowerer {
                     }
                 }
                 ExternalDecl::TopLevelAsm(_) => {}
+                ExternalDecl::PragmaDiag(_) => {}
             }
         }
         for ts in type_specs_to_recompute {

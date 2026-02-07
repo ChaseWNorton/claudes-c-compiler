@@ -1000,6 +1000,11 @@ impl Lexer {
             return Token::new(vis_tok, span);
         }
 
+        // Check for synthetic pragma diagnostic directives emitted by preprocessor
+        if let Some(diag_tok) = Self::try_pragma_diag_token(text) {
+            return Token::new(diag_tok, span);
+        }
+
         if let Some(kw) = TokenKind::from_keyword(text, self.gnu_extensions) {
             Token::new(kw, span)
         } else {
@@ -1054,6 +1059,26 @@ impl Lexer {
             } else {
                 None
             }
+        } else {
+            None
+        }
+    }
+
+    /// Recognize synthetic pragma diagnostic identifiers emitted by the preprocessor.
+    /// Format: __ccc_diag_push, __ccc_diag_pop, __ccc_diag_{ignored|warning|error}_FLAG
+    fn try_pragma_diag_token(text: &str) -> Option<TokenKind> {
+        let rest = text.strip_prefix("__ccc_diag_")?;
+        if rest == "push" {
+            Some(TokenKind::PragmaDiagPush)
+        } else if rest == "pop" {
+            Some(TokenKind::PragmaDiagPop)
+        } else if let Some(flag) = rest.strip_prefix("ignored_") {
+            // Decode: underscores back to hyphens for flag name
+            Some(TokenKind::PragmaDiagIgnored(flag.replace('_', "-")))
+        } else if let Some(flag) = rest.strip_prefix("warning_") {
+            Some(TokenKind::PragmaDiagWarning(flag.replace('_', "-")))
+        } else if let Some(flag) = rest.strip_prefix("error_") {
+            Some(TokenKind::PragmaDiagError(flag.replace('_', "-")))
         } else {
             None
         }

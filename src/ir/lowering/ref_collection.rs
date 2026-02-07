@@ -84,6 +84,7 @@ impl Lowerer {
                 ExternalDecl::TopLevelAsm(_) => {
                     // Top-level asm doesn't reference C functions
                 }
+                ExternalDecl::PragmaDiag(_) => {}
             }
         }
 

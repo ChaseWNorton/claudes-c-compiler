@@ -54,6 +54,12 @@ impl Parser {
             while self.handle_pragma_visibility_token() {
                 self.consume_if(&TokenKind::Semicolon);
             }
+            // Handle #pragma GCC diagnostic push/pop/ignored/warning/error
+            if let Some(action) = self.try_pragma_diag_token() {
+                self.consume_if(&TokenKind::Semicolon);
+                items.push(BlockItem::Statement(Stmt::PragmaDiag(action)));
+                continue;
+            }
             if matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
                 break;
             }

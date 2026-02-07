@@ -493,6 +493,8 @@ pub struct DiagnosticEngine {
     /// Warning configuration: controls which warnings are enabled and
     /// which are promoted to errors.
     warning_config: WarningConfig,
+    /// Stack of saved warning configs for #pragma GCC diagnostic push/pop.
+    warning_config_stack: Vec<WarningConfig>,
     /// Reference to the source manager for span resolution and snippet display.
     /// Set after the preprocessing/lexing phase creates the SourceManager.
     source_manager: Option<SourceManager>,
@@ -513,6 +515,7 @@ impl DiagnosticEngine {
             error_count: 0,
             warning_count: 0,
             warning_config: WarningConfig::new(),
+            warning_config_stack: Vec::new(),
             source_manager: None,
             use_color: ColorMode::Auto.use_color(),
             last_include_trace_file: None,
@@ -538,6 +541,23 @@ impl DiagnosticEngine {
     /// Resolves the mode immediately (e.g., checking isatty for Auto).
     pub fn set_color_mode(&mut self, mode: ColorMode) {
         self.use_color = mode.use_color();
+    }
+
+    /// Push the current warning config onto the stack (#pragma GCC diagnostic push).
+    pub fn push_warning_state(&mut self) {
+        self.warning_config_stack.push(self.warning_config.clone());
+    }
+
+    /// Pop the last saved warning config (#pragma GCC diagnostic pop).
+    pub fn pop_warning_state(&mut self) {
+        if let Some(prev) = self.warning_config_stack.pop() {
+            self.warning_config = prev;
+        }
+    }
+
+    /// Get mutable access to warning config for pragma diagnostic overrides.
+    pub fn warning_config_mut(&mut self) -> &mut WarningConfig {
+        &mut self.warning_config
     }
 
     /// Emit a diagnostic: apply warning filtering/promotion, print to stderr,

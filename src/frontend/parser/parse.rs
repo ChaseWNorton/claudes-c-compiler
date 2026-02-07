@@ -1085,6 +1085,38 @@ impl Parser {
         }
     }
 
+    /// Check if current token is a pragma diagnostic directive and return the action.
+    /// Returns Some(action) if a pragma diagnostic token was consumed, None otherwise.
+    pub(super) fn try_pragma_diag_token(&mut self) -> Option<super::ast::PragmaDiagAction> {
+        use super::ast::PragmaDiagAction;
+        match self.peek() {
+            TokenKind::PragmaDiagPush => {
+                self.advance();
+                Some(PragmaDiagAction::Push)
+            }
+            TokenKind::PragmaDiagPop => {
+                self.advance();
+                Some(PragmaDiagAction::Pop)
+            }
+            TokenKind::PragmaDiagIgnored(flag) => {
+                let flag = flag.clone();
+                self.advance();
+                Some(PragmaDiagAction::Ignored(flag))
+            }
+            TokenKind::PragmaDiagWarning(flag) => {
+                let flag = flag.clone();
+                self.advance();
+                Some(PragmaDiagAction::Warning(flag))
+            }
+            TokenKind::PragmaDiagError(flag) => {
+                let flag = flag.clone();
+                self.advance();
+                Some(PragmaDiagAction::Error(flag))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn skip_balanced_parens(&mut self) {
         if !matches!(self.peek(), TokenKind::LParen) {
             return;

@@ -58,10 +58,48 @@ impl Preprocessor {
                 }
                 return self.handle_pragma_gcc_visibility(vis_content.trim());
             }
+            if let Some(diag_content) = gcc_content.strip_prefix("diagnostic") {
+                if self.macros.asm_mode {
+                    return None;
+                }
+                return self.handle_pragma_gcc_diagnostic(diag_content.trim());
+            }
         }
 
-        // Other pragmas (GCC, diagnostic, etc.) are silently ignored
+        // Other pragmas are silently ignored
         None
+    }
+
+    /// Handle #pragma GCC diagnostic push/pop/ignored/warning/error "-Wflag".
+    /// Emits synthetic tokens for the parser to create AST pragma nodes.
+    fn handle_pragma_gcc_diagnostic(&mut self, content: &str) -> Option<String> {
+        let content = content.trim();
+        if content == "push" {
+            return Some("__ccc_diag_push ;\n".to_string());
+        }
+        if content == "pop" {
+            return Some("__ccc_diag_pop ;\n".to_string());
+        }
+        // Parse: ignored|warning|error "-Wflag-name"
+        let (action, rest) = if let Some(r) = content.strip_prefix("ignored") {
+            ("ignored", r)
+        } else if let Some(r) = content.strip_prefix("warning") {
+            ("warning", r)
+        } else if let Some(r) = content.strip_prefix("error") {
+            ("error", r)
+        } else {
+            return None;
+        };
+        let rest = rest.trim();
+        // Extract flag name from "-Wflag-name" or "-W" "flag-name"
+        let flag = rest.trim_matches('"').trim();
+        let flag = flag.strip_prefix("-W").unwrap_or(flag);
+        if flag.is_empty() {
+            return None;
+        }
+        // Encode flag name with hyphens replaced by underscores for identifier safety
+        let encoded = flag.replace('-', "_");
+        Some(format!("__ccc_diag_{}_{} ;\n", action, encoded))
     }
 
     /// Handle #pragma GCC visibility push(hidden|default|protected|internal) / pop.

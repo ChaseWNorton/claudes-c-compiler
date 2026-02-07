@@ -39,6 +39,7 @@ use crate::frontend::parser::ast::{
     GenericAssociation,
     Initializer,
     InitializerItem,
+    PragmaDiagAction,
     SizeofArg,
     Stmt,
     StructFieldDecl,
@@ -201,6 +202,9 @@ impl SemanticAnalyzer {
                 }
                 ExternalDecl::TopLevelAsm(_) => {
                     // Top-level asm is passed through verbatim; no semantic analysis needed
+                }
+                ExternalDecl::PragmaDiag(action) => {
+                    self.apply_pragma_diag(action);
                 }
             }
         }
@@ -1169,6 +1173,40 @@ impl SemanticAnalyzer {
                     self.analyze_expr(&inp.expr);
                 }
             }
+            Stmt::PragmaDiag(action) => {
+                self.apply_pragma_diag(action);
+            }
+        }
+    }
+
+    /// Apply a #pragma GCC diagnostic action to the diagnostic engine.
+    fn apply_pragma_diag(&self, action: &PragmaDiagAction) {
+        use crate::common::error::WarningKind;
+        let mut diag = self.diagnostics.borrow_mut();
+        match action {
+            PragmaDiagAction::Push => {
+                diag.push_warning_state();
+            }
+            PragmaDiagAction::Pop => {
+                diag.pop_warning_state();
+            }
+            PragmaDiagAction::Ignored(flag) => {
+                if let Some(kind) = WarningKind::from_flag_name(flag) {
+                    diag.warning_config_mut().disable(kind);
+                }
+                // Unknown flags silently ignored (GCC behavior)
+            }
+            PragmaDiagAction::Warning(flag) => {
+                if let Some(kind) = WarningKind::from_flag_name(flag) {
+                    diag.warning_config_mut().enable(kind);
+                    diag.warning_config_mut().clear_werror(kind);
+                }
+            }
+            PragmaDiagAction::Error(flag) => {
+                if let Some(kind) = WarningKind::from_flag_name(flag) {
+                    diag.warning_config_mut().set_werror(kind);
+                }
+            }
         }
     }
 
@@ -1268,6 +1306,7 @@ impl SemanticAnalyzer {
             Stmt::Expr(None) => true,
             Stmt::Declaration(_) => true,
             Stmt::InlineAsm { .. } => true,
+            Stmt::PragmaDiag(_) => true,
         }
     }
 
@@ -4009,5 +4048,92 @@ mod tests {
             "int f(void) { int x; return _Generic(x, int: 1, int: 2); }"
         );
         assert!(e > 0, "_Generic with duplicate type should error");
+    }
+
+    // ---- #pragma GCC diagnostic push/pop/ignored/warning/error ----
+
+    /// Helper: preprocess + lex + parse + sema, return (error_count, warning_count).
+    /// Required for pragma tests since pragmas are processed by the preprocessor.
+    fn sema_counts_with_pp(src: &str) -> (usize, usize) {
+        use crate::frontend::preprocessor::Preprocessor;
+        use crate::common::source::SourceManager;
+        use crate::common::error::DiagnosticEngine;
+        let mut pp = Preprocessor::new();
+        pp.set_target("x86_64");
+        pp.set_filename("<test>");
+        let preprocessed = pp.preprocess(src);
+        let mut sm = SourceManager::new();
+        let fid = sm.add_file("<test>".to_string(), preprocessed);
+        sm.build_line_map();
+        let macro_expansions = pp.take_macro_expansion_info();
+        sm.set_macro_expansions(macro_expansions);
+        let mut lexer = Lexer::new(sm.get_content(fid), fid);
+        lexer.set_gnu_extensions(true);
+        let tokens = lexer.tokenize();
+        let mut diagnostics = DiagnosticEngine::new();
+        diagnostics.set_source_manager(sm);
+        let mut parser = Parser::new(tokens);
+        parser.set_diagnostics(diagnostics);
+        let ast = parser.parse();
+        let diagnostics = parser.take_diagnostics();
+        let mut analyzer = SemanticAnalyzer::new();
+        analyzer.set_diagnostics(diagnostics);
+        let _ = analyzer.analyze(&ast);
+        let diag = analyzer.take_diagnostics();
+        (diag.error_count(), diag.warning_count())
+    }
+
+    #[test]
+    fn pragma_diag_ignored_suppresses_warning() {
+        // -Wunused-variable normally warns; pragma ignored suppresses it
+        let (_, w) = sema_counts_with_pp(r#"
+            #pragma GCC diagnostic ignored "-Wunused-variable"
+            void f(void) { int unused; }
+        "#);
+        assert_eq!(w, 0, "pragma ignored should suppress -Wunused-variable");
+    }
+
+    #[test]
+    fn pragma_diag_push_pop_restores_state() {
+        // push, ignore, pop — second unused var should still warn
+        let (_, w) = sema_counts_with_pp(r#"
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Wunused-variable"
+            void f(void) { int suppressed; }
+            #pragma GCC diagnostic pop
+            void g(void) { int visible; }
+        "#);
+        assert!(w > 0, "after pop, -Wunused-variable should warn again");
+    }
+
+    #[test]
+    fn pragma_diag_error_promotes_warning() {
+        // promote -Wunused-variable to error
+        let (e, _) = sema_counts_with_pp(r#"
+            #pragma GCC diagnostic error "-Wunused-variable"
+            void f(void) { int unused; }
+        "#);
+        assert!(e > 0, "pragma error should promote -Wunused-variable to error");
+    }
+
+    #[test]
+    fn pragma_diag_warning_reenables() {
+        // ignored then re-enabled with warning
+        let (_, w) = sema_counts_with_pp(r#"
+            #pragma GCC diagnostic ignored "-Wunused-variable"
+            #pragma GCC diagnostic warning "-Wunused-variable"
+            void f(void) { int unused; }
+        "#);
+        assert!(w > 0, "pragma warning should re-enable -Wunused-variable");
+    }
+
+    #[test]
+    fn pragma_diag_unknown_flag_ignored() {
+        // unknown flag names are silently ignored (GCC behavior)
+        let (e, _) = sema_counts_with_pp(r#"
+            #pragma GCC diagnostic ignored "-Wnonexistent-flag"
+            void f(void) { }
+        "#);
+        assert_eq!(e, 0, "unknown pragma diagnostic flag should not cause errors");
     }
 }

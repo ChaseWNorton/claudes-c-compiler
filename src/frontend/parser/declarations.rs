@@ -52,6 +52,12 @@ impl Parser {
             self.consume_if(&TokenKind::Semicolon);
         }
 
+        // Handle #pragma GCC diagnostic push/pop/ignored/warning/error
+        if let Some(action) = self.try_pragma_diag_token() {
+            self.consume_if(&TokenKind::Semicolon);
+            return Some(ExternalDecl::PragmaDiag(action));
+        }
+
         if self.at_eof() {
             return None;
         }

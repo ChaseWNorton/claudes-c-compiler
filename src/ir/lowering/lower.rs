@@ -524,7 +524,7 @@ impl Lowerer {
                         self.register_struct_type(&p.type_spec);
                     }
                 }
-                ExternalDecl::TopLevelAsm(_) => {}
+                ExternalDecl::TopLevelAsm(_) | ExternalDecl::PragmaDiag(_) => {}
             }
         }
 
@@ -683,6 +683,7 @@ impl Lowerer {
                 ExternalDecl::TopLevelAsm(_) => {
                     // Handled in the third pass
                 }
+                ExternalDecl::PragmaDiag(_) => {}
             }
         }
 
@@ -747,6 +748,7 @@ impl Lowerer {
                 ExternalDecl::TopLevelAsm(asm_str) => {
                     self.module.toplevel_asm.push(asm_str.clone());
                 }
+                ExternalDecl::PragmaDiag(_) => {}
             }
         }
         (self.module, self.diagnostics.into_inner())

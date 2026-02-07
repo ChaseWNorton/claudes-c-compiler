@@ -795,7 +795,7 @@ impl Lowerer {
             // Leaf statements: no labels inside
             Stmt::Expr(_) | Stmt::Return(_, _) | Stmt::Break(_) | Stmt::Continue(_) |
             Stmt::Goto(_, _) | Stmt::GotoIndirect(_, _) | Stmt::Declaration(_) |
-            Stmt::InlineAsm { .. } => {}
+            Stmt::InlineAsm { .. } | Stmt::PragmaDiag(_) => {}
         }
     }
 }
