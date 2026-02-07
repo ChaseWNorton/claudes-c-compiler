@@ -631,6 +631,38 @@ impl Preprocessor {
                 self.define_simple_macro("__INT_FAST32_WIDTH__", "32");
                 // i686 uses the same x87 80-bit long double format as x86-64
                 // (LDBL macros are already set correctly), but sizeof differs (12 vs 16)
+
+                // Override <inttypes.h> format macros for ILP32.
+                // On ILP32, int64_t is long long (not long), so 64-bit formats use "ll".
+                // Pointer-width types are 32-bit, so PTR formats use plain "d"/"u"/"x".
+                // intmax_t is long long on ILP32, so MAX formats use "ll".
+                self.define_simple_macro("PRId64", "\"lld\"");
+                self.define_simple_macro("PRIi64", "\"lli\"");
+                self.define_simple_macro("PRIu64", "\"llu\"");
+                self.define_simple_macro("PRIx64", "\"llx\"");
+                self.define_simple_macro("PRIX64", "\"llX\"");
+                self.define_simple_macro("PRIo64", "\"llo\"");
+                self.define_simple_macro("SCNd64", "\"lld\"");
+                self.define_simple_macro("SCNu64", "\"llu\"");
+                self.define_simple_macro("SCNx64", "\"llx\"");
+                // Pointer-width: 32-bit on ILP32
+                self.define_simple_macro("PRIdPTR", "\"d\"");
+                self.define_simple_macro("PRIiPTR", "\"i\"");
+                self.define_simple_macro("PRIuPTR", "\"u\"");
+                self.define_simple_macro("PRIxPTR", "\"x\"");
+                self.define_simple_macro("PRIXPTR", "\"X\"");
+                self.define_simple_macro("SCNdPTR", "\"d\"");
+                self.define_simple_macro("SCNuPTR", "\"u\"");
+                self.define_simple_macro("SCNxPTR", "\"x\"");
+                // intmax_t is long long on ILP32
+                self.define_simple_macro("PRIdMAX", "\"lld\"");
+                self.define_simple_macro("PRIiMAX", "\"lli\"");
+                self.define_simple_macro("PRIuMAX", "\"llu\"");
+                self.define_simple_macro("PRIxMAX", "\"llx\"");
+                self.define_simple_macro("PRIXMAX", "\"llX\"");
+                self.define_simple_macro("SCNdMAX", "\"lld\"");
+                self.define_simple_macro("SCNuMAX", "\"llu\"");
+                self.define_simple_macro("SCNxMAX", "\"llx\"");
             }
             _ => {
                 // x86_64 is already the default

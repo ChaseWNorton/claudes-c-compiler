@@ -1111,6 +1111,23 @@ int c = 3;
         assert!(errors.iter().any(|e| e.message.contains("#else without #if")),
             "expected '#else without #if' error, got: {:?}", errors);
     }
+
+    #[test]
+    fn prid64_is_lld_on_i686() {
+        // Issue #145: PRId64 should use "lld" on ILP32 (i686), not "ld"
+        let mut pp = Preprocessor::new();
+        pp.set_target("i686");
+        pp.set_filename("<test>");
+        let output = pp.preprocess("const char *fmt = PRId64;\n");
+        assert!(output.contains("\"lld\""), "PRId64 on i686 should be \"lld\", got: {}", output.trim());
+    }
+
+    #[test]
+    fn prid64_is_ld_on_x86_64() {
+        // PRId64 should remain "ld" on LP64 (x86-64)
+        let output = preprocess("const char *fmt = PRId64;\n");
+        assert!(output.contains("\"ld\""), "PRId64 on x86-64 should be \"ld\", got: {}", output.trim());
+    }
 }
 
 
