@@ -501,6 +501,15 @@ impl Parser {
         };
         let (packed2, _, _, _) = self.parse_gcc_attributes();
         is_packed = is_packed || packed2;
+        // C23 / clang extension: enum : underlying-type { ... }
+        // Skip the underlying type specifier — CCC computes enum size from values.
+        if matches!(self.peek(), TokenKind::Colon) {
+            self.advance(); // consume ':'
+            // Consume the underlying type (e.g. uint64_t, int, unsigned char)
+            while !matches!(self.peek(), TokenKind::LBrace | TokenKind::Semicolon | TokenKind::Eof) {
+                self.advance();
+            }
+        }
         let variants = if matches!(self.peek(), TokenKind::LBrace) {
             let v = self.parse_enum_variants();
             // Register enum constant values so that later constant expressions

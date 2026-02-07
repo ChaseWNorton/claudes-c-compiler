@@ -22,9 +22,7 @@ impl Preprocessor {
             ("__STDC__", "1"),
             ("__STDC_VERSION__", "201710L"), // C17
             ("__STDC_HOSTED__", "1"),
-            // Platform
-            ("__linux__", "1"), ("__linux", "1"), ("linux", "1"),
-            ("__gnu_linux__", "1"),
+            // Platform (Unix — macOS and Linux are both Unix)
             ("__unix__", "1"), ("__unix", "1"), ("unix", "1"),
             ("__LP64__", "1"), ("_LP64", "1"),
             // Default arch: x86_64 (overridden by set_target)
@@ -121,6 +119,9 @@ impl Preprocessor {
             ("__LDBL_DECIMAL_DIG__", "21"), ("__DECIMAL_DIG__", "21"),
             // GCC extensions
             ("__GNUC_VA_LIST", "1"), ("__extension__", ""),
+            // C11 <stdalign.h> / C23 keywords — map to _Alignas/_Alignof
+            ("alignas", "_Alignas"), ("alignof", "_Alignof"),
+            ("static_assert", "_Static_assert"),
             // NOTE: GNU keyword aliases (__inline__, __volatile__, __asm__, __const__,
             // __restrict__, __signed__, __typeof__) are handled as keyword tokens in
             // the lexer (token.rs), not as macros, because GCC treats them as reserved
@@ -138,6 +139,7 @@ impl Preprocessor {
             // (e.g., _Float128 should be true IEEE binary128, not 80-bit long double
             // on x86-64). The macro approach works for glibc header compatibility but
             // loses precision for _Float128 operations on x86-64.
+            ("_Float16", "float"),  // no native half-precision; map to float for header compat
             ("_Float128", "long double"),
             ("_Float32", "float"),
             ("_Float64", "double"),
@@ -146,8 +148,8 @@ impl Preprocessor {
             // MSVC integer type specifiers
             ("__int8", "char"), ("__int16", "short"),
             ("__int32", "int"), ("__int64", "long long"),
-            // ELF ABI
-            ("__USER_LABEL_PREFIX__", ""),
+            // User label prefix (platform-dependent, set below)
+            // ("__USER_LABEL_PREFIX__" is set conditionally after this table)
             // GNU C attribute macros (strip)
             ("__LEAF", ""), ("__LEAF_ATTR", ""), ("__wur", ""),
             // __DATE__ and __TIME__ are defined dynamically below (not in static table)
@@ -162,8 +164,7 @@ impl Preprocessor {
             ("__GCC_ATOMIC_LONG_LOCK_FREE", "2"),
             ("__GCC_ATOMIC_LLONG_LOCK_FREE", "2"),
             ("__GCC_ATOMIC_POINTER_LOCK_FREE", "2"),
-            // ELF
-            ("__ELF__", "1"),
+            // ELF (Linux-only, set below conditionally)
             // Note: __PIC__/__pic__ are conditionally defined via set_pic(),
             // not here, so they are only present when -fPIC is active.
             // CET (Control-flow Enforcement Technology) - match GCC's default
@@ -184,6 +185,29 @@ impl Preprocessor {
 
         for &(name, body) in PREDEFINED_OBJECT_MACROS {
             self.define_simple_macro(name, body);
+        }
+
+        // Platform-specific macros: Linux vs macOS
+        #[cfg(target_os = "macos")]
+        {
+            self.define_simple_macro("__APPLE__", "1");
+            self.define_simple_macro("__MACH__", "1");
+            self.define_simple_macro("__APPLE_CC__", "1");
+            self.define_simple_macro("__STDC_NO_THREADS__", "1");
+            self.define_simple_macro("__LITTLE_ENDIAN__", "1");
+            // macOS SDK version macros — required for AvailabilityInternal.h
+            // and many SDK headers that check deployment target
+            self.define_simple_macro("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", "150000");
+            self.define_simple_macro("__USER_LABEL_PREFIX__", "_");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.define_simple_macro("__linux__", "1");
+            self.define_simple_macro("__linux", "1");
+            self.define_simple_macro("linux", "1");
+            self.define_simple_macro("__gnu_linux__", "1");
+            self.define_simple_macro("__ELF__", "1");
+            self.define_simple_macro("__USER_LABEL_PREFIX__", "");
         }
 
         // __DATE__ and __TIME__: use actual compilation date/time, or
@@ -322,30 +346,87 @@ impl Preprocessor {
     /// Get default system include paths (arch-neutral only).
     pub(super) fn default_system_include_paths() -> Vec<PathBuf> {
         let mut paths = Vec::new();
-        // Bundled include directory takes priority over system GCC headers
+        // Bundled include directory takes priority over system headers
         if let Some(bundled) = Self::bundled_include_dir() {
             paths.push(bundled);
         }
-        // Only include arch-neutral paths here; arch-specific paths are added by set_target
-        let candidates = [
-            "/usr/local/include",
-            // x86_64 multiarch (default, removed by set_target for other arches)
-            "/usr/include/x86_64-linux-gnu",
-            // GCC headers (common versions)
-            "/usr/lib/gcc/x86_64-linux-gnu/12/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/11/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/13/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/14/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/10/include",
-            "/usr/include",
-        ];
-        for candidate in &candidates {
-            let path = PathBuf::from(candidate);
-            if path.is_dir() {
-                paths.push(path);
+
+        #[cfg(target_os = "macos")]
+        {
+            // macOS: detect SDK via xcrun, then fallback probes
+            if let Some(sdk_path) = Self::detect_macos_sdk_path() {
+                let sdk_include = sdk_path.join("usr/include");
+                if sdk_include.is_dir() {
+                    paths.push(sdk_include);
+                }
+            }
+            // Fallback: CommandLineTools default path
+            let clt_include = PathBuf::from(
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include",
+            );
+            if clt_include.is_dir() && !paths.iter().any(|p| p == &clt_include) {
+                paths.push(clt_include);
+            }
+            // Homebrew / user-installed headers
+            let usr_local = PathBuf::from("/usr/local/include");
+            if usr_local.is_dir() {
+                paths.push(usr_local);
+            }
+            // Apple Silicon Homebrew
+            let opt_homebrew = PathBuf::from("/opt/homebrew/include");
+            if opt_homebrew.is_dir() {
+                paths.push(opt_homebrew);
             }
         }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Linux: probe standard GCC/system paths
+            let candidates = [
+                "/usr/local/include",
+                // x86_64 multiarch (default, removed by set_target for other arches)
+                "/usr/include/x86_64-linux-gnu",
+                // GCC headers (common versions)
+                "/usr/lib/gcc/x86_64-linux-gnu/12/include",
+                "/usr/lib/gcc/x86_64-linux-gnu/11/include",
+                "/usr/lib/gcc/x86_64-linux-gnu/13/include",
+                "/usr/lib/gcc/x86_64-linux-gnu/14/include",
+                "/usr/lib/gcc/x86_64-linux-gnu/10/include",
+                "/usr/include",
+            ];
+            for candidate in &candidates {
+                let path = PathBuf::from(candidate);
+                if path.is_dir() {
+                    paths.push(path);
+                }
+            }
+        }
+
         paths
+    }
+
+    /// Detect the macOS SDK path via `xcrun --show-sdk-path`.
+    /// Result is cached for the process lifetime via OnceLock.
+    #[cfg(target_os = "macos")]
+    fn detect_macos_sdk_path() -> Option<PathBuf> {
+        use std::sync::OnceLock;
+        static SDK_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+        SDK_PATH
+            .get_or_init(|| {
+                let output = std::process::Command::new("xcrun")
+                    .args(["--show-sdk-path"])
+                    .output()
+                    .ok()?;
+                if output.status.success() {
+                    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let path = PathBuf::from(&path_str);
+                    if path.is_dir() {
+                        return Some(path);
+                    }
+                }
+                None
+            })
+            .clone()
     }
 
     /// Define `__STRICT_ANSI__` for strict ISO C modes (`-std=c99`, `-std=c11`, etc.).
@@ -500,6 +581,9 @@ impl Preprocessor {
                 self.macros.undefine("__SSE2_MATH__");
                 // Define aarch64 macros
                 self.define_simple_macro("__aarch64__", "1");
+                // macOS SDK headers check __arm64__ (Apple convention)
+                #[cfg(target_os = "macos")]
+                self.define_simple_macro("__arm64__", "1");
                 self.define_simple_macro("__ARM_64BIT_STATE", "1");
                 self.define_simple_macro("__ARM_ARCH", "8");
                 self.define_simple_macro("__ARM_ARCH_8A", "1");
@@ -526,22 +610,32 @@ impl Preprocessor {
                 self.define_simple_macro("__AARCH64_CMODEL_SMALL__", "1");
                 // ARM: char is unsigned by default
                 self.define_simple_macro("__CHAR_UNSIGNED__", "1");
-                // Replace x86 include paths with aarch64 paths
-                self.system_include_paths.retain(|p| {
-                    let s = p.to_string_lossy();
-                    !s.contains("x86_64")
-                });
-                let aarch64_paths = [
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/11/include",
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/12/include",
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/13/include",
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/14/include",
-                    "/usr/aarch64-linux-gnu/include",
-                    "/usr/include/aarch64-linux-gnu",
-                ];
-                self.insert_arch_paths_after_bundled(&aarch64_paths);
-                // AArch64 uses IEEE 754 binary128 for long double (not x87 80-bit)
-                self.override_ldbl_binary128();
+                // Include paths and long double: platform-dependent
+                #[cfg(target_os = "macos")]
+                {
+                    // macOS arm64: long double == double (8 bytes, not binary128)
+                    self.override_ldbl_as_double();
+                    // macOS SDK paths already set by default_system_include_paths()
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // Linux: replace x86 include paths with aarch64 cross-compile paths
+                    self.system_include_paths.retain(|p| {
+                        let s = p.to_string_lossy();
+                        !s.contains("x86_64")
+                    });
+                    let aarch64_paths = [
+                        "/usr/lib/gcc-cross/aarch64-linux-gnu/11/include",
+                        "/usr/lib/gcc-cross/aarch64-linux-gnu/12/include",
+                        "/usr/lib/gcc-cross/aarch64-linux-gnu/13/include",
+                        "/usr/lib/gcc-cross/aarch64-linux-gnu/14/include",
+                        "/usr/aarch64-linux-gnu/include",
+                        "/usr/include/aarch64-linux-gnu",
+                    ];
+                    self.insert_arch_paths_after_bundled(&aarch64_paths);
+                    // AArch64 Linux uses IEEE 754 binary128 for long double (not x87 80-bit)
+                    self.override_ldbl_binary128();
+                }
             }
             "riscv64" => {
                 // Remove x86 macros
@@ -776,6 +870,29 @@ impl Preprocessor {
         self.define_simple_macro("LDBL_MANT_DIG", "113");
         self.define_simple_macro("LDBL_DIG", "33");
         self.define_simple_macro("DECIMAL_DIG", "36");
+    }
+
+    /// Override long double macros to match double (8 bytes, IEEE 754 binary64).
+    /// Called by set_target("aarch64") on macOS where long double == double.
+    #[cfg(target_os = "macos")]
+    fn override_ldbl_as_double(&mut self) {
+        self.define_simple_macro("__SIZEOF_LONG_DOUBLE__", "8");
+        self.define_simple_macro("__LDBL_MANT_DIG__", "53");
+        self.define_simple_macro("__LDBL_DIG__", "15");
+        self.define_simple_macro("__LDBL_MIN_EXP__", "(-1021)");
+        self.define_simple_macro("__LDBL_MIN_10_EXP__", "(-307)");
+        self.define_simple_macro("__LDBL_MAX_EXP__", "1024");
+        self.define_simple_macro("__LDBL_MAX_10_EXP__", "308");
+        self.define_simple_macro("__LDBL_MAX__", "1.79769313486231570814527423731704357e+308L");
+        self.define_simple_macro("__LDBL_MIN__", "2.22507385850720138309023271733240406e-308L");
+        self.define_simple_macro("__LDBL_EPSILON__", "2.22044604925031308084726333618164062e-16L");
+        self.define_simple_macro("__LDBL_DENORM_MIN__", "4.94065645841246544176568792868221372e-324L");
+        self.define_simple_macro("__LDBL_DECIMAL_DIG__", "17");
+        self.define_simple_macro("__DECIMAL_DIG__", "17");
+        // <float.h> macros
+        self.define_simple_macro("LDBL_MANT_DIG", "53");
+        self.define_simple_macro("LDBL_DIG", "15");
+        self.define_simple_macro("DECIMAL_DIG", "17");
     }
 
     /// Override RISC-V preprocessor macros based on -mabi= and -march= flags.

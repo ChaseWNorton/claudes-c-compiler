@@ -1642,6 +1642,136 @@ vpadalq_u8(uint16x8_t __acc, uint8x16_t __a)
     return __ret;
 }
 
+/* vpadalq_u16: pairwise add and accumulate long u16 -> u32 */
+static __inline__ uint32x4_t __attribute__((__always_inline__))
+vpadalq_u16(uint32x4_t __acc, uint16x8_t __a)
+{
+    uint32x4_t __ret;
+    for (int __i = 0; __i < 4; __i++)
+        __ret.__val[__i] = __acc.__val[__i] + (unsigned int)__a.__val[__i * 2] + (unsigned int)__a.__val[__i * 2 + 1];
+    return __ret;
+}
+
+/* vpadalq_u32: pairwise add and accumulate long u32 -> u64 */
+static __inline__ uint64x2_t __attribute__((__always_inline__))
+vpadalq_u32(uint64x2_t __acc, uint32x4_t __a)
+{
+    uint64x2_t __ret;
+    __ret.__val[0] = __acc.__val[0] + (unsigned long long)__a.__val[0] + (unsigned long long)__a.__val[1];
+    __ret.__val[1] = __acc.__val[1] + (unsigned long long)__a.__val[2] + (unsigned long long)__a.__val[3];
+    return __ret;
+}
+
+/* vcnt_u8: population count per byte (8-byte vector) */
+static __inline__ uint8x8_t __attribute__((__always_inline__))
+vcnt_u8(uint8x8_t __a)
+{
+    uint8x8_t __ret;
+    for (int __i = 0; __i < 8; __i++) {
+        unsigned char __v = __a.__val[__i];
+        __v = (__v & 0x55) + ((__v >> 1) & 0x55);
+        __v = (__v & 0x33) + ((__v >> 2) & 0x33);
+        __v = (__v & 0x0f) + ((__v >> 4) & 0x0f);
+        __ret.__val[__i] = __v;
+    }
+    return __ret;
+}
+
+/* vaddv_u8: horizontal add across 8-byte vector, return scalar */
+static __inline__ unsigned char __attribute__((__always_inline__))
+vaddv_u8(uint8x8_t __a)
+{
+    unsigned char __sum = 0;
+    for (int __i = 0; __i < 8; __i++)
+        __sum += __a.__val[__i];
+    return __sum;
+}
+
+/* vaddvq_u16: horizontal add across uint16x8_t, return scalar */
+static __inline__ unsigned short __attribute__((__always_inline__))
+vaddvq_u16(uint16x8_t __a)
+{
+    unsigned short __sum = 0;
+    for (int __i = 0; __i < 8; __i++)
+        __sum += __a.__val[__i];
+    return __sum;
+}
+
+/* vaddvq_u64: horizontal add across uint64x2_t, return scalar */
+static __inline__ unsigned long long __attribute__((__always_inline__))
+vaddvq_u64(uint64x2_t __a)
+{
+    return __a.__val[0] + __a.__val[1];
+}
+
+/* vcgtq_s8: compare greater-than signed 8-bit */
+static __inline__ uint8x16_t __attribute__((__always_inline__))
+vcgtq_s8(int8x16_t __a, int8x16_t __b)
+{
+    uint8x16_t __ret;
+    for (int __i = 0; __i < 16; __i++)
+        __ret.__val[__i] = __a.__val[__i] > __b.__val[__i] ? 0xFF : 0;
+    return __ret;
+}
+
+/* vminq_u8: element-wise minimum unsigned 8-bit */
+static __inline__ uint8x16_t __attribute__((__always_inline__))
+vminq_u8(uint8x16_t __a, uint8x16_t __b)
+{
+    uint8x16_t __ret;
+    for (int __i = 0; __i < 16; __i++)
+        __ret.__val[__i] = __a.__val[__i] < __b.__val[__i] ? __a.__val[__i] : __b.__val[__i];
+    return __ret;
+}
+
+/* vqsubq_s8: saturating subtract signed 8-bit */
+static __inline__ int8x16_t __attribute__((__always_inline__))
+vqsubq_s8(int8x16_t __a, int8x16_t __b)
+{
+    int8x16_t __ret;
+    for (int __i = 0; __i < 16; __i++) {
+        int __v = (int)__a.__val[__i] - (int)__b.__val[__i];
+        if (__v < -128) __v = -128;
+        if (__v > 127) __v = 127;
+        __ret.__val[__i] = (signed char)__v;
+    }
+    return __ret;
+}
+
+/* vzip1q_u8: zip lower halves */
+static __inline__ uint8x16_t __attribute__((__always_inline__))
+vzip1q_u8(uint8x16_t __a, uint8x16_t __b)
+{
+    uint8x16_t __ret;
+    for (int __i = 0; __i < 8; __i++) {
+        __ret.__val[__i * 2] = __a.__val[__i];
+        __ret.__val[__i * 2 + 1] = __b.__val[__i];
+    }
+    return __ret;
+}
+
+/* vzip2q_u8: zip upper halves */
+static __inline__ uint8x16_t __attribute__((__always_inline__))
+vzip2q_u8(uint8x16_t __a, uint8x16_t __b)
+{
+    uint8x16_t __ret;
+    for (int __i = 0; __i < 8; __i++) {
+        __ret.__val[__i * 2] = __a.__val[__i + 8];
+        __ret.__val[__i * 2 + 1] = __b.__val[__i + 8];
+    }
+    return __ret;
+}
+
+/* vld1_u8: load 8 bytes into uint8x8_t */
+static __inline__ uint8x8_t __attribute__((__always_inline__))
+vld1_u8(const unsigned char *__p)
+{
+    uint8x8_t __ret;
+    for (int __i = 0; __i < 8; __i++)
+        __ret.__val[__i] = __p[__i];
+    return __ret;
+}
+
 /* === Extract / Rotate === */
 
 /* vextq_u64: extract from pair of uint64x2_t */

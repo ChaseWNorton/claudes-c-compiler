@@ -32,7 +32,11 @@ impl Driver {
         } else if binary_name.contains("i686") || binary_name.contains("i386") {
             Target::I686
         } else {
-            Target::X86_64
+            // Default target based on host architecture
+            #[cfg(target_arch = "aarch64")]
+            { Target::Aarch64 }
+            #[cfg(not(target_arch = "aarch64"))]
+            { Target::X86_64 }
         };
 
         // Handle GCC query flags that exit immediately (before requiring input files).

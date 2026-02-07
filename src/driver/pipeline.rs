@@ -319,9 +319,12 @@ impl Driver {
         // Set the thread-local target pointer size for type system queries.
         // Must be done before any CType/IrType size computations.
         crate::common::types::set_target_ptr_size(self.target.ptr_size());
-        crate::common::types::set_target_long_double_is_f128(
-            matches!(self.target, Target::Aarch64 | Target::Riscv64)
-        );
+        // On macOS arm64, long double == double (not f128)
+        #[cfg(target_os = "macos")]
+        let ldbl_is_f128 = matches!(self.target, Target::Riscv64);
+        #[cfg(not(target_os = "macos"))]
+        let ldbl_is_f128 = matches!(self.target, Target::Aarch64 | Target::Riscv64);
+        crate::common::types::set_target_long_double_is_f128(ldbl_is_f128);
 
         match self.mode {
             CompileMode::PreprocessOnly => self.run_preprocess_only(),

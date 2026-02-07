@@ -295,12 +295,19 @@ impl SemanticAnalyzer {
         for param in &func.params {
             if let Some(name) = &param.name {
                 let ty = self.type_spec_to_ctype(&param.type_spec);
+                // Same logic as local variables: `const int *p` means the
+                // pointee is const, not the pointer variable itself.
+                let param_is_const = if matches!(ty, CType::Pointer(..)) {
+                    false
+                } else {
+                    param.is_const
+                };
                 self.symbol_table.declare(Symbol {
                     name: name.clone(),
                     ty,
                     explicit_alignment: None,
                     linkage: Linkage::None,
-                    is_const: param.is_const,
+                    is_const: param_is_const,
                     span: None,
                 });
             }
@@ -508,7 +515,32 @@ impl SemanticAnalyzer {
             if let CType::Array(ref elem, Some(declared_size)) = full_type {
                 if let Some(ref init) = init_decl.init {
                     if let Some(init_count) = self.count_initializer_elements(init, elem) {
-                        if init_count > declared_size {
+                        // C11 6.7.9p14: A string literal initializing a char array
+                        // may omit the null terminator if there's no room.
+                        // e.g. char hex[16] = "0123456789abcdef" is legal.
+                        let is_string_init = matches!(
+                            (elem.as_ref(), init),
+                            (CType::Char | CType::UChar, Initializer::Expr(Expr::StringLiteral(..)))
+                            | (CType::Int | CType::UInt, Initializer::Expr(Expr::WideStringLiteral(..)))
+                            | (CType::UShort | CType::Short, Initializer::Expr(Expr::Char16StringLiteral(..)))
+                        );
+                        let is_braced_string_init = match init {
+                            Initializer::List(items) if items.len() == 1 && items[0].designators.is_empty() => {
+                                matches!(
+                                    (elem.as_ref(), &items[0].init),
+                                    (CType::Char | CType::UChar, Initializer::Expr(Expr::StringLiteral(..)))
+                                    | (CType::Int | CType::UInt, Initializer::Expr(Expr::WideStringLiteral(..)))
+                                    | (CType::UShort | CType::Short, Initializer::Expr(Expr::Char16StringLiteral(..)))
+                                )
+                            }
+                            _ => false,
+                        };
+                        let max_allowed = if is_string_init || is_braced_string_init {
+                            declared_size + 1 // null terminator may be dropped
+                        } else {
+                            declared_size
+                        };
+                        if init_count > max_allowed {
                             self.diagnostics.borrow_mut().error(
                                 "excess elements in array initializer",
                                 init_decl.span,
@@ -2115,14 +2147,28 @@ impl SemanticAnalyzer {
         };
         if let Init::List(items) = init {
             for item in items {
+                // For nested designators (.pack.pattern), descend through
+                // sub-struct layouts rather than checking all against the top level.
+                let mut current_layout = layout;
                 for desig in &item.designators {
                     if let Designator::Field(ref name) = desig {
-                        if layout.field_offset(name, &*layouts).is_none() {
-                            let type_name = format!("{}", ctype);
-                            self.diagnostics.borrow_mut().error(
-                                format!("'{}' has no member named '{}'", type_name, name),
-                                span,
-                            );
+                        match current_layout.field_offset(name, &*layouts) {
+                            None => {
+                                let type_name = format!("{}", ctype);
+                                self.diagnostics.borrow_mut().error(
+                                    format!("'{}' has no member named '{}'", type_name, name),
+                                    span,
+                                );
+                                break;
+                            }
+                            Some((_offset, ref field_ty)) => {
+                                // Descend into nested struct/union for subsequent designators
+                                if let CType::Struct(ref k) | CType::Union(ref k) = field_ty {
+                                    if let Some(nested) = layouts.get(k.as_ref()) {
+                                        current_layout = nested;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2381,24 +2427,32 @@ impl SemanticAnalyzer {
                     }
                 }
             }
-            // const_struct.field = value
-            Expr::MemberAccess(base, field, _) | Expr::PointerMemberAccess(base, field, _) => {
-                if let Some(name) = Self::extract_base_identifier(base) {
-                    if let Some(sym) = self.symbol_table.lookup(&name) {
-                        if sym.is_const {
-                            self.diagnostics.borrow_mut().error(
-                                format!("assignment of member '{}' in read-only object", field),
-                                span,
-                            );
+            // const_struct.field = value (direct member access on const struct)
+            // Skip if the chain includes a pointer deref (->), since the const
+            // is on the pointer variable, not the pointed-to data.
+            Expr::MemberAccess(base, field, _) => {
+                if !Self::chain_has_pointer_deref(base) {
+                    if let Some(name) = Self::extract_base_identifier(base) {
+                        if let Some(sym) = self.symbol_table.lookup(&name) {
+                            if sym.is_const {
+                                self.diagnostics.borrow_mut().error(
+                                    format!("assignment of member '{}' in read-only object", field),
+                                    span,
+                                );
+                            }
                         }
                     }
                 }
             }
-            // const_arr[i] = value
+            // ptr->field: sym.is_const means the pointer is const (T * const p),
+            // NOT that the pointee is const. Writing through the pointer is legal.
+            Expr::PointerMemberAccess(_, _, _) => {}
+            // const_arr[i] = value — but NOT for const pointers (p[i] is legal
+            // when the pointer is const but the pointee is not)
             Expr::ArraySubscript(base, _, _) => {
                 if let Some(name) = Self::extract_base_identifier(base) {
                     if let Some(sym) = self.symbol_table.lookup(&name) {
-                        if sym.is_const {
+                        if sym.is_const && !matches!(sym.ty, CType::Pointer(..)) {
                             self.diagnostics.borrow_mut().error(
                                 format!("assignment of read-only location '{}[...]'", name),
                                 span,
@@ -2407,11 +2461,12 @@ impl SemanticAnalyzer {
                     }
                 }
             }
-            // *const_ptr = value (where the pointer variable itself is const)
+            // *p = value — if p is `T * const`, sym.is_const means the pointer
+            // is const, not the pointee. Writing through it is legal.
             Expr::Deref(inner, _) => {
                 if let Some(name) = Self::extract_base_identifier(inner) {
                     if let Some(sym) = self.symbol_table.lookup(&name) {
-                        if sym.is_const {
+                        if sym.is_const && !matches!(sym.ty, CType::Pointer(..)) {
                             self.diagnostics.borrow_mut().error(
                                 format!("assignment of read-only location '*{}'", name),
                                 span,
@@ -2421,6 +2476,19 @@ impl SemanticAnalyzer {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Check if an expression chain contains a pointer dereference (-> or *).
+    /// If so, a const qualifier on the base variable refers to the pointer,
+    /// not the pointed-to data, so modifications through the pointer are legal.
+    fn chain_has_pointer_deref(expr: &Expr) -> bool {
+        match expr {
+            Expr::PointerMemberAccess(_, _, _) | Expr::Deref(_, _) => true,
+            Expr::MemberAccess(base, _, _) | Expr::ArraySubscript(base, _, _) => {
+                Self::chain_has_pointer_deref(base)
+            }
+            _ => false,
         }
     }
 
@@ -2660,16 +2728,44 @@ impl SemanticAnalyzer {
         };
 
         for item in items {
-            // Determine which field this item targets
-            let target_field_ty = if let Some(Designator::Field(name)) = item.designators.first() {
+            // Determine which field this item targets, traversing nested
+            // designators like .p.name to find the innermost field type.
+            // Use owned CType since field_offset returns owned values (for anonymous members).
+            let target_field_ty: Option<CType> = if let Some(Designator::Field(name)) = item.designators.first() {
                 // Designated initializer: .field = value
+                // Use field_offset which handles anonymous struct/union members
                 field_idx = named_fields.iter().position(|f| f.name == *name)
                     .unwrap_or(field_idx);
-                named_fields.get(field_idx).map(|f| &f.ty)
+                let mut resolved_ty: Option<CType> = layout.field_offset(name, &*layouts)
+                    .map(|(_, ty)| ty);
+                // Traverse nested field designators: .p.name → look up "name" in p's struct type
+                for desig in item.designators.iter().skip(1) {
+                    if let Designator::Field(ref nested_name) = desig {
+                        if let Some(ref outer_ty) = resolved_ty {
+                            let nested_key = match outer_ty {
+                                CType::Struct(k) | CType::Union(k) => Some(k.clone()),
+                                _ => None,
+                            };
+                            if let Some(key) = nested_key {
+                                if let Some(nested_layout) = layouts.get(key.as_ref()) {
+                                    resolved_ty = nested_layout.field_offset(nested_name, &*layouts)
+                                        .map(|(_, ty)| ty);
+                                } else {
+                                    resolved_ty = None;
+                                    break;
+                                }
+                            } else {
+                                resolved_ty = None;
+                                break;
+                            }
+                        }
+                    }
+                }
+                resolved_ty
             } else {
                 // Positional initializer
                 if field_idx < num_fields {
-                    Some(&named_fields[field_idx].ty)
+                    Some(named_fields[field_idx].ty.clone())
                 } else {
                     // Excess element
                     None
@@ -2677,23 +2773,36 @@ impl SemanticAnalyzer {
             };
 
             if target_field_ty.is_none() && !item.designators.iter().any(|d| matches!(d, Designator::Index(_) | Designator::Range(_, _))) {
-                self.diagnostics.borrow_mut().error(
-                    "excess elements in struct initializer",
-                    span,
-                );
-                break;
+                // C11 6.7.9p20 "brace elision": if the struct's first field is
+                // an array or sub-aggregate, excess positional initializers fill
+                // that inner object transparently. Skip the error in that case.
+                let first_field_is_array = named_fields.first()
+                    .map(|f| matches!(f.ty, CType::Array(..)))
+                    .unwrap_or(false);
+                if !first_field_is_array {
+                    self.diagnostics.borrow_mut().error(
+                        "excess elements in struct initializer",
+                        span,
+                    );
+                    break;
+                }
             }
 
             // Type-check the initializer expression against the field type
-            if let Some(field_ty) = target_field_ty {
+            if let Some(ref field_ty) = target_field_ty {
                 if let Initializer::Expr(ref init_expr) = item.init {
                     if let Some(init_ty) = checker.infer_expr_ctype(init_expr) {
-                        self.check_pointer_float_conversion(
-                            &init_ty, field_ty, init_expr.span(),
-                        );
-                        self.check_implicit_conversion(
-                            field_ty, &init_ty, init_expr, init_expr.span(),
-                        );
+                        // Skip type-check when a scalar initializes a struct/union field —
+                        // C11 6.7.9p13: scalar can initialize the first element recursively
+                        let field_is_aggregate = matches!(field_ty, CType::Struct(_) | CType::Union(_));
+                        if !field_is_aggregate {
+                            self.check_pointer_float_conversion(
+                                &init_ty, field_ty, init_expr.span(),
+                            );
+                            self.check_implicit_conversion(
+                                field_ty, &init_ty, init_expr, init_expr.span(),
+                            );
+                        }
                     }
                 }
                 // Recursively check nested struct initializers

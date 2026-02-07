@@ -341,6 +341,25 @@ impl Preprocessor {
         // These use compiler builtins and should always be available.
         self.inject_builtin_macros_for_header(&include_path);
 
+        // Compiler-provided headers that CCC fully implements via builtins.
+        // These don't need a physical file — CCC's builtin macros provide
+        // all necessary definitions. On macOS (or any system without GCC
+        // headers), these files don't exist, so we return empty content
+        // instead of erroring.
+        if Self::is_compiler_provided_header(&include_path) {
+            // Try to find a real file first (e.g., on Linux with GCC headers)
+            if self.resolve_includes {
+                if let Some(_) = self.resolve_include_path(&include_path, is_system) {
+                    // Real file exists — fall through to normal processing
+                } else {
+                    // No file found — builtins are sufficient, suppress error
+                    return Some(String::new());
+                }
+            } else {
+                return Some(String::new());
+            }
+        }
+
         if !self.resolve_includes {
             // When not resolving includes, inject all fallback declarations
             // since we won't have any real headers to provide them.
@@ -730,6 +749,10 @@ impl Preprocessor {
                 // Define true/false macros only when stdbool.h is explicitly included
                 crate::frontend::preprocessor::builtin_macros::define_stdbool_true_false(&mut self.macros);
             }
+            "stdalign.h" => {
+                self.macros.define(parse_define("__alignas_is_defined 1").expect("static define"));
+                self.macros.define(parse_define("__alignof_is_defined 1").expect("static define"));
+            }
             "complex.h" => {
                 // C99 <complex.h> support - define standard complex macros
                 self.macros.define(parse_define("complex _Complex").expect("static define"));
@@ -783,6 +806,75 @@ impl Preprocessor {
                     body: "__builtin_va_arg(ap,type)".to_string(),
                 });
                 // __gnuc_va_list is also handled natively by the parser/sema/lowerer
+            }
+            "stdatomic.h" => {
+                // C11 <stdatomic.h> — atomic type aliases and operations.
+                // Memory order constants are already defined at startup (builtin_macros.rs).
+                // Atomic type names are defined as macros (not typedefs) so they are
+                // available immediately — pending_injections are deferred to include
+                // boundaries, which is too late when a header includes <stdatomic.h>
+                // and then uses atomic_int in a struct definition.
+                let atomic_type_macros: &[(&str, &str)] = &[
+                    ("atomic_bool", "_Atomic _Bool"),
+                    ("atomic_char", "_Atomic char"),
+                    ("atomic_schar", "_Atomic signed char"),
+                    ("atomic_uchar", "_Atomic unsigned char"),
+                    ("atomic_short", "_Atomic short"),
+                    ("atomic_ushort", "_Atomic unsigned short"),
+                    ("atomic_int", "_Atomic int"),
+                    ("atomic_uint", "_Atomic unsigned int"),
+                    ("atomic_long", "_Atomic long"),
+                    ("atomic_ulong", "_Atomic unsigned long"),
+                    ("atomic_llong", "_Atomic long long"),
+                    ("atomic_ullong", "_Atomic unsigned long long"),
+                    ("atomic_int_least8_t", "_Atomic int"),
+                    ("atomic_int_least16_t", "_Atomic int"),
+                    ("atomic_int_least32_t", "_Atomic int"),
+                    ("atomic_int_least64_t", "_Atomic long long"),
+                    ("atomic_uint_least8_t", "_Atomic unsigned int"),
+                    ("atomic_uint_least16_t", "_Atomic unsigned int"),
+                    ("atomic_uint_least32_t", "_Atomic unsigned int"),
+                    ("atomic_uint_least64_t", "_Atomic unsigned long long"),
+                    ("atomic_int_fast8_t", "_Atomic int"),
+                    ("atomic_int_fast16_t", "_Atomic int"),
+                    ("atomic_int_fast32_t", "_Atomic int"),
+                    ("atomic_int_fast64_t", "_Atomic long long"),
+                    ("atomic_uint_fast8_t", "_Atomic unsigned int"),
+                    ("atomic_uint_fast16_t", "_Atomic unsigned int"),
+                    ("atomic_uint_fast32_t", "_Atomic unsigned int"),
+                    ("atomic_uint_fast64_t", "_Atomic unsigned long long"),
+                    ("atomic_intptr_t", "_Atomic long"),
+                    ("atomic_uintptr_t", "_Atomic unsigned long"),
+                    ("atomic_size_t", "_Atomic unsigned long"),
+                    ("atomic_ptrdiff_t", "_Atomic long"),
+                    ("atomic_intmax_t", "_Atomic long"),
+                    ("atomic_uintmax_t", "_Atomic unsigned long"),
+                    ("atomic_flag", "_Atomic int"),
+                ];
+                for &(name, expansion) in atomic_type_macros {
+                    self.macros.define(parse_define(&format!("{} {}", name, expansion)).expect("static define"));
+                }
+                // memory_order enum and atomic_flag still need typedefs
+                self.pending_injections.push(
+                    "typedef enum { memory_order_relaxed_e=0, memory_order_consume_e=1, memory_order_acquire_e=2, memory_order_release_e=3, memory_order_acq_rel_e=4, memory_order_seq_cst_e=5 } memory_order;\n".to_string()
+                );
+                // atomic_store/load/exchange/etc. as macros
+                self.macros.define(parse_define("atomic_store(obj,val) (*(obj) = (val))").expect("static define"));
+                self.macros.define(parse_define("atomic_store_explicit(obj,val,order) (*(obj) = (val))").expect("static define"));
+                self.macros.define(parse_define("atomic_load(obj) (*(obj))").expect("static define"));
+                self.macros.define(parse_define("atomic_load_explicit(obj,order) (*(obj))").expect("static define"));
+                self.macros.define(parse_define("atomic_exchange(obj,val) __sync_lock_test_and_set(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_fetch_add(obj,val) __sync_fetch_and_add(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_fetch_add_explicit(obj,val,order) __sync_fetch_and_add(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_fetch_sub(obj,val) __sync_fetch_and_sub(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_fetch_sub_explicit(obj,val,order) __sync_fetch_and_sub(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_fetch_or(obj,val) __sync_fetch_and_or(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_fetch_and(obj,val) __sync_fetch_and_and(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_fetch_xor(obj,val) __sync_fetch_and_xor(obj,val)").expect("static define"));
+                self.macros.define(parse_define("atomic_init(obj,val) (*(obj) = (val))").expect("static define"));
+                self.macros.define(parse_define("ATOMIC_VAR_INIT(val) (val)").expect("static define"));
+                self.macros.define(parse_define("ATOMIC_FLAG_INIT 0").expect("static define"));
+                self.macros.define(parse_define("kill_dependency(y) (y)").expect("static define"));
                 // (see comment above about not injecting typedef text).
             }
             _ => {}
@@ -828,5 +920,15 @@ impl Preprocessor {
             }
             _ => {}
         }
+    }
+
+    /// Check if a header is compiler-provided and fully handled by CCC builtins.
+    /// These headers don't require a physical file on disk — CCC's predefined
+    /// macros and builtin injection provide all necessary definitions.
+    fn is_compiler_provided_header(header: &str) -> bool {
+        matches!(
+            header,
+            "stdarg.h" | "stdbool.h" | "stdatomic.h" | "stdnoreturn.h" | "stdalign.h"
+        )
     }
 }
