@@ -37,6 +37,7 @@ use crate::frontend::parser::ast::{
     ForInit,
     FunctionDef,
     Initializer,
+    InitializerItem,
     SizeofArg,
     Stmt,
     StructFieldDecl,
@@ -686,6 +687,14 @@ impl SemanticAnalyzer {
                                 &var_ty, &init_ty, init_expr, init_expr.span(),
                             );
                         }
+                    }
+                }
+                // Check struct/union initializer lists for excess elements and
+                // type mismatches between initializer expressions and field types.
+                if let Initializer::List(items) = init {
+                    if let Some(sym) = self.symbol_table.lookup(&init_decl.name) {
+                        let var_ty = sym.ty.clone();
+                        self.check_struct_union_initializer(&var_ty, items, init_decl.span);
                     }
                 }
             }
@@ -2318,6 +2327,105 @@ impl SemanticAnalyzer {
         }
     }
 
+    /// Check a struct/union initializer list for excess elements and type mismatches.
+    /// C11 6.7.9: each element in a brace-enclosed list initializes the corresponding
+    /// member of the struct/union. Excess elements and type mismatches are diagnosed.
+    fn check_struct_union_initializer(
+        &self,
+        var_ty: &CType,
+        items: &[InitializerItem],
+        span: Span,
+    ) {
+        let key = match var_ty {
+            CType::Struct(k) | CType::Union(k) => k,
+            // For arrays of structs, check each braced sub-initializer
+            CType::Array(elem, _) => {
+                if let CType::Struct(_) | CType::Union(_) = elem.as_ref() {
+                    for item in items {
+                        if let Initializer::List(sub_items) = &item.init {
+                            self.check_struct_union_initializer(elem, sub_items, span);
+                        }
+                    }
+                    return;
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        };
+
+        let layouts = self.result.type_context.borrow_struct_layouts();
+        let layout = match layouts.get(key.as_ref()) {
+            Some(l) => l,
+            None => return,
+        };
+
+        let fields = &layout.fields;
+        // Skip unnamed/padding fields for counting purposes
+        let named_fields: Vec<_> = fields.iter().filter(|f| !f.name.is_empty()).collect();
+        let num_fields = named_fields.len();
+
+        // Count non-designated items (positional initializers)
+        let mut field_idx = 0usize;
+        let checker = super::type_checker::ExprTypeChecker {
+            symbols: &self.symbol_table,
+            types: &self.result.type_context,
+            functions: &self.result.functions,
+            expr_types: Some(&self.result.expr_types),
+        };
+
+        for item in items {
+            // Determine which field this item targets
+            let target_field_ty = if let Some(Designator::Field(name)) = item.designators.first() {
+                // Designated initializer: .field = value
+                field_idx = named_fields.iter().position(|f| f.name == *name)
+                    .unwrap_or(field_idx);
+                named_fields.get(field_idx).map(|f| &f.ty)
+            } else {
+                // Positional initializer
+                if field_idx < num_fields {
+                    Some(&named_fields[field_idx].ty)
+                } else {
+                    // Excess element
+                    None
+                }
+            };
+
+            if target_field_ty.is_none() && !item.designators.iter().any(|d| matches!(d, Designator::Index(_) | Designator::Range(_, _))) {
+                self.diagnostics.borrow_mut().error(
+                    "excess elements in struct initializer",
+                    span,
+                );
+                break;
+            }
+
+            // Type-check the initializer expression against the field type
+            if let Some(field_ty) = target_field_ty {
+                if let Initializer::Expr(ref init_expr) = item.init {
+                    if let Some(init_ty) = checker.infer_expr_ctype(init_expr) {
+                        self.check_pointer_float_conversion(
+                            &init_ty, field_ty, init_expr.span(),
+                        );
+                        self.check_implicit_conversion(
+                            field_ty, &init_ty, init_expr, init_expr.span(),
+                        );
+                    }
+                }
+                // Recursively check nested struct initializers
+                if let Initializer::List(ref sub_items) = item.init {
+                    self.check_struct_union_initializer(field_ty, sub_items, span);
+                }
+            }
+
+            // Advance field index for non-designated items
+            if !item.designators.iter().any(|d| matches!(d, Designator::Field(_))) {
+                field_idx += 1;
+            } else {
+                field_idx += 1; // Move past the designated field
+            }
+        }
+    }
+
     /// Check if a sizeof type argument refers to an incomplete struct/union.
     /// Reports an error like GCC: "invalid application of 'sizeof' to incomplete type"
     fn check_sizeof_incomplete_type(&self, ts: &TypeSpecifier, span: Span) {
@@ -3412,5 +3520,50 @@ mod tests {
     fn excess_global_array_initializer_error() {
         let e = sema_errors("int arr[2] = {1, 2, 3};");
         assert!(e > 0, "excess elements in global array initializer should produce error");
+    }
+
+    // ---- struct/union initializer checks (issue #86) ----
+
+    #[test]
+    fn struct_init_string_for_int_warns() {
+        // "oops" initializing an int field should warn about pointer-to-integer
+        let (_, w) = sema_counts(
+            "void f(void) { struct { int x; int y; } s = { \"oops\", 0 }; (void)s; }"
+        );
+        assert!(w > 0, "string literal for int field should produce warning");
+    }
+
+    #[test]
+    fn struct_init_int_for_pointer_warns() {
+        // 42 initializing an int* field should warn
+        let (_, w) = sema_counts(
+            "void f(void) { struct { int *p; } s = { 42 }; (void)s; }"
+        );
+        assert!(w > 0, "integer for pointer field should produce warning");
+    }
+
+    #[test]
+    fn struct_init_valid_no_warning() {
+        let (e, w) = sema_counts(
+            "void f(void) { struct { int x; int y; } s = { 1, 2 }; (void)s; }"
+        );
+        assert_eq!(e, 0, "valid struct initializer should produce no errors");
+        assert_eq!(w, 0, "valid struct initializer should produce no warnings");
+    }
+
+    #[test]
+    fn struct_init_excess_elements_error() {
+        let e = sema_errors(
+            "void f(void) { struct { int x; int y; int z; } s = { 1, 2, 3, 42 }; (void)s; }"
+        );
+        assert!(e > 0, "excess elements in struct initializer should produce error");
+    }
+
+    #[test]
+    fn struct_init_fewer_elements_no_error() {
+        let e = sema_errors(
+            "void f(void) { struct { int x; int y; int z; } s = { 1 }; (void)s; }"
+        );
+        assert_eq!(e, 0, "fewer elements than fields should not produce error");
     }
 }
