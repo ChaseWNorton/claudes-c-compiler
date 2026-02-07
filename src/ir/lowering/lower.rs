@@ -1641,4 +1641,48 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn variadic_fptr_call_is_detected() {
+        // Issue #136: indirect calls through variadic function pointers should
+        // have is_variadic=true and correct num_fixed_args.
+        let module = compile_to_ir(r#"
+            int (*p)(const char *, ...);
+            void f(void) {
+                p("hello %d", 42);
+            }
+        "#);
+        let func = module.functions.iter().find(|f| f.name == "f").unwrap();
+        let mut found = false;
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if let Instruction::CallIndirect { info, .. } = inst {
+                    assert!(info.is_variadic, "indirect call through variadic fptr should be variadic");
+                    assert_eq!(info.num_fixed_args, 1,
+                        "variadic fptr with 1 fixed param should have num_fixed_args=1, got {}", info.num_fixed_args);
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "should have a CallIndirect for function pointer call");
+    }
+
+    #[test]
+    fn non_variadic_fptr_call_unchanged() {
+        // Non-variadic function pointers should still have is_variadic=false.
+        let module = compile_to_ir(r#"
+            int (*fp)(int);
+            void f(void) {
+                fp(42);
+            }
+        "#);
+        let func = module.functions.iter().find(|f| f.name == "f").unwrap();
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if let Instruction::CallIndirect { info, .. } = inst {
+                    assert!(!info.is_variadic, "non-variadic fptr should not be variadic");
+                }
+            }
+        }
+    }
 }

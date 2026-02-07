@@ -229,9 +229,17 @@ impl Lowerer {
 
         // Detect variadic status early (needed for complex arg decomposition)
         let call_is_variadic = if let Expr::Identifier(name, _) = stripped_func {
-            self.is_function_variadic(name)
+            if self.is_function_variadic(name) {
+                true
+            } else if self.is_func_ptr_variable(name) {
+                // Check function pointer type for variadic flag
+                self.is_indirect_call_variadic(effective_func)
+            } else {
+                false
+            }
         } else {
-            false
+            // Non-identifier function expression (e.g., array[i](), (*fp)())
+            self.is_indirect_call_variadic(effective_func)
         };
 
         // Decompose complex double/float arguments into (real, imag) pairs for ABI compliance
@@ -282,35 +290,24 @@ impl Lowerer {
                 } else {
                     self.func_meta.sigs.get(name.as_str())
                 };
-                if let Some(sig) = variadic_sig {
-                    if !sig.param_ctypes.is_empty() {
-                        let decomposes_cld = self.decomposes_complex_long_double();
-                        let decomposes_cd = self.decomposes_complex_double();
-                        let decomposes_cf = self.decomposes_complex_float();
-                        sig.param_ctypes.iter().map(|ct| {
-                            match ct {
-                                CType::ComplexDouble if decomposes_cd => 2,
-                                // Fixed ComplexFloat params are decomposed into 2 FP regs
-                                // on 64-bit targets (not x86-64 packed, not i686 struct)
-                                CType::ComplexFloat if decomposes_cf && !self.uses_packed_complex_float() => 2,
-                                CType::ComplexLongDouble if decomposes_cld => 2,
-                                _ => 1,
-                            }
-                        }).sum()
-                    } else if !sig.param_types.is_empty() {
-                        sig.param_types.len()
-                    } else {
-                        arg_vals.len()
-                    }
+                if variadic_sig.is_some() {
+                    self.compute_num_fixed_args(variadic_sig, arg_vals.len())
                 } else {
-                    arg_vals.len()
+                    // Fall back to function type from CType for func ptr variables
+                    self.get_indirect_num_fixed_args(effective_func).unwrap_or(arg_vals.len())
                 }
             } else {
                 arg_vals.len()
             };
             (variadic, n_fixed)
         } else {
-            (false, arg_vals.len())
+            // Non-identifier callee: check variadic from type
+            let n_fixed = if call_is_variadic {
+                self.get_indirect_num_fixed_args(effective_func).unwrap_or(arg_vals.len())
+            } else {
+                arg_vals.len()
+            };
+            (call_is_variadic, n_fixed)
         };
 
         // Dispatch: direct call, function pointer call, or indirect call
@@ -1010,6 +1007,68 @@ impl Lowerer {
             | "fscanf" | "dprintf" | "vprintf" | "vfprintf" | "vsprintf" | "vsnprintf"
             | "syslog" | "err" | "errx" | "warn" | "warnx" | "asprintf" | "vasprintf"
             | "open" | "fcntl" | "ioctl" | "execl" | "execlp" | "execle")
+    }
+
+    /// Check if an indirect call expression has a variadic function type.
+    pub(super) fn is_indirect_call_variadic(&self, func_expr: &Expr) -> bool {
+        let ctype = self.get_expr_ctype(func_expr)
+            .or_else(|| {
+                // Try through deref chain for (*fp)() patterns
+                let mut expr = func_expr;
+                while let Expr::Deref(inner, _) = expr {
+                    expr = inner;
+                }
+                self.get_expr_ctype(expr)
+            });
+        if let Some(ct) = ctype {
+            if let Some(ft) = ct.get_function_type() {
+                return ft.variadic;
+            }
+        }
+        false
+    }
+
+    /// Compute num_fixed_args from a FuncSig, accounting for complex type decomposition.
+    fn compute_num_fixed_args(&self, sig: Option<&super::definitions::FuncSig>, fallback: usize) -> usize {
+        if let Some(sig) = sig {
+            if !sig.param_ctypes.is_empty() {
+                let decomposes_cld = self.decomposes_complex_long_double();
+                let decomposes_cd = self.decomposes_complex_double();
+                let decomposes_cf = self.decomposes_complex_float();
+                sig.param_ctypes.iter().map(|ct| {
+                    match ct {
+                        CType::ComplexDouble if decomposes_cd => 2,
+                        CType::ComplexFloat if decomposes_cf && !self.uses_packed_complex_float() => 2,
+                        CType::ComplexLongDouble if decomposes_cld => 2,
+                        _ => 1,
+                    }
+                }).sum()
+            } else if !sig.param_types.is_empty() {
+                sig.param_types.len()
+            } else {
+                fallback
+            }
+        } else {
+            fallback
+        }
+    }
+
+    /// Get the number of fixed args for an indirect (non-identifier) variadic call.
+    fn get_indirect_num_fixed_args(&self, func_expr: &Expr) -> Option<usize> {
+        let ctype = self.get_expr_ctype(func_expr)
+            .or_else(|| {
+                let mut expr = func_expr;
+                while let Expr::Deref(inner, _) = expr {
+                    expr = inner;
+                }
+                self.get_expr_ctype(expr)
+            });
+        if let Some(ct) = ctype {
+            if let Some(ft) = ct.get_function_type() {
+                return Some(ft.params.len());
+            }
+        }
+        None
     }
 
     /// Extract the return CType from a function pointer expression.
