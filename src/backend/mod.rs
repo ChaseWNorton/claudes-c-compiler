@@ -115,6 +115,12 @@ pub(crate) struct CodegenOptions {
     /// Many programs (LuaJIT, libunwind users) require .eh_frame for exception
     /// handling and stack unwinding.
     pub(crate) emit_cfi: bool,
+    /// Whether to optimize for code size (-Os/-Oz). When true, the codegen
+    /// prefers shorter instruction sequences (e.g., push-based argument passing
+    /// on i686 instead of subl+movl), reduces stack alignment from 16 to 4 bytes,
+    /// and disables jump tables. Used for the Linux kernel boot code where the
+    /// setup image must fit within 32KB.
+    pub(crate) optimize_size: bool,
 }
 
 /// Target architecture.

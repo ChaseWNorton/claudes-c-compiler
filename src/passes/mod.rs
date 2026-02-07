@@ -215,11 +215,11 @@ impl DisabledPasses {
 }
 
 /// Run Phase 0: function inlining and post-inline optimization passes.
-fn run_inline_phase(module: &mut IrModule, disabled: &str) {
+fn run_inline_phase(module: &mut IrModule, disabled: &str, optimize_size: bool) {
     if disabled.contains("inline") {
         return;
     }
-    inline::run(module);
+    inline::run(module, optimize_size);
 
     // After inlining, convert extern inline gnu_inline functions to declarations.
     // These function bodies were only needed for inlining; they must not be emitted
@@ -260,7 +260,7 @@ fn run_inline_phase(module: &mut IrModule, disabled: &str) {
 /// The `CCC_DISABLE_PASSES` environment variable can still be used to disable
 /// individual passes or all passes (`CCC_DISABLE_PASSES=all`) regardless of
 /// the optimization level.
-pub(crate) fn run_passes(module: &mut IrModule, opt_level: u32, target: crate::backend::Target) {
+pub(crate) fn run_passes(module: &mut IrModule, opt_level: u32, target: crate::backend::Target, optimize_size: bool) {
     let disabled = std::env::var("CCC_DISABLE_PASSES").unwrap_or_default();
     if disabled.contains("all") {
         return;
@@ -271,10 +271,11 @@ pub(crate) fn run_passes(module: &mut IrModule, opt_level: u32, target: crate::b
         return;
     }
 
-    run_inline_phase(module, &disabled);
+    run_inline_phase(module, &disabled, optimize_size);
     constant_fold::resolve_remaining_is_constant(module);
 
-    let iterations = if opt_level <= 1 { 1 } else { 3 };
+    // -Os: use 2 iterations (less code expansion from repeated transforms).
+    let iterations = if opt_level <= 1 { 1 } else if optimize_size { 2 } else { 3 };
     let num_funcs = module.functions.len();
     let mut dirty = vec![true; num_funcs];
     let dis = DisabledPasses::from_env(&disabled);
@@ -407,8 +408,10 @@ pub(crate) fn run_passes(module: &mut IrModule, opt_level: u32, target: crate::b
         // and IVSR. We compute it once per function and share it across all three.
         {
             let run_gvn = opt_level >= 2 && !dis.gvn && should_run!(5, 0, 1, 3);
-            let run_licm = opt_level >= 2 && !dis.licm && should_run!(6, 0, 1, 5);
-            let run_ivsr = opt_level >= 2 && iter == 0 && !disabled.contains("ivsr");
+            // -Os: disable LICM (hoists code out of loops, increases code outside loops)
+            // and IVSR (induction variable strength reduction can expand code).
+            let run_licm = opt_level >= 2 && !optimize_size && !dis.licm && should_run!(6, 0, 1, 5);
+            let run_ivsr = opt_level >= 2 && !optimize_size && iter == 0 && !disabled.contains("ivsr");
 
             if run_gvn || run_licm || run_ivsr {
                 let (gvn_n, licm_n, ivsr_n) = run_gvn_licm_ivsr_shared(
@@ -428,7 +431,8 @@ pub(crate) fn run_passes(module: &mut IrModule, opt_level: u32, target: crate::b
 
         // Phase 7: If-conversion
         // Upstream: cfg_simplify (simpler CFG), constfold (simplified conditions)
-        if opt_level >= 2 && !dis.ifconv && should_run!(7, 0, 4) {
+        // -Os: disable if-convert (Select instructions can be larger than branch+phi on i686).
+        if opt_level >= 2 && !optimize_size && !dis.ifconv && should_run!(7, 0, 4) {
             let n = timed_pass!("if_convert", run_on_visited(module, &dirty, &mut changed, if_convert::if_convert_function));
             cur_pass_changes[7] = n;
             total_changes += n;
@@ -598,7 +602,7 @@ mod tests {
         let (mut module, _diag) = lowerer.lower(&ast);
 
         promote_allocas(&mut module);
-        run_passes(&mut module, opt_level, Target::X86_64);
+        run_passes(&mut module, opt_level, Target::X86_64, false);
         module
     }
 

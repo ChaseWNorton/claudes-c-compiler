@@ -210,6 +210,7 @@ struct CallerState {
     is_recursive: bool,
     budget_remaining: usize,
     always_inline_budget_remaining: usize,
+    optimize_size: bool,
 }
 
 fn select_inline_site(
@@ -217,7 +218,7 @@ fn select_inline_site(
     callee_map: &HashMap<String, CalleeData>,
     cs: &CallerState,
 ) -> Option<(InlineCallSite, usize, bool)> {
-    let CallerState { too_large: caller_too_large, at_hard_cap: caller_at_hard_cap, at_absolute_cap: caller_at_absolute_cap, has_section: caller_has_section, is_recursive: caller_is_recursive, budget_remaining, always_inline_budget_remaining } = *cs;
+    let CallerState { too_large: caller_too_large, at_hard_cap: caller_at_hard_cap, at_absolute_cap: caller_at_absolute_cap, has_section: caller_has_section, is_recursive: caller_is_recursive, budget_remaining, always_inline_budget_remaining, optimize_size } = *cs;
     // First pass: look for tiny/small callees anywhere in the function.
     // These are always inlined regardless of caller size because:
     // 1. They have negligible impact on code/stack size
@@ -250,9 +251,11 @@ fn select_inline_site(
         // inlining, shift amounts can't be constant-propagated, producing
         // massive unoptimized code with 28KB+ stack frames that overflow
         // the kernel's 16KB stack.
+        let max_inl_inst = if optimize_size { 15 } else { MAX_INLINE_INSTRUCTIONS };
+        let max_inl_blks = if optimize_size { 2 } else { MAX_INLINE_BLOCKS };
         let is_static_inline_eligible = callee_data.is_static_inline
-            && callee_inst_count <= MAX_INLINE_INSTRUCTIONS
-            && callee_data.blocks.len() <= MAX_INLINE_BLOCKS;
+            && callee_inst_count <= max_inl_inst
+            && callee_data.blocks.len() <= max_inl_blks;
         // For recursive callers, only inline tiny callees and always_inline callees.
         // Inlining larger callees into recursive functions multiplies the stack frame
         // increase by the recursion depth, easily causing stack overflow.
@@ -319,7 +322,7 @@ fn select_inline_site(
 
 /// Run the inlining pass on the module.
 /// Returns the number of call sites inlined.
-pub fn run(module: &mut IrModule) -> usize {
+pub fn run(module: &mut IrModule, optimize_size: bool) -> usize {
     let mut total_inlined = 0;
     let debug_inline = std::env::var("CCC_INLINE_DEBUG").is_ok();
     let skip_list: Vec<String> = std::env::var("CCC_INLINE_SKIP")
@@ -331,7 +334,7 @@ pub fn run(module: &mut IrModule) -> usize {
 
     // Build a snapshot of eligible callees (we can't borrow module mutably while reading callees).
     // We clone the callee function bodies since we need them while mutating callers.
-    let callee_map = build_callee_map(module);
+    let callee_map = build_callee_map(module, optimize_size);
 
     if callee_map.is_empty() {
         return 0;
@@ -381,7 +384,7 @@ pub fn run(module: &mut IrModule) -> usize {
                 })
             })
         };
-        let mut budget_remaining = MAX_INLINE_BUDGET_PER_CALLER;
+        let mut budget_remaining = if optimize_size { 100 } else { MAX_INLINE_BUDGET_PER_CALLER };
         let mut always_inline_budget_remaining = MAX_ALWAYS_INLINE_BUDGET_PER_CALLER;
         // Iterate to handle chains of inlined calls (A calls B calls C, all small inline).
         // Limit iterations to prevent infinite loops from recursive inline functions.
@@ -395,7 +398,8 @@ pub fn run(module: &mut IrModule) -> usize {
             // callees are still inlined (required by C semantics).
             let caller_inst_count: usize = module.functions[func_idx].blocks.iter()
                 .map(|b| b.instructions.len()).sum();
-            let caller_too_large = caller_inst_count > MAX_CALLER_INSTRUCTIONS_AFTER_INLINE;
+            let max_after_inline = if optimize_size { 60 } else { MAX_CALLER_INSTRUCTIONS_AFTER_INLINE };
+            let caller_too_large = caller_inst_count > max_after_inline;
             let caller_at_hard_cap = caller_inst_count > MAX_CALLER_INSTRUCTIONS_HARD_CAP;
             let caller_at_absolute_cap = caller_inst_count > MAX_CALLER_INSTRUCTIONS_ABSOLUTE_CAP;
 
@@ -419,6 +423,7 @@ pub fn run(module: &mut IrModule) -> usize {
                     is_recursive: caller_is_recursive,
                     budget_remaining,
                     always_inline_budget_remaining,
+                    optimize_size,
                 },
             );
             let (site, callee_inst_count, _use_relaxed) = match found_site {
@@ -979,7 +984,11 @@ fn func_has_static_locals_with_label_refs(module: &IrModule, func_name: &str) ->
 }
 
 /// Build a map of function name -> callee data for functions eligible for inlining.
-fn build_callee_map(module: &IrModule) -> HashMap<String, CalleeData> {
+fn build_callee_map(module: &IrModule, optimize_size: bool) -> HashMap<String, CalleeData> {
+    // At -Os, use much lower thresholds for normal inlining to reduce code size.
+    // Tiny/small/always_inline thresholds are unchanged for linker correctness.
+    let max_inline_instructions = if optimize_size { 15 } else { MAX_INLINE_INSTRUCTIONS };
+    let max_inline_blocks = if optimize_size { 2 } else { MAX_INLINE_BLOCKS };
     let mut map = HashMap::new();
 
     let debug_callee = std::env::var("CCC_INLINE_DEBUG").is_ok();
@@ -1033,8 +1042,8 @@ fn build_callee_map(module: &IrModule) -> HashMap<String, CalleeData> {
         // since they fit within MAX_INLINE_INSTRUCTIONS/MAX_INLINE_BLOCKS.
         let is_medium_static = func.is_static && !func.is_inline
             && !is_small_static
-            && inst_count_for_static <= MAX_INLINE_INSTRUCTIONS
-            && func.blocks.len() <= MAX_INLINE_BLOCKS;
+            && inst_count_for_static <= max_inline_instructions
+            && func.blocks.len() <= max_inline_blocks;
         if !is_always_inline && !is_trivially_empty && !is_small_static && !is_medium_static
             && (!func.is_static || !func.is_inline) {
                 if debug_callee {
@@ -1060,7 +1069,7 @@ fn build_callee_map(module: &IrModule) -> HashMap<String, CalleeData> {
         // callees will only be inlined when the caller has a custom section attribute
         // (e.g., .head.text, .noinstr.text), where cross-section calls are dangerous.
         let inst_count: usize = func.blocks.iter().map(|b| b.instructions.len()).sum();
-        let fits_normal = inst_count <= MAX_INLINE_INSTRUCTIONS && func.blocks.len() <= MAX_INLINE_BLOCKS;
+        let fits_normal = inst_count <= max_inline_instructions && func.blocks.len() <= max_inline_blocks;
         let fits_relaxed = inst_count <= MAX_ALWAYS_INLINE_INSTRUCTIONS && func.blocks.len() <= MAX_ALWAYS_INLINE_BLOCKS;
         let exceeds_normal = !is_always_inline && !fits_normal;
         if is_always_inline {

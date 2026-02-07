@@ -1,6 +1,6 @@
 //! I686Codegen: function call operations (cdecl calling convention).
 
-use crate::ir::reexports::{Operand, Value};
+use crate::ir::reexports::{Operand, Value, IrConst};
 use crate::common::types::IrType;
 use crate::backend::call_abi;
 use crate::emit;
@@ -46,7 +46,11 @@ impl I686Codegen {
                 _ => total += 4,
             }
         }
-        (total + 15) & !15
+        if self.optimize_size {
+            (total + 3) & !3
+        } else {
+            (total + 15) & !15
+        }
     }
 
     pub(super) fn emit_call_f128_pre_convert_impl(&mut self, _args: &[Operand], _arg_classes: &[call_abi::CallArgClass], _arg_types: &[IrType], _stack_arg_space: usize) -> usize {
@@ -56,6 +60,20 @@ impl I686Codegen {
     pub(super) fn emit_call_stack_args_impl(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass],
                             arg_types: &[IrType], stack_arg_space: usize,
                             _fptr_spill: usize, _f128_temp_space: usize) -> i64 {
+        // At -Os, use push-based argument passing when all stack args are simple
+        // (4-byte or 8-byte). This saves ~8 bytes per 2-arg call vs subl+movl.
+        if self.optimize_size && stack_arg_space > 0 {
+            let all_pushable = arg_classes.iter().all(|ac| matches!(ac,
+                call_abi::CallArgClass::Stack
+                | call_abi::CallArgClass::ZeroSizeSkip
+                | call_abi::CallArgClass::IntReg { .. }
+            ));
+            if all_pushable {
+                return self.emit_call_push_based_args(args, arg_classes, arg_types, stack_arg_space);
+            }
+        }
+
+        // Standard subl+movl path
         if stack_arg_space > 0 {
             emit!(self.state, "    subl ${}, %esp", stack_arg_space);
             self.esp_adjust += stack_arg_space as i64;
@@ -100,6 +118,121 @@ impl I686Codegen {
         }
 
         stack_arg_space as i64
+    }
+
+    /// Push-based argument passing for -Os. Emits `pushl` instructions in reverse
+    /// order instead of `subl $N,%esp` + `movl` stores. Saves ~8 bytes per 2-arg call.
+    fn emit_call_push_based_args(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass],
+                                  arg_types: &[IrType], stack_arg_space: usize) -> i64 {
+        // Collect indices of stack args (skip ZeroSizeSkip and IntReg)
+        let mut stack_arg_indices: Vec<usize> = Vec::new();
+        for (i, ac) in arg_classes.iter().enumerate() {
+            if matches!(ac, call_abi::CallArgClass::Stack) {
+                stack_arg_indices.push(i);
+            }
+        }
+
+        // Push in reverse order (last arg first — cdecl right-to-left)
+        for &i in stack_arg_indices.iter().rev() {
+            let ty = arg_types[i];
+            if ty == IrType::F64 || ty == IrType::I64 || ty == IrType::U64 {
+                self.emit_push_8byte_arg(&args[i], ty);
+            } else {
+                self.emit_push_4byte_arg(&args[i]);
+            }
+        }
+
+        stack_arg_space as i64
+    }
+
+    /// Push a 4-byte argument. Uses `pushl $imm` for constants (2-5 bytes)
+    /// or `pushl slot_ref` for values (avoids movl to eax).
+    fn emit_push_4byte_arg(&mut self, arg: &Operand) {
+        match arg {
+            Operand::Const(c) => {
+                let val = match c {
+                    IrConst::I32(v) => *v as i64,
+                    IrConst::I8(v) => *v as i64,
+                    IrConst::I16(v) => *v as i64,
+                    IrConst::F32(f) => f.to_bits() as i64,
+                    IrConst::Zero => 0,
+                    _ => {
+                        self.operand_to_eax(arg);
+                        self.state.emit("    pushl %eax");
+                        self.esp_adjust += 4;
+                        return;
+                    }
+                };
+                emit!(self.state, "    pushl ${}", val as i32);
+            }
+            Operand::Value(v) => {
+                if let Some(slot) = self.state.get_slot(v.0) {
+                    let sr = self.slot_ref(slot);
+                    emit!(self.state, "    pushl {}", sr);
+                } else {
+                    self.operand_to_eax(arg);
+                    self.state.emit("    pushl %eax");
+                }
+            }
+            _ => {
+                self.operand_to_eax(arg);
+                self.state.emit("    pushl %eax");
+            }
+        }
+        self.esp_adjust += 4;
+    }
+
+    /// Push an 8-byte argument (I64, U64, F64). Pushes high word first, then low word.
+    fn emit_push_8byte_arg(&mut self, arg: &Operand, ty: IrType) {
+        match arg {
+            Operand::Value(v) => {
+                if let Some(slot) = self.state.get_slot(v.0) {
+                    // Push high word first, then low word
+                    let sr4 = self.slot_ref_offset(slot, 4);
+                    emit!(self.state, "    pushl {}", sr4);
+                    self.esp_adjust += 4;
+                    let sr0 = self.slot_ref(slot);
+                    emit!(self.state, "    pushl {}", sr0);
+                    self.esp_adjust += 4;
+                } else {
+                    // No slot — load to eax and push with zero high word
+                    self.operand_to_eax(arg);
+                    self.state.emit("    pushl $0");
+                    self.esp_adjust += 4;
+                    self.state.emit("    pushl %eax");
+                    self.esp_adjust += 4;
+                }
+            }
+            Operand::Const(IrConst::F64(f)) => {
+                let bits = f.to_bits();
+                let lo = (bits & 0xFFFF_FFFF) as u32 as i32;
+                let hi = (bits >> 32) as u32 as i32;
+                emit!(self.state, "    pushl ${}", hi);
+                self.esp_adjust += 4;
+                emit!(self.state, "    pushl ${}", lo);
+                self.esp_adjust += 4;
+            }
+            Operand::Const(IrConst::I64(v)) => {
+                let lo = (*v as u64 & 0xFFFF_FFFF) as u32 as i32;
+                let hi = ((*v as u64) >> 32) as u32 as i32;
+                emit!(self.state, "    pushl ${}", hi);
+                self.esp_adjust += 4;
+                emit!(self.state, "    pushl ${}", lo);
+                self.esp_adjust += 4;
+            }
+            _ => {
+                // Fallback: load to eax, push with zero high word
+                self.operand_to_eax(arg);
+                if ty == IrType::F64 {
+                    self.state.emit("    pushl $0");
+                } else {
+                    self.state.emit("    pushl $0");
+                }
+                self.esp_adjust += 4;
+                self.state.emit("    pushl %eax");
+                self.esp_adjust += 4;
+            }
+        }
     }
 
     pub(super) fn emit_call_reg_args_impl(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass],

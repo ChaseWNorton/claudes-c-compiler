@@ -238,6 +238,7 @@ mod tests {
             regparm: 0,
             omit_frame_pointer: false,
             emit_cfi: false,
+            optimize_size: false,
         };
         Target::X86_64.generate_assembly_with_opts_and_debug(&module, &opts, None)
     }

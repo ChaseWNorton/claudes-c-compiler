@@ -123,7 +123,8 @@ impl I686Codegen {
             callee_saved_bytes + 8
         };
         let needed = raw_locals + fixed_overhead;
-        let aligned = (needed + 15) & !15;
+        let align = if self.optimize_size { 4 } else { 16 };
+        let aligned = (needed + align - 1) & !(align - 1);
         aligned - fixed_overhead
     }
 

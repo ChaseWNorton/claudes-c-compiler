@@ -71,6 +71,9 @@ pub struct I686Codegen {
     /// subl $4,%esp for f32 conversion). Incremented on subl, decremented on addl.
     /// Added to frame_base_offset in slot_ref() to get the correct ESP offset.
     pub(super) esp_adjust: i64,
+    /// Whether to optimize for code size (-Os). Enables push-based argument
+    /// passing, 4-byte stack alignment, and other size-preferring codegen.
+    pub(super) optimize_size: bool,
 }
 
 // Callee-saved physical register indices for i686
@@ -130,6 +133,7 @@ impl I686Codegen {
             omit_frame_pointer: false,
             frame_base_offset: 0,
             esp_adjust: 0,
+            optimize_size: false,
         }
     }
 
@@ -148,6 +152,7 @@ impl I686Codegen {
         self.regparm = opts.regparm;
         self.omit_frame_pointer = opts.omit_frame_pointer;
         self.state.emit_cfi = opts.emit_cfi;
+        self.optimize_size = opts.optimize_size;
     }
 
     // --- i686 helper methods ---

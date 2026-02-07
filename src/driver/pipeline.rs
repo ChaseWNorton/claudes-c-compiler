@@ -1096,7 +1096,7 @@ impl Driver {
         if time_phases { eprintln!("[TIME] mem2reg: {:.3}s", t5.elapsed().as_secs_f64()); }
 
         let t6 = std::time::Instant::now();
-        run_passes(&mut module, self.opt_level, self.target);
+        run_passes(&mut module, self.opt_level, self.target, self.optimize_size);
         if time_phases { eprintln!("[TIME] opt passes: {:.3}s", t6.elapsed().as_secs_f64()); }
 
         // Lower SSA phi nodes to copies before codegen
@@ -1122,7 +1122,7 @@ impl Driver {
             no_sse: self.no_sse,
             general_regs_only: self.general_regs_only,
             code_model_kernel: self.code_model_kernel,
-            no_jump_tables: self.no_jump_tables,
+            no_jump_tables: self.no_jump_tables || self.optimize_size,
             no_relax: self.riscv_no_relax,
             debug_info: self.debug_info,
             function_sections: self.function_sections,
@@ -1131,6 +1131,7 @@ impl Driver {
             regparm: self.regparm,
             omit_frame_pointer: self.omit_frame_pointer,
             emit_cfi: !self.no_unwind_tables,
+            optimize_size: self.optimize_size,
         };
         let asm = self.target.generate_assembly_with_opts_and_debug(
             &module, &opts, source_manager.as_ref(),
