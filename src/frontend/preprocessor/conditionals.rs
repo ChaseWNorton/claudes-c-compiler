@@ -345,35 +345,63 @@ fn tokenize_expr(expr: &str) -> Vec<ExprToken> {
         // Character literal
         if b == b'\'' {
             i += 1;
-            let val = if i < len && bytes[i] == b'\\' {
-                i += 1;
-                let c = if i < len {
-                    let c = match bytes[i] {
-                        b'n' => b'\n',
-                        b't' => b'\t',
-                        b'r' => b'\r',
-                        b'0' => b'\0',
-                        b'\\' => b'\\',
-                        b'\'' => b'\'',
-                        b'a' => 0x07,
-                        b'b' => 0x08,
-                        b'f' => 0x0C,
-                        b'v' => 0x0B,
-                        other => other,
-                    };
+            // Parse one or more characters (multi-character constants)
+            let mut val: i64 = 0;
+            while i < len && bytes[i] != b'\'' {
+                let c = if bytes[i] == b'\\' {
+                    i += 1;
+                    if i >= len { 0u8 as i64 } else {
+                        match bytes[i] {
+                            b'n' => { i += 1; b'\n' as i64 }
+                            b't' => { i += 1; b'\t' as i64 }
+                            b'r' => { i += 1; b'\r' as i64 }
+                            b'\\' => { i += 1; b'\\' as i64 }
+                            b'\'' => { i += 1; b'\'' as i64 }
+                            b'a' => { i += 1; 0x07i64 }
+                            b'b' => { i += 1; 0x08i64 }
+                            b'f' => { i += 1; 0x0Ci64 }
+                            b'v' => { i += 1; 0x0Bi64 }
+                            b'x' => {
+                                // Hex escape: \xNN...
+                                i += 1;
+                                let mut hex_val: i64 = 0;
+                                while i < len && bytes[i].is_ascii_hexdigit() {
+                                    let d = match bytes[i] {
+                                        b'0'..=b'9' => (bytes[i] - b'0') as i64,
+                                        b'a'..=b'f' => (bytes[i] - b'a' + 10) as i64,
+                                        b'A'..=b'F' => (bytes[i] - b'A' + 10) as i64,
+                                        _ => break,
+                                    };
+                                    hex_val = (hex_val << 4) | d;
+                                    i += 1;
+                                }
+                                hex_val & 0xFF
+                            }
+                            b'0'..=b'7' => {
+                                // Octal escape: \0, \012, etc. (up to 3 digits)
+                                let mut oct_val = (bytes[i] - b'0') as i64;
+                                i += 1;
+                                for _ in 0..2 {
+                                    if i < len && bytes[i] >= b'0' && bytes[i] <= b'7' {
+                                        oct_val = (oct_val << 3) | (bytes[i] - b'0') as i64;
+                                        i += 1;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                oct_val & 0xFF
+                            }
+                            other => { i += 1; other as i64 }
+                        }
+                    }
+                } else {
+                    let c = bytes[i] as i64;
                     i += 1;
                     c
-                } else {
-                    0
                 };
-                c as i64
-            } else if i < len {
-                let c = bytes[i] as i64;
-                i += 1;
-                c
-            } else {
-                0
-            };
+                // Multi-character constant: shift left and OR in next char (GCC behavior)
+                val = (val << 8) | (c & 0xFF);
+            }
             // Skip closing quote
             if i < len && bytes[i] == b'\'' {
                 i += 1;
@@ -808,5 +836,53 @@ impl<'a> ExprParser<'a> {
                 (0, false)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::preprocessor::macro_defs::MacroTable;
+
+    fn eval_cond(expr: &str) -> bool {
+        let macros = MacroTable::new();
+        evaluate_condition(expr, &macros)
+    }
+
+    #[test]
+    fn hex_escape_in_char_literal() {
+        // Issue #134: \x hex escapes should produce correct values
+        assert!(eval_cond(r"'\x41' == 65"));
+        assert!(eval_cond(r"'\xff' == 255"));
+        assert!(eval_cond(r"'\x0' == 0"));
+        assert!(eval_cond(r"'\x1F' == 31"));
+    }
+
+    #[test]
+    fn octal_escape_multi_digit() {
+        // Issue #134: multi-digit octal escapes (\012) should read all digits
+        assert!(eval_cond(r"'\012' == 10"));
+        assert!(eval_cond(r"'\0' == 0"));
+        assert!(eval_cond(r"'\177' == 127"));
+        assert!(eval_cond(r"'\101' == 65"));
+    }
+
+    #[test]
+    fn multi_char_constant() {
+        // Issue #134: multi-character constants should shift and combine bytes
+        assert!(eval_cond(r"'A' == 65"));
+        assert!(eval_cond(r"'AB' == 0x4142"));
+        assert!(eval_cond(r"'ABCD' == 0x41424344"));
+    }
+
+    #[test]
+    fn simple_escape_sequences() {
+        // Existing escape sequences should still work
+        assert!(eval_cond(r"'\n' == 10"));
+        assert!(eval_cond(r"'\t' == 9"));
+        assert!(eval_cond(r"'\r' == 13"));
+        assert!(eval_cond(r"'\0' == 0"));
+        assert!(eval_cond(r"'\\' == 92"));
+        assert!(eval_cond(r"'\a' == 7"));
     }
 }
