@@ -813,6 +813,12 @@ impl<'a> SemaConstEval<'a> {
             TypeSpecifier::Array(elem, Some(size)) => {
                 let elem_size = self.sizeof_type_spec(elem)?;
                 let n = self.eval_const_expr(size)?.to_i64()?;
+                // C11 6.7.6.2p1: array size must be greater than zero.
+                // Negative sizes are a constraint violation; return 0 to avoid
+                // wrapping via `as usize`.
+                if n <= 0 {
+                    return Some(0);
+                }
                 Some(elem_size * n as usize)
             }
             TypeSpecifier::Array(_, None) => Some(ptr_sz), // incomplete array

@@ -394,7 +394,7 @@ impl Lowerer {
         if let TypeSpecifier::Array(elem, Some(size_expr)) = ts {
             let elem_size = self.sizeof_type(elem);
             return self.expr_as_array_size(size_expr)
-                .map(|n| elem_size * n as usize)
+                .map(|n| if n <= 0 { 0 } else { elem_size * n as usize })
                 .unwrap_or(elem_size);
         }
         self.struct_union_layout(ts).map(|l| l.size).unwrap_or(crate::common::types::target_ptr_size())
