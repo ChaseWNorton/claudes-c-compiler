@@ -510,8 +510,18 @@ impl Lowerer {
                     });
                     Some(Operand::Value(dest_val))
                 } else {
-                    // TODO: support non-zero levels by walking the frame pointer chain
-                    // Non-zero levels: return NULL (matching GCC behavior for non-optimized)
+                    // Non-zero levels: return NULL. Emit warning so users know.
+                    let builtin_name = if *intrinsic == BuiltinIntrinsic::FrameAddress {
+                        "__builtin_frame_address"
+                    } else {
+                        "__builtin_return_address"
+                    };
+                    if let Some(span) = args.first().map(|a| a.span()) {
+                        self.emit_warning(
+                            format!("{}() with level > 0 always returns NULL (frame chain walking not implemented)", builtin_name),
+                            span,
+                        );
+                    }
                     Some(Operand::Const(IrConst::I64(0)))
                 }
             }

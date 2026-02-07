@@ -1963,4 +1963,13 @@ mod tests {
             other => panic!("expected (Scalar(F64), Scalar(F64)), got {:?}", other),
         }
     }
+
+    #[test]
+    fn frame_address_level_gt0_warns() {
+        let (_, diag) = compile_to_ir_with_diag(r#"
+            void *f(void) { return __builtin_frame_address(1); }
+        "#);
+        assert!(diag.warning_count() >= 1,
+            "expected warning for __builtin_frame_address(1), got {} warnings", diag.warning_count());
+    }
 }
