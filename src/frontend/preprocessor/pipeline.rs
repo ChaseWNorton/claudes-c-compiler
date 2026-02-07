@@ -911,8 +911,15 @@ impl Preprocessor {
                 if keyword.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                     let line_rest = format!("{} {}", keyword, rest);
                     self.handle_line_directive(&line_rest, line_num);
+                } else {
+                    // Unknown directive — emit warning for typos like #defin
+                    self.warnings.push(PreprocessorDiagnostic {
+                        file: self.current_file(),
+                        line: line_num,
+                        col,
+                        message: format!("unknown preprocessing directive #{}",  keyword),
+                    });
                 }
-                // Otherwise unknown directive, ignore silently
             }
         }
 
@@ -1126,6 +1133,18 @@ int c = 3;
             "expected macro VERSION to be expanded to 42 in #warning, got: {}", warnings[0].message);
         assert!(!warnings[0].message.contains("VERSION"),
             "#warning should expand VERSION macro, got: {}", warnings[0].message);
+    }
+
+    #[test]
+    fn unknown_directive_produces_warning() {
+        // Issue #172: unknown preprocessor directives should produce a warning
+        let mut pp = Preprocessor::new();
+        pp.set_target("x86_64");
+        pp.set_filename("<test>");
+        let _ = pp.preprocess("#defin FOO 1\n");
+        assert!(!pp.warnings.is_empty(), "expected warning for unknown directive #defin");
+        assert!(pp.warnings[0].message.contains("#defin"),
+            "warning should mention the unknown directive, got: {}", pp.warnings[0].message);
     }
 
     #[test]
