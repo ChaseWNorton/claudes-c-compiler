@@ -277,6 +277,9 @@ impl InstructionEncoder {
             }
             // Far jump
             "ljmpl" | "ljmpw" | "ljmp" => self.encode_ljmp(ops),
+            // Far call
+            "lcallw" => self.encode_lcall(ops, 2),
+            "lcalll" | "lcall" => self.encode_lcall(ops, 4),
             // Far return
             "lret" | "lretl" => {
                 if ops.is_empty() {

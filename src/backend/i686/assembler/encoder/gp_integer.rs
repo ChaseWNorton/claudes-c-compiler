@@ -395,6 +395,26 @@ impl super::InstructionEncoder {
                 }
                 Ok(())
             }
+            Operand::Register(reg) => {
+                if is_segment_reg(&reg.name) {
+                    // Segment register pushes: segment regs are always 16-bit,
+                    // no operand-size prefix needed.
+                    match reg.name.as_str() {
+                        "es" => { self.bytes.push(0x06); Ok(()) }
+                        "cs" => { self.bytes.push(0x0E); Ok(()) }
+                        "ss" => { self.bytes.push(0x16); Ok(()) }
+                        "ds" => { self.bytes.push(0x1E); Ok(()) }
+                        "fs" => { self.bytes.extend_from_slice(&[0x0F, 0xA0]); Ok(()) }
+                        "gs" => { self.bytes.extend_from_slice(&[0x0F, 0xA8]); Ok(()) }
+                        _ => Err(format!("cannot push {}", reg.name)),
+                    }
+                } else {
+                    let num = reg_num(&reg.name).ok_or("bad register")?;
+                    self.bytes.push(0x66);
+                    self.bytes.push(0x50 + num);
+                    Ok(())
+                }
+            }
             _ => Err("unsupported pushw operand".to_string()),
         }
     }
@@ -1224,6 +1244,61 @@ impl super::InstructionEncoder {
                 }
             }
             _ => Err("ljmp requires 1 or 2 operands".to_string()),
+        }
+    }
+
+    /// Encode far call (lcallw/lcalll): indirect through memory or label.
+    /// lcallw uses 0x66 prefix for 16-bit operand size, FF /3 modrm.
+    pub(super) fn encode_lcall(&mut self, ops: &[Operand], size: u8) -> Result<(), String> {
+        if ops.len() == 1 {
+            if size == 2 {
+                self.bytes.push(0x66);
+            }
+            match &ops[0] {
+                Operand::Indirect(inner) => {
+                    match inner.as_ref() {
+                        Operand::Memory(mem) => {
+                            self.emit_segment_prefix(mem);
+                            self.bytes.push(0xFF);
+                            self.encode_modrm_mem(3, mem)
+                        }
+                        Operand::Label(label) => {
+                            self.bytes.push(0xFF);
+                            self.bytes.push(self.modrm(0, 3, 5));
+                            self.add_relocation_for_label(label, R_386_32);
+                            self.bytes.extend_from_slice(&[0, 0, 0, 0]);
+                            Ok(())
+                        }
+                        _ => Err("lcall indirect requires memory or label operand".to_string()),
+                    }
+                }
+                Operand::Memory(mem) => {
+                    self.emit_segment_prefix(mem);
+                    self.bytes.push(0xFF);
+                    self.encode_modrm_mem(3, mem)
+                }
+                _ => Err("lcall requires indirect memory operand".to_string()),
+            }
+        } else if ops.len() == 2 {
+            // lcall $segment, $offset - direct far call (opcode 0x9A)
+            if size == 2 {
+                self.bytes.push(0x66);
+            }
+            match (&ops[0], &ops[1]) {
+                (Operand::Immediate(ImmediateValue::Integer(seg)), Operand::Immediate(ImmediateValue::Integer(off))) => {
+                    self.bytes.push(0x9A);
+                    if size == 2 {
+                        self.bytes.extend_from_slice(&(*off as u16).to_le_bytes());
+                    } else {
+                        self.bytes.extend_from_slice(&(*off as u32).to_le_bytes());
+                    }
+                    self.bytes.extend_from_slice(&(*seg as u16).to_le_bytes());
+                    Ok(())
+                }
+                _ => Err("lcall requires $segment, $offset operands".to_string()),
+            }
+        } else {
+            Err("lcall requires 1 or 2 operands".to_string())
         }
     }
 
