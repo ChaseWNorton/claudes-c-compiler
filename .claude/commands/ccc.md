@@ -19,8 +19,43 @@ Codes: `[P<N>]` priority, `[M<N>]` milestone membership, `[MILESTONE]` milestone
 Everyone forks. Remotes are:
 - `origin` = your fork (pushable)
 - `upstream` = `anthropics/claudes-c-compiler` (read-only)
+- Additional remotes accumulate as needed — one per fork owner whose chain tip you've worked off
 
 All `git push` goes to `origin`. All PRs go from `origin` to `upstream`.
+
+## Step 0: Sync to chain tip
+
+**The chain tip is the current state of the codebase — not `main`.** Every workflow (FIX,
+TRIAGE, AUDIT, PLAN, FIND, REVIEW) must operate against chain-tip code. `main` is stale.
+
+The chain tip can be on **any contributor's fork**. When the tip is on someone else's fork,
+you need their fork as a git remote to access the branch.
+
+```bash
+# 1. Find chain tip + whose fork it's on
+CHAIN_TIP=$(gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft,headRepositoryOwner --limit 100 \
+  | jq '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)]
+        | sort_by(.number) | last')
+
+CHAIN_OWNER=$(echo "$CHAIN_TIP" | jq -r '.headRepositoryOwner.login // empty')
+CHAIN_BRANCH=$(echo "$CHAIN_TIP" | jq -r '.headRefName // empty')
+CHAIN_NUMBER=$(echo "$CHAIN_TIP" | jq -r '.number // empty')
+
+# 2. If chain exists, ensure we have the owner's fork as a remote
+if [ -n "$CHAIN_OWNER" ]; then
+    if ! git remote get-url "$CHAIN_OWNER" &>/dev/null; then
+        git remote add "$CHAIN_OWNER" "https://github.com/$CHAIN_OWNER/claudes-c-compiler.git"
+    fi
+    git fetch "$CHAIN_OWNER" "$CHAIN_BRANCH"
+fi
+```
+
+If no chain exists, fall back to `main` via `upstream`.
+
+After syncing, the local tree should reflect chain-tip code for ALL subsequent work —
+whether FIX (branching off it), TRIAGE (checking if bugs still exist), AUDIT (reading
+current code), or PLAN (assessing current gaps).
 
 ## Step 1: Detect access level
 
@@ -40,7 +75,8 @@ gh issue list --repo anthropics/claudes-c-compiler --state open --json number,ti
 gh issue list --repo anthropics/claudes-c-compiler --state closed --json number,title --limit 100
 
 # PRs (open + merged) — titles contain [Fix #N] for claim detection, [CC] for chain
-gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,headRefName,isDraft --limit 100
+# headRepositoryOwner needed to resolve which fork the chain tip is on
+gh pr list --repo anthropics/claudes-c-compiler --state open --json number,title,headRefName,isDraft,headRepositoryOwner --limit 100
 gh pr list --repo anthropics/claudes-c-compiler --state merged --json number,title --limit 20
 ```
 
@@ -85,10 +121,11 @@ CHAIN_TIP=$(echo "$OPEN_PRS" | jq -r '[.[] | select(.title | test("^\\[CC\\]")) 
 CHAIN_TIP_NUMBER=$(echo "$CHAIN_TIP" | jq -r '.number // empty')
 ```
 
-If chain exists, show it before the menu:
+If chain exists, show it before the menu (include whose fork the tip is on):
 ```
 CHAIN:
   Tip: PR #46 — [CC][Fix #21] Detect duplicate default labels
+  Fork: ChaseWNorton/claudes-c-compiler
   Length: 3 PRs (#19 → #45 → #46)
   New branches will be based off PR #46
 ```
@@ -160,7 +197,7 @@ Execute the full workflow end-to-end. Do NOT tell the user to run another comman
 The flow has four phases: validate, claim, fix, ship.
 
 1. **Validate** — if issue has `CCC:TRIAGED` comment, skip to step 2 (already validated). Otherwise: read the issue body, post `<!-- CCC:REVIEWING -->` comment, check if the bug is real. If NOT real → post `<!-- CCC:DENIED -->` comment with proof, skip to next issue. If real → post `<!-- CCC:CONFIRMED -->` comment.
-2. **Detect chain** — find the chain tip (highest non-draft `[CC]` PR). If none, use `main`.
+2. **Detect chain** — find the chain tip (highest non-draft `[CC]` PR) and whose fork it's on. If the tip owner's fork isn't a local remote, add it: `git remote add <OWNER> https://github.com/<OWNER>/claudes-c-compiler.git && git fetch <OWNER> <BRANCH>`. If no chain, use `main`.
 3. **Claim** — branch off chain tip (or main), push to `origin`, open draft PR to `upstream` with title `[CC][Fix #<N>] <description>` (or `[Fix #<N>]` if no chain). **This draft PR is a LOCK — it tells all other agents this issue is taken. Other agents MUST skip it.**
 4. **Fix** — read the source files, implement the fix, write tests, verify build.
 5. **Ship** — commit, push, **MUST mark PR ready** (`gh pr ready`), post `<!-- CCC:COMPLETE -->` comment on issue, update PR body with summary/changes/test plan. A draft PR that stays draft is invisible to reviewers — the fix is not done until it's marked ready. Once ready, your `[CC]` PR becomes the new chain tip.
