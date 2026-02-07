@@ -1768,8 +1768,9 @@ impl SemanticAnalyzer {
                 self.analyze_expr(lhs);
                 self.analyze_expr(rhs);
             }
-            Expr::CompoundLiteral(_, init, _) => {
+            Expr::CompoundLiteral(ref ts, init, span) => {
                 self.analyze_initializer(init);
+                self.check_compound_literal_fields(ts, init, *span);
             }
             Expr::Statement(compound, _) => {
                 self.analyze_compound_stmt(compound);
@@ -1913,6 +1914,37 @@ impl SemanticAnalyzer {
                 format!("'{}' has no member named '{}'", type_name, field_name),
                 span,
             );
+        }
+    }
+
+    /// Check that field designators in a compound literal initializer refer to
+    /// existing fields. Emits an error matching GCC: "'struct X' has no member named 'y'".
+    fn check_compound_literal_fields(&self, ts: &TypeSpecifier, init: &Initializer, span: Span) {
+        use crate::frontend::parser::ast::{Designator, Initializer as Init};
+        let ctype = self.type_spec_to_ctype(ts);
+        let key = match &ctype {
+            CType::Struct(key) | CType::Union(key) => key.clone(),
+            _ => return,
+        };
+        let layouts = self.result.type_context.borrow_struct_layouts();
+        let layout = match layouts.get(key.as_ref()) {
+            Some(l) => l,
+            None => return,
+        };
+        if let Init::List(items) = init {
+            for item in items {
+                for desig in &item.designators {
+                    if let Designator::Field(ref name) = desig {
+                        if layout.field_offset(name, &*layouts).is_none() {
+                            let type_name = format!("{}", ctype);
+                            self.diagnostics.borrow_mut().error(
+                                format!("'{}' has no member named '{}'", type_name, name),
+                                span,
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3308,5 +3340,26 @@ mod tests {
     fn int_shift_no_error() {
         let (e, _) = sema_counts("int f(int x) { return x >> 1; }");
         assert_eq!(e, 0, "shift on integer type should not produce an error");
+    }
+
+    // ---- compound literal field designator validation ----
+
+    #[test]
+    fn compound_literal_nonexistent_field_error() {
+        // Issue #84: (struct A){.b = 2} where struct A has no member b
+        let (e, _) = sema_counts("struct A { int a; }; void f(void) { (struct A){.b = 2}; }");
+        assert!(e > 0, "nonexistent field in compound literal should produce error");
+    }
+
+    #[test]
+    fn compound_literal_empty_struct_nonexistent_field() {
+        let (e, _) = sema_counts("struct A {}; void f(void) { (struct A){.b = 2}; }");
+        assert!(e > 0, "nonexistent field on empty struct should produce error");
+    }
+
+    #[test]
+    fn compound_literal_valid_field_no_error() {
+        let (e, _) = sema_counts("struct A { int x; }; void f(void) { (struct A){.x = 1}; }");
+        assert_eq!(e, 0, "valid field designator should not produce error");
     }
 }

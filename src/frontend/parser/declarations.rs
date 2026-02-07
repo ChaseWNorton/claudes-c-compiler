@@ -886,7 +886,11 @@ impl Parser {
                     let lo = Self::eval_const_int_expr_with_enums(lo_expr, enum_consts, None);
                     let hi = Self::eval_const_int_expr_with_enums(hi_expr, enum_consts, None);
                     if let (Some(lo_val), Some(hi_val)) = (lo, hi) {
-                        for idx in lo_val..=hi_val {
+                        // Cap expansion to prevent O(n) clone for huge ranges.
+                        // Ranges beyond 10000 are almost certainly bugs or adversarial
+                        // input — GCC also limits expansion in practice.
+                        let count = (hi_val.saturating_sub(lo_val).saturating_add(1)).min(10_000);
+                        for idx in lo_val..lo_val.saturating_add(count) {
                             let mut new_desigs = item.designators.clone();
                             new_desigs[range_pos] = Designator::Index(
                                 Expr::IntLiteral(idx, Span::dummy())
