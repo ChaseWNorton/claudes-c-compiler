@@ -826,7 +826,7 @@ impl Parser {
             };
             if let Some(val) = evaluated {
                 self.enum_constants.insert(variant.name.clone(), val);
-                next_value = Some(val + 1);
+                next_value = Some(val.wrapping_add(1));
             } else {
                 // Value not evaluable at parse time (e.g., sizeof(struct)).
                 // Don't store in the value map, but record the name so that

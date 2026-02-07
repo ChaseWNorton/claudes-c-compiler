@@ -913,7 +913,7 @@ impl SemanticAnalyzer {
                 is_const: false,
                 span: None,
             });
-            self.enum_counter += 1;
+            self.enum_counter = self.enum_counter.wrapping_add(1);
         }
     }
 
@@ -2969,7 +2969,7 @@ impl type_builder::TypeConvertContext for SemanticAnalyzer {
                     }
                 }
                 result.push((v.name.clone(), next_val));
-                next_val += 1;
+                next_val = next_val.wrapping_add(1);
             }
             result
         } else if let Some(n) = name {
@@ -4184,5 +4184,16 @@ mod tests {
         // Single case followed by a range that covers it should be diagnosed
         let (e, _) = sema_counts("void f(int x) { switch(x) { case 3: break; case 1 ... 5: break; } }");
         assert!(e > 0, "range 1...5 covers existing case 3, should produce duplicate error");
+    }
+
+    #[test]
+    fn enum_counter_overflow_no_panic() {
+        // Issue #169: enum counter at i64::MAX should not panic on auto-increment
+        let (e, _) = sema_counts(r#"
+            enum { A = 9223372036854775807LL, B };
+            int x = B;
+        "#);
+        // Should compile without panicking (B wraps to i64::MIN)
+        let _ = e;
     }
 }
