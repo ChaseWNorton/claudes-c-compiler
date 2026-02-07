@@ -695,7 +695,27 @@ impl<'a> ExprTypeChecker<'a> {
                     variadic: *variadic,
                 }))), AddressSpace::Default)
             }
-            // TODO: handle remaining TypeSpecifier variants
+            TypeSpecifier::BareFunction(ret, params, variadic) => {
+                let ret_ct = self.resolve_type_spec(ret);
+                let param_cts: Vec<(CType, Option<String>)> = params.iter().map(|p| {
+                    (self.resolve_type_spec(&p.type_spec), p.name.clone())
+                }).collect();
+                CType::Function(Box::new(FunctionType {
+                    return_type: ret_ct,
+                    params: param_cts,
+                    variadic: *variadic,
+                }))
+            }
+            TypeSpecifier::Vector(elem, size) => {
+                let elem_ct = self.resolve_type_spec(elem);
+                CType::Vector(Box::new(elem_ct), *size)
+            }
+            TypeSpecifier::AutoType => {
+                // C23 auto — type inferred from initializer, which we don't have here.
+                // Fall back to Int as a safe default since auto deduction happens elsewhere.
+                CType::Int
+            }
+            // Remaining variants fall back to Int
             _ => CType::Int,
         }
     }
