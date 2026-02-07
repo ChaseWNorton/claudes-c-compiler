@@ -462,11 +462,17 @@ impl Lowerer {
             BuiltinIntrinsic::FortifyChk => {
                 self.lower_fortify_chk(name, args)
             }
-            // TODO: __builtin_va_arg_pack / __builtin_va_arg_pack_len are stubbed
-            // to return 0. Proper implementation requires forwarding the caller's
-            // variadic args during inlining. Since _FORTIFY_SOURCE is disabled,
-            // this code path should not be reached in practice.
+            // __builtin_va_arg_pack / __builtin_va_arg_pack_len are stubbed to return 0.
+            // Proper implementation requires forwarding the caller's variadic args during
+            // inlining. Since _FORTIFY_SOURCE is disabled, this code path should not be
+            // reached in practice. Emit a warning so users know.
             BuiltinIntrinsic::VaArgPack => {
+                if let Some(span) = args.first().map(|a| a.span()) {
+                    self.emit_warning(
+                        format!("{}() is not implemented and returns 0", name),
+                        span,
+                    );
+                }
                 for arg in args {
                     self.lower_expr(arg);
                 }
