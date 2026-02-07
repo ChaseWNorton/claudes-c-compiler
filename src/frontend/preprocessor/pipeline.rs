@@ -473,6 +473,17 @@ impl Preprocessor {
             self.macros.set_track_expansions(false);
         }
 
+        // Check for unterminated #if/#ifdef/#ifndef at EOF (C11 6.10.1)
+        let unterminated = self.conditionals.unterminated_depth();
+        if unterminated > 0 {
+            self.errors.push(PreprocessorDiagnostic {
+                file: self.current_file(),
+                line: source.lines().count(),
+                col: 1,
+                message: format!("unterminated conditional directive ({unterminated} level{} deep)", if unterminated == 1 { "" } else { "s" }),
+            });
+        }
+
         // Restore conditional stack and line override for included files
         if let Some(saved) = saved_conditionals {
             self.conditionals = saved;
@@ -821,11 +832,25 @@ impl Preprocessor {
                 return None;
             }
             "else" => {
-                self.conditionals.handle_else();
+                if let Some(err) = self.conditionals.handle_else() {
+                    self.errors.push(PreprocessorDiagnostic {
+                        file: self.current_file(),
+                        line: line_num,
+                        col,
+                        message: err.to_string(),
+                    });
+                }
                 return None;
             }
             "endif" => {
-                self.conditionals.handle_endif();
+                if let Some(err) = self.conditionals.handle_endif() {
+                    self.errors.push(PreprocessorDiagnostic {
+                        file: self.current_file(),
+                        line: line_num,
+                        col,
+                        message: err.to_string(),
+                    });
+                }
                 return None;
             }
             _ => {
@@ -1020,6 +1045,15 @@ int b = 2;
         assert!(output.contains("int b = 2"), "active #elif branch should be included");
     }
 
+    fn preprocess_with_errors(code: &str) -> (String, Vec<PreprocessorDiagnostic>) {
+        let mut pp = Preprocessor::new();
+        pp.set_target("x86_64");
+        pp.set_filename("<test>");
+        let output = pp.preprocess(code);
+        let errors = pp.errors.clone();
+        (output, errors)
+    }
+
     #[test]
     fn elif_after_taken_branch_no_counter_increment() {
         // When a branch was already taken, subsequent #elif should not evaluate.
@@ -1036,6 +1070,46 @@ int third = __COUNTER__;
         assert!(output.contains("int first = 0"), "first __COUNTER__ should be 0, got: {}", output.trim());
         assert!(output.contains("int third = 1"), "third __COUNTER__ should be 1, got: {}", output.trim());
         assert!(!output.contains("int second"), "taken branch should prevent #elif");
+    }
+
+    #[test]
+    fn else_after_else_produces_error() {
+        // Issue #140: #else after #else should be diagnosed
+        let (_, errors) = preprocess_with_errors(r#"
+#if 1
+int a = 1;
+#else
+int b = 2;
+#else
+int c = 3;
+#endif
+"#);
+        assert!(errors.iter().any(|e| e.message.contains("#else after #else")),
+            "expected '#else after #else' error, got: {:?}", errors);
+    }
+
+    #[test]
+    fn orphan_endif_produces_error() {
+        // Issue #140: #endif without matching #if should be diagnosed
+        let (_, errors) = preprocess_with_errors("#endif\n");
+        assert!(errors.iter().any(|e| e.message.contains("#endif without #if")),
+            "expected '#endif without #if' error, got: {:?}", errors);
+    }
+
+    #[test]
+    fn unterminated_if_produces_error() {
+        // Issue #140: unterminated #if at EOF should be diagnosed
+        let (_, errors) = preprocess_with_errors("#if 1\nint x = 1;\n");
+        assert!(errors.iter().any(|e| e.message.contains("unterminated conditional")),
+            "expected 'unterminated conditional' error, got: {:?}", errors);
+    }
+
+    #[test]
+    fn orphan_else_produces_error() {
+        // Issue #140: #else without #if should be diagnosed
+        let (_, errors) = preprocess_with_errors("#else\n#endif\n");
+        assert!(errors.iter().any(|e| e.message.contains("#else without #if")),
+            "expected '#else without #if' error, got: {:?}", errors);
     }
 }
 

@@ -21,6 +21,8 @@ struct ConditionalState {
     current_branch_active: bool,
     /// Whether the parent context is active
     parent_active: bool,
+    /// Whether #else has been seen for this conditional group
+    else_seen: bool,
 }
 
 /// Tracks the stack of nested conditionals.
@@ -47,6 +49,7 @@ impl ConditionalStack {
             any_branch_taken: condition,
             current_branch_active: active,
             parent_active,
+            else_seen: false,
         });
     }
 
@@ -76,21 +79,39 @@ impl ConditionalStack {
         }
     }
 
-    /// Handle #else.
-    pub fn handle_else(&mut self) {
+    /// Handle #else. Returns an error message if #else after #else or orphan.
+    pub fn handle_else(&mut self) -> Option<&'static str> {
         if let Some(state) = self.stack.last_mut() {
+            if state.else_seen {
+                // Duplicate #else in same conditional group (C11 6.10.1p1)
+                state.current_branch_active = false;
+                return Some("#else after #else");
+            }
+            state.else_seen = true;
             if state.any_branch_taken {
                 state.current_branch_active = false;
             } else {
                 state.current_branch_active = state.parent_active;
                 state.any_branch_taken = true;
             }
+            None
+        } else {
+            Some("#else without #if")
         }
     }
 
-    /// Handle #endif.
-    pub fn handle_endif(&mut self) {
-        self.stack.pop();
+    /// Handle #endif. Returns an error message if orphan #endif.
+    pub fn handle_endif(&mut self) -> Option<&'static str> {
+        if self.stack.pop().is_some() {
+            None
+        } else {
+            Some("#endif without #if")
+        }
+    }
+
+    /// Check for unterminated conditionals at EOF. Returns depth.
+    pub fn unterminated_depth(&self) -> usize {
+        self.stack.len()
     }
 }
 
