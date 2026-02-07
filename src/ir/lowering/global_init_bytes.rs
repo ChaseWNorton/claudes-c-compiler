@@ -1413,7 +1413,7 @@ mod tests {
     use crate::ir::lowering::Lowerer;
 
     /// Compile C source through lowering (panics if lowering crashes).
-    fn compile_to_ir(code: &str) {
+    fn compile_to_ir(code: &str) -> crate::ir::module::IrModule {
         crate::common::types::set_target_ptr_size(8);
         crate::common::types::set_target_long_double_is_f128(false);
 
@@ -1455,7 +1455,8 @@ mod tests {
             diagnostics,
             false,
         );
-        let (_module, _) = lowerer.lower(&ast);
+        let (module, _) = lowerer.lower(&ast);
+        module
     }
 
     #[test]
@@ -1466,6 +1467,38 @@ mod tests {
             typedef struct s T;
             T a[] = {1, 10000, 0x12345, 0xff000001};
         "#);
+    }
+
+    #[test]
+    fn i128_bitfield_global_init_value_correctness() {
+        // Issue #125: Verify that wide __int128 bitfield init preserves upper bytes.
+        // A 66-bit bitfield initialized with -1 should have all 66 bits set,
+        // spanning into byte 8 (bits 64-65).
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        let module = compile_to_ir(r#"
+            struct s { __int128 y : 66; };
+            struct s g = {-1};
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "g").expect("global 'g' not found");
+        if let GlobalInit::Array(ref vals) = g.init {
+            let bytes: Vec<u8> = vals.iter().map(|c| match c {
+                IrConst::I8(v) => *v as u8,
+                _ => panic!("expected I8 in global byte array"),
+            }).collect();
+            // -1 sign-extended to 66 bits = 0x3_FFFF_FFFF_FFFF_FFFF
+            // LE: bytes 0-7 = 0xFF, byte 8 = 0x03, bytes 9-15 = 0x00
+            assert!(bytes.len() >= 16, "buffer should be 16 bytes for __int128, got {}", bytes.len());
+            for i in 0..8 {
+                assert_eq!(bytes[i], 0xFF, "byte {} should be 0xFF", i);
+            }
+            assert_eq!(bytes[8], 0x03, "byte 8 should be 0x03 (bits 64-65 set)");
+            for i in 9..16 {
+                assert_eq!(bytes[i], 0x00, "byte {} should be 0x00", i);
+            }
+        } else {
+            panic!("expected GlobalInit::Array for struct with bitfield");
+        }
     }
 
     #[test]
