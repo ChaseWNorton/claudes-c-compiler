@@ -1136,6 +1136,20 @@ int c = 3;
     }
 
     #[test]
+    fn date_macro_not_hardcoded() {
+        // Issue #173: __DATE__ should reflect actual date, not hardcoded "Jan  1 2025"
+        let output = preprocess("const char *d = __DATE__;\n");
+        // The date should NOT be the old hardcoded value
+        assert!(!output.contains("Jan  1 2025"),
+            "__DATE__ should not be hardcoded to 'Jan  1 2025', got: {}", output.trim());
+        // It should contain a valid date string (3-letter month)
+        let has_month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            .iter().any(|m| output.contains(m));
+        assert!(has_month, "__DATE__ should contain a valid month abbreviation, got: {}", output.trim());
+    }
+
+    #[test]
     fn unknown_directive_produces_warning() {
         // Issue #172: unknown preprocessor directives should produce a warning
         let mut pp = Preprocessor::new();

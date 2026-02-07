@@ -150,8 +150,7 @@ impl Preprocessor {
             ("__USER_LABEL_PREFIX__", ""),
             // GNU C attribute macros (strip)
             ("__LEAF", ""), ("__LEAF_ATTR", ""), ("__wur", ""),
-            // Date/time
-            ("__DATE__", "\"Jan  1 2025\""), ("__TIME__", "\"00:00:00\""),
+            // __DATE__ and __TIME__ are defined dynamically below (not in static table)
             // GCC atomic lock-free macros
             ("__GCC_ATOMIC_BOOL_LOCK_FREE", "2"),
             ("__GCC_ATOMIC_CHAR_LOCK_FREE", "2"),
@@ -187,6 +186,12 @@ impl Preprocessor {
             self.define_simple_macro(name, body);
         }
 
+        // __DATE__ and __TIME__: use actual compilation date/time, or
+        // SOURCE_DATE_EPOCH for reproducible builds (matching GCC/Clang).
+        let (date_str, time_str) = Self::compute_date_time();
+        self.define_simple_macro("__DATE__", &format!("\"{}\"", date_str));
+        self.define_simple_macro("__TIME__", &format!("\"{}\"", time_str));
+
         // Function-like predefined macros: (name, params, body)
         // Note: __builtin_expect is handled as a real builtin (not a macro)
         // to properly evaluate side effects in the second argument.
@@ -209,6 +214,63 @@ impl Preprocessor {
                 body: body.to_string(),
             });
         }
+    }
+
+    /// Compute __DATE__ and __TIME__ strings.
+    /// Respects SOURCE_DATE_EPOCH env var for reproducible builds (GCC/Clang behavior).
+    /// Returns (date, time) in C standard format: "Mmm dd yyyy", "hh:mm:ss".
+    fn compute_date_time() -> (String, String) {
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        // Days in each month (non-leap, leap adjustment handled below)
+        const DAYS_IN_MONTH: [u64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+        let secs = if let Ok(epoch) = std::env::var("SOURCE_DATE_EPOCH") {
+            epoch.parse::<u64>().unwrap_or(0)
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        };
+
+        // Convert Unix timestamp to date/time components
+        let secs_per_day = 86400u64;
+        let mut days = secs / secs_per_day;
+        let day_secs = secs % secs_per_day;
+        let hour = day_secs / 3600;
+        let min = (day_secs % 3600) / 60;
+        let sec = day_secs % 60;
+
+        // Days since 1970-01-01 → year/month/day
+        let mut year = 1970u64;
+        loop {
+            let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 366 } else { 365 };
+            if days < days_in_year {
+                break;
+            }
+            days -= days_in_year;
+            year += 1;
+        }
+        let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let mut month = 0usize;
+        for m in 0..12 {
+            let dim = if m == 1 && is_leap { 29 } else { DAYS_IN_MONTH[m] };
+            if days < dim {
+                month = m;
+                break;
+            }
+            days -= dim;
+            if m == 11 { month = 11; }
+        }
+        let day = days + 1; // 1-based
+
+        // C standard format: "Mmm dd yyyy" with space-padded day (e.g., "Feb  6 2026")
+        let date = format!("{} {:2} {}", MONTHS[month], day, year);
+        let time = format!("{:02}:{:02}:{:02}", hour, min, sec);
+        (date, time)
     }
 
     /// Helper to define a simple object-like macro.
