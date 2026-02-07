@@ -576,6 +576,10 @@ impl Lowerer {
             return self.lower_struct_array_with_ptrs(items, layout, num_elems);
         }
         // Byte-serialize the struct array
+        // Guard: cap allocation to avoid OOM on huge sparse arrays
+        if total_size > 8_000_000 {
+            return GlobalInit::ZeroBytes(total_size);
+        }
         let struct_size = layout.size;
         let mut bytes = vec![0u8; total_size];
         self.fill_multidim_struct_array_bytes(
@@ -939,12 +943,20 @@ impl Lowerer {
         ctx: &GlobalInitCtx,
         num_elems: usize,
     ) -> GlobalInit {
+        // Threshold: if the array has more than 1M elements, use sparse representation
+        // to avoid allocating a multi-gigabyte Vec<IrConst>.
+        const SPARSE_THRESHOLD: usize = 1_000_000;
+
         let zero_val = self.typed_zero_const(ctx.base_ty, ctx.is_long_double_target);
 
         if ctx.array_dim_strides.len() > 1 {
             // Multi-dimensional array: flatten nested init lists
             let innermost_stride = ctx.array_dim_strides.last().copied().unwrap_or(1).max(1);
             let total_scalar_elems = ctx.total_size / innermost_stride;
+            if total_scalar_elems > SPARSE_THRESHOLD {
+                // Too large — fall through to sparse handling below with 1D logic
+                return self.lower_sparse_scalar_array(items, ctx, num_elems);
+            }
             let mut values_flat = vec![
                 self.typed_zero_const(ctx.base_ty, ctx.is_long_double_target);
                 total_scalar_elems
@@ -959,6 +971,8 @@ impl Lowerer {
                 }
             }
             GlobalInit::Array(values_flat)
+        } else if num_elems > SPARSE_THRESHOLD {
+            self.lower_sparse_scalar_array(items, ctx, num_elems)
         } else {
             // 1D array with designated initializer support
             let mut values = vec![zero_val; num_elems];
@@ -977,6 +991,64 @@ impl Lowerer {
             }
             GlobalInit::Array(values)
         }
+    }
+
+    /// Sparse representation for very large scalar arrays. Collects (index, value)
+    /// pairs from designated initializers and emits a Compound of ZeroBytes + Scalar
+    /// segments, avoiding O(num_elems) memory allocation.
+    fn lower_sparse_scalar_array(
+        &mut self,
+        items: &[InitializerItem],
+        ctx: &GlobalInitCtx,
+        num_elems: usize,
+    ) -> GlobalInit {
+        let elem_size = ctx.base_ty.size().max(1);
+
+        // Collect (index, value) pairs
+        let mut entries: Vec<(usize, IrConst)> = Vec::new();
+        let mut current_idx = 0usize;
+        for item in items {
+            if let Some(Designator::Index(ref idx_expr)) = item.designators.first() {
+                if let Some(idx) = self.eval_const_expr(idx_expr).and_then(|c| c.to_usize()) {
+                    current_idx = idx;
+                }
+            }
+            if current_idx < num_elems {
+                let val = self.eval_array_element(&item.init, ctx.base_ty, ctx.is_bool_target);
+                let val = Self::maybe_promote_long_double(val, ctx.is_long_double_target);
+                if !val.is_zero() {
+                    entries.push((current_idx, val));
+                }
+            }
+            current_idx += 1;
+        }
+
+        // If all values are zero, just return Zero
+        if entries.is_empty() {
+            return GlobalInit::Zero;
+        }
+
+        // Sort by index and dedup (later writes win)
+        entries.sort_by_key(|(idx, _)| *idx);
+        entries.dedup_by_key(|(idx, _)| *idx);
+
+        // Build Compound: ZeroBytes gaps + Scalar values
+        let mut parts: Vec<GlobalInit> = Vec::new();
+        let mut byte_pos = 0usize;
+        for (idx, val) in &entries {
+            let entry_byte = idx * elem_size;
+            if entry_byte > byte_pos {
+                parts.push(GlobalInit::ZeroBytes(entry_byte - byte_pos));
+            }
+            parts.push(GlobalInit::Scalar(val.clone()));
+            byte_pos = entry_byte + elem_size;
+        }
+        let total_bytes = num_elems * elem_size;
+        if byte_pos < total_bytes {
+            parts.push(GlobalInit::ZeroBytes(total_bytes - byte_pos));
+        }
+
+        GlobalInit::Compound(parts)
     }
 
     /// Evaluate a single array element from its initializer.

@@ -96,6 +96,10 @@ pub enum GlobalInit {
     /// Fields: (label1, label2, byte_size) where byte_size is the width of the
     /// resulting integer (4 for int, 8 for long).
     GlobalLabelDiff(String, String, usize),
+    /// Explicit zero padding of a given byte count. Used in Compound initializers
+    /// for sparse arrays where materializing the full Vec<IrConst> would OOM.
+    /// Emits `.zero N` in assembly.
+    ZeroBytes(usize),
 }
 
 impl GlobalInit {
@@ -136,6 +140,7 @@ impl GlobalInit {
             GlobalInit::WideString(ws) => ws.len() * 4,
             GlobalInit::Char16String(cs) => cs.len() * 2,
             GlobalInit::GlobalLabelDiff(_, _, size) => *size,
+            GlobalInit::ZeroBytes(n) => *n,
         }
     }
 
@@ -156,6 +161,7 @@ impl GlobalInit {
             GlobalInit::WideString(ws) => (ws.len() + 1) * 4,
             GlobalInit::Char16String(cs) => (cs.len() + 1) * 2,
             GlobalInit::GlobalLabelDiff(_, _, size) => *size,
+            GlobalInit::ZeroBytes(n) => *n,
         }
     }
 }

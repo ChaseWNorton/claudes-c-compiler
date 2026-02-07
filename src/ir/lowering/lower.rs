@@ -1538,4 +1538,22 @@ mod tests {
         });
         assert!(!has_memset, "small zero-init should NOT emit memset call");
     }
+
+    #[test]
+    fn huge_designated_init_no_oom() {
+        // Issue #82: huge designated initializer index should not OOM.
+        // Uses sparse representation (ZeroBytes + Scalar) instead of Vec<IrConst>.
+        use crate::ir::module::GlobalInit;
+        let module = compile_to_ir("int arr[] = {[0x2000000] = 42};");
+        let global = module.globals.iter().find(|g| g.name == "arr").unwrap();
+        match &global.init {
+            GlobalInit::Compound(parts) => {
+                // Should be sparse: ZeroBytes + Scalar + optional trailing ZeroBytes
+                assert!(parts.len() <= 3, "sparse should have at most 3 parts, got {}", parts.len());
+                let has_zero_bytes = parts.iter().any(|p| matches!(p, GlobalInit::ZeroBytes(_)));
+                assert!(has_zero_bytes, "sparse representation should contain ZeroBytes");
+            }
+            other => panic!("expected Compound for sparse array, got {:?}", std::mem::discriminant(other)),
+        }
+    }
 }

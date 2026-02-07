@@ -1497,6 +1497,11 @@ fn emit_init_data(out: &mut AsmOutput, init: &GlobalInit, fallback_ty: IrType, t
                 emit_compound_element(out, elem, fallback_ty, ptr_dir);
             }
         }
+        GlobalInit::ZeroBytes(n) => {
+            if *n > 0 {
+                out.emit_fmt(format_args!("    .zero {}", n));
+            }
+        }
     }
 }
 
