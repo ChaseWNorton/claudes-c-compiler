@@ -1777,4 +1777,42 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn sizeof_struct_with_enum_sized_array() {
+        // Issue #150: sizeof(struct) with enum-constant-sized array should evaluate correctly.
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        let module = compile_to_ir(r#"
+            enum { N = 10 };
+            struct S { int arr[N]; };
+            int x = sizeof(struct S);
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "x").expect("global 'x'");
+        match &g.init {
+            GlobalInit::Scalar(IrConst::I32(v)) => {
+                assert_eq!(*v, 40, "sizeof(struct {{int arr[10]}}) should be 40, got {}", v);
+            }
+            other => panic!("expected Scalar(I32(40)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn sizeof_struct_with_sizeof_sized_array() {
+        // Issue #150: sizeof(struct) with sizeof-based array size should evaluate correctly.
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        let module = compile_to_ir(r#"
+            struct S { int arr[sizeof(int)]; };
+            int x = sizeof(struct S);
+        "#);
+        let g = module.globals.iter().find(|g| g.name == "x").expect("global 'x'");
+        match &g.init {
+            GlobalInit::Scalar(IrConst::I32(v)) => {
+                // sizeof(int) = 4, so arr[4] has 4*4=16 bytes
+                assert_eq!(*v, 16, "sizeof(struct {{int arr[sizeof(int)]}}) should be 16, got {}", v);
+            }
+            other => panic!("expected Scalar(I32(16)), got {:?}", other),
+        }
+    }
 }

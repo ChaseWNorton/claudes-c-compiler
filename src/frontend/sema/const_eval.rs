@@ -1098,6 +1098,40 @@ impl<'a> SemaConstEval<'a> {
     }
 }
 
+/// Try to evaluate an array size expression to a usize using only TypeContext.
+/// Handles integer literals, enum constants, sizeof(type), and simple binary ops.
+fn try_eval_array_size(expr: &Expr, types: &TypeContext) -> Option<usize> {
+    match expr {
+        Expr::IntLiteral(n, _) | Expr::LongLiteral(n, _) | Expr::LongLongLiteral(n, _) => Some(*n as usize),
+        Expr::UIntLiteral(n, _) | Expr::ULongLiteral(n, _) | Expr::ULongLongLiteral(n, _) => Some(*n as usize),
+        Expr::Identifier(name, _) => {
+            types.enum_constants.get(name.as_str()).map(|&v| v as usize)
+        }
+        Expr::Sizeof(arg, _) => {
+            if let SizeofArg::Type(ts) = arg.as_ref() {
+                let ct = ctype_from_type_spec(ts, types);
+                let layouts = types.borrow_struct_layouts();
+                Some(ct.size_ctx(&*layouts))
+            } else {
+                None
+            }
+        }
+        Expr::BinaryOp(op, lhs, rhs, _) => {
+            let l = try_eval_array_size(lhs, types)?;
+            let r = try_eval_array_size(rhs, types)?;
+            match op {
+                BinOp::Add => Some(l.wrapping_add(r)),
+                BinOp::Sub => Some(l.wrapping_sub(r)),
+                BinOp::Mul => Some(l.wrapping_mul(r)),
+                BinOp::Div if r != 0 => Some(l / r),
+                _ => None,
+            }
+        }
+        Expr::Cast(_, inner, _) => try_eval_array_size(inner, types),
+        _ => None,
+    }
+}
+
 /// Convert a TypeSpecifier to CType using the TypeContext for typedef/struct resolution.
 /// This is a standalone function that doesn't need the full TypeConvertContext trait.
 fn ctype_from_type_spec(spec: &TypeSpecifier, types: &TypeContext) -> CType {
@@ -1122,15 +1156,7 @@ fn ctype_from_type_spec(spec: &TypeSpecifier, types: &TypeContext) -> CType {
         TypeSpecifier::Pointer(inner, addr_space) => CType::Pointer(Box::new(ctype_from_type_spec(inner, types)), *addr_space),
         TypeSpecifier::Array(elem, size) => {
             let elem_ty = ctype_from_type_spec(elem, types);
-            // TODO: evaluate array size expression when available
-            let array_size = size.as_ref().and_then(|s| {
-                // Try simple literal evaluation for array sizes
-                match s.as_ref() {
-                    Expr::IntLiteral(n, _) | Expr::LongLiteral(n, _) | Expr::LongLongLiteral(n, _) => Some(*n as usize),
-                    Expr::UIntLiteral(n, _) | Expr::ULongLiteral(n, _) | Expr::ULongLongLiteral(n, _) => Some(*n as usize),
-                    _ => None,
-                }
-            });
+            let array_size = size.as_ref().and_then(|s| try_eval_array_size(s, types));
             CType::Array(Box::new(elem_ty), array_size)
         }
         TypeSpecifier::TypedefName(name) => {
@@ -1208,12 +1234,7 @@ fn ctype_from_type_spec_with_derived(
                 ty = CType::Pointer(Box::new(ty), AddressSpace::Default);
             }
             DerivedDeclarator::Array(Some(size_expr)) => {
-                let expr: &Expr = size_expr;
-                let size = match expr {
-                    Expr::IntLiteral(n, _) | Expr::LongLiteral(n, _) | Expr::LongLongLiteral(n, _) => Some(*n as usize),
-                    Expr::UIntLiteral(n, _) | Expr::ULongLiteral(n, _) | Expr::ULongLongLiteral(n, _) => Some(*n as usize),
-                    _ => None,
-                };
+                let size = try_eval_array_size(size_expr, types);
                 ty = CType::Array(Box::new(ty), size);
             }
             DerivedDeclarator::Array(None) => {
