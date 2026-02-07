@@ -1739,21 +1739,29 @@ impl SemanticAnalyzer {
                                 _ => None,
                             };
                             if let Some(pointee_ty) = pointee {
-                                let is_incomplete = match pointee_ty {
-                                    CType::Struct(key) | CType::Union(key) =>
-                                        !self.defined_structs.borrow().contains(key.as_ref()),
-                                    CType::Void => true,
-                                    _ => false,
-                                };
-                                if is_incomplete {
-                                    self.diagnostics.borrow_mut().error(
-                                        format!(
-                                            "arithmetic on pointer to incomplete type '{}'",
-                                            pointee_ty
-                                        ),
-                                        *span,
-                                    );
-                                    break;
+                                match pointee_ty {
+                                    CType::Struct(key) | CType::Union(key)
+                                        if !self.defined_structs.borrow().contains(key.as_ref()) =>
+                                    {
+                                        self.diagnostics.borrow_mut().error(
+                                            format!(
+                                                "arithmetic on pointer to incomplete type '{}'",
+                                                pointee_ty
+                                            ),
+                                            *span,
+                                        );
+                                        break;
+                                    }
+                                    // void* arithmetic is a GNU extension (GCC -Wpointer-arith)
+                                    CType::Void => {
+                                        self.diagnostics.borrow_mut().warning_with_kind(
+                                            "pointer of type 'void *' used in arithmetic",
+                                            *span,
+                                            crate::common::error::WarningKind::PointerArith,
+                                        );
+                                        break;
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -1770,11 +1778,13 @@ impl SemanticAnalyzer {
                 self.analyze_expr(operand);
                 if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
                     self.check_const_modification(operand, *span);
+                    self.check_ptr_arith_incomplete(operand, *span);
                 }
             }
             Expr::PostfixOp(_, operand, span) => {
                 self.analyze_expr(operand);
                 self.check_const_modification(operand, *span);
+                self.check_ptr_arith_incomplete(operand, *span);
             }
             Expr::Assign(lhs, rhs, span) => {
                 self.analyze_expr(lhs);
@@ -2203,6 +2213,45 @@ impl SemanticAnalyzer {
                 );
             }
             _ => {} // same linkage or compatible
+        }
+    }
+
+    /// Check if a unary ++/-- operand is a pointer to an incomplete type.
+    fn check_ptr_arith_incomplete(&self, operand: &Expr, span: Span) {
+        let checker = super::type_checker::ExprTypeChecker {
+            symbols: &self.symbol_table,
+            types: &self.result.type_context,
+            functions: &self.result.functions,
+            expr_types: Some(&self.result.expr_types),
+        };
+        if let Some(ty) = checker.infer_expr_ctype(operand) {
+            let pointee = match &ty {
+                CType::Pointer(inner, _) => Some(inner.as_ref()),
+                _ => None,
+            };
+            if let Some(pointee_ty) = pointee {
+                match pointee_ty {
+                    CType::Struct(key) | CType::Union(key)
+                        if !self.defined_structs.borrow().contains(key.as_ref()) =>
+                    {
+                        self.diagnostics.borrow_mut().error(
+                            format!(
+                                "arithmetic on pointer to incomplete type '{}'",
+                                pointee_ty
+                            ),
+                            span,
+                        );
+                    }
+                    CType::Void => {
+                        self.diagnostics.borrow_mut().warning_with_kind(
+                            "pointer of type 'void *' used in arithmetic",
+                            span,
+                            crate::common::error::WarningKind::PointerArith,
+                        );
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -3757,11 +3806,13 @@ mod tests {
     }
 
     #[test]
-    fn ptr_arith_void_error() {
-        let e = sema_errors(
+    fn ptr_arith_void_warns() {
+        // void* arithmetic is a GNU extension, should warn under -Wpointer-arith
+        let (e, w) = sema_counts(
             "void f(void *p) { void *q = p + 1; (void)q; }"
         );
-        assert!(e > 0, "pointer arithmetic on void* should produce error");
+        assert_eq!(e, 0, "void* arithmetic should not produce error (GNU extension)");
+        assert!(w > 0, "void* arithmetic should produce -Wpointer-arith warning");
     }
 
     #[test]
@@ -3776,5 +3827,27 @@ mod tests {
     fn ptr_arith_int_no_error() {
         let e = sema_errors("void f(int *p) { int *q = p + 1; (void)q; }");
         assert_eq!(e, 0, "pointer arithmetic on int* should not produce error");
+    }
+
+    // ---- void* arithmetic in unary ++/-- (issue #108) ----
+
+    #[test]
+    fn void_ptr_postinc_warns() {
+        let (e, w) = sema_counts("void f(void *p) { p++; }");
+        assert_eq!(e, 0, "void* p++ should not error (GNU extension)");
+        assert!(w > 0, "void* p++ should produce -Wpointer-arith warning");
+    }
+
+    #[test]
+    fn void_ptr_predec_warns() {
+        let (e, w) = sema_counts("void f(void *p) { --p; }");
+        assert_eq!(e, 0, "void* --p should not error (GNU extension)");
+        assert!(w > 0, "void* --p should produce -Wpointer-arith warning");
+    }
+
+    #[test]
+    fn incomplete_ptr_postinc_error() {
+        let e = sema_errors("struct X; void f(struct X *p) { p++; }");
+        assert!(e > 0, "incomplete struct p++ should produce error");
     }
 }
