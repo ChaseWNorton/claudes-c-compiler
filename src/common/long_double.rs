@@ -459,6 +459,15 @@ fn round_to_nearest_even_113(big_val: &BigUint) -> Option<(u128, i32)> {
 
 /// Shared decimal-to-float bigint conversion for f128 (113-bit mantissa).
 fn decimal_to_float_bigint_f128(negative: bool, digits: &[u8], decimal_exp: i32) -> [u8; 16] {
+    // Early exit for out-of-range exponents to avoid O(n) bignum computation.
+    // f128 max exponent: 2^16383 ≈ 10^4932. Adding a margin for the digit count.
+    let digit_mag = digits.len() as i32 + decimal_exp;
+    if digit_mag > 4934 {
+        return make_f128_infinity(negative);
+    }
+    if digit_mag < -4968 {
+        return make_f128_zero(negative);
+    }
     if decimal_exp >= 0 {
         let mut big_val = BigUint::from_decimal_digits(digits);
         let p10 = pow10_big(decimal_exp as u32);
@@ -2481,6 +2490,22 @@ mod f128_tests {
         let x87 = f128_bytes_to_x87_bytes(&f128);
         let f128_back = x87_bytes_to_f128_bytes(&x87);
         assert_eq!(f128, f128_back, "roundtrip should preserve value");
+    }
+
+    #[test]
+    fn huge_exponent_no_hang() {
+        // Issue #83: huge exponent should return infinity instantly, not hang.
+        let bytes = parse_long_double_to_f128_bytes("1e+100000000L");
+        let val = u128::from_le_bytes(bytes);
+        let exp = (val >> 112) & 0x7FFF;
+        assert_eq!(exp, 0x7FFF, "huge positive exponent should produce infinity");
+    }
+
+    #[test]
+    fn huge_negative_exponent_no_hang() {
+        // Huge negative exponent should return zero instantly.
+        let bytes = parse_long_double_to_f128_bytes("1e-100000000L");
+        assert!(bytes.iter().all(|&b| b == 0), "huge negative exponent should produce zero");
     }
 }
 
