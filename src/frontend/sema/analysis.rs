@@ -1685,6 +1685,43 @@ impl SemanticAnalyzer {
                         );
                     }
                 }
+                // C11 §6.5.6: arithmetic operands must have arithmetic or pointer type.
+                // Reject struct/union operands on all binary operators.
+                {
+                    let checker2 = super::type_checker::ExprTypeChecker {
+                        symbols: &self.symbol_table,
+                        types: &self.result.type_context,
+                        functions: &self.result.functions,
+                        expr_types: Some(&self.result.expr_types),
+                    };
+                    let lhs_ty = checker2.infer_expr_ctype(lhs);
+                    let rhs_ty = checker2.infer_expr_ctype(rhs);
+                    let lhs_is_aggregate = lhs_ty.as_ref().is_some_and(|t|
+                        matches!(t, CType::Struct(_) | CType::Union(_)));
+                    let rhs_is_aggregate = rhs_ty.as_ref().is_some_and(|t|
+                        matches!(t, CType::Struct(_) | CType::Union(_)));
+                    if lhs_is_aggregate || rhs_is_aggregate {
+                        let op_str = match op {
+                            BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
+                            BinOp::Div => "/", BinOp::Mod => "%",
+                            BinOp::BitAnd => "&", BinOp::BitOr => "|", BinOp::BitXor => "^",
+                            BinOp::Shl => "<<", BinOp::Shr => ">>",
+                            BinOp::Eq => "==", BinOp::Ne => "!=",
+                            BinOp::Lt => "<", BinOp::Le => "<=",
+                            BinOp::Gt => ">", BinOp::Ge => ">=",
+                            BinOp::LogicalAnd => "&&", BinOp::LogicalOr => "||",
+                        };
+                        self.diagnostics.borrow_mut().error(
+                            format!(
+                                "invalid operands to binary {} (have '{}' and '{}')",
+                                op_str,
+                                lhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string()),
+                                rhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string()),
+                            ),
+                            *span,
+                        );
+                    }
+                }
                 // Check pointer subtraction type compatibility (C11 6.5.6p3):
                 // both operands must point to compatible types.
                 if *op == BinOp::Sub {
@@ -3565,5 +3602,45 @@ mod tests {
             "void f(void) { struct { int x; int y; int z; } s = { 1 }; (void)s; }"
         );
         assert_eq!(e, 0, "fewer elements than fields should not produce error");
+    }
+
+    // ---- binary operators on struct/union types (issue #87) ----
+
+    #[test]
+    fn struct_add_struct_error() {
+        let e = sema_errors(
+            "void f(void) { struct { int x; } a, b; int x = a + b; (void)x; }"
+        );
+        assert!(e > 0, "struct + struct should produce error");
+    }
+
+    #[test]
+    fn struct_sub_struct_error() {
+        let e = sema_errors(
+            "void f(void) { struct { int x; } a, b; int x = a - b; (void)x; }"
+        );
+        assert!(e > 0, "struct - struct should produce error");
+    }
+
+    #[test]
+    fn struct_mul_int_error() {
+        let e = sema_errors(
+            "void f(void) { struct { int x; } s; int x = s * 2; (void)x; }"
+        );
+        assert!(e > 0, "struct * int should produce error");
+    }
+
+    #[test]
+    fn union_add_int_error() {
+        let e = sema_errors(
+            "void f(void) { union { int i; float f; } u; int x = u + 1; (void)x; }"
+        );
+        assert!(e > 0, "union + int should produce error");
+    }
+
+    #[test]
+    fn int_add_int_no_error() {
+        let e = sema_errors("int f(void) { int a = 1, b = 2; return a + b; }");
+        assert_eq!(e, 0, "int + int should not produce error");
     }
 }
