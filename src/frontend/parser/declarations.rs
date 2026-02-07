@@ -714,6 +714,58 @@ impl Parser {
             for a in [decl_aligned, skip_aligned].iter().copied().flatten() {
                 alignment = Some(alignment.map_or(a, |prev| prev.max(a)));
             }
+
+            // GCC extension: nested function definition.
+            // If the declarator is a function and the next token is '{' (or a type
+            // specifier for K&R style), this is a function definition inside a
+            // compound statement. Parse the body and lift it to top-level scope.
+            if declarators.is_empty()
+                && !derived.is_empty()
+                && matches!(derived.last(), Some(DerivedDeclarator::Function(_, _)))
+                && (matches!(self.peek(), TokenKind::LBrace) || self.is_type_specifier())
+            {
+                self.attrs.set_typedef(false);
+                let (params, variadic) = if let Some(DerivedDeclarator::Function(p, v)) = derived.last() {
+                    (p.clone(), *v)
+                } else {
+                    (vec![], false)
+                };
+                let is_kr_style = !matches!(self.peek(), TokenKind::LBrace);
+                let final_params = if is_kr_style {
+                    self.parse_kr_params(params)
+                } else {
+                    params
+                };
+                let return_type = self.build_return_type(type_spec, &derived);
+                let saved_shadowed = self.shadowed_typedefs.clone();
+                for param in &final_params {
+                    if let Some(ref pname) = param.name {
+                        if self.typedefs.contains(pname) && !self.shadowed_typedefs.contains(pname) {
+                            self.shadowed_typedefs.insert(pname.clone());
+                        }
+                    }
+                }
+                let body = self.parse_compound_stmt();
+                self.shadowed_typedefs = saved_shadowed;
+                let func_def = FunctionDef {
+                    return_type,
+                    name: name.unwrap_or_default(),
+                    params: final_params,
+                    variadic,
+                    body,
+                    attrs: {
+                        let mut attrs = FunctionAttributes::new();
+                        attrs.set_static(is_static);
+                        attrs.set_inline(self.attrs.parsing_inline());
+                        attrs
+                    },
+                    is_kr: is_kr_style,
+                    span: start,
+                };
+                self.nested_function_defs.push(ExternalDecl::FunctionDef(func_def));
+                return None;
+            }
+
             let init = if self.consume_if(&TokenKind::Assign) {
                 Some(self.parse_initializer())
             } else {

@@ -287,6 +287,11 @@ pub struct Parser {
     /// (especially important for packed structs where tag-only refs would
     /// otherwise incorrectly default to ptr_size).
     pub(super) struct_tag_alignments: FxHashMap<String, usize>,
+    /// Nested function definitions (GCC extension) lifted to top-level scope.
+    /// Populated by parse_local_declaration() when a function definition is
+    /// encountered inside a compound statement. Drained by parse() after each
+    /// external declaration.
+    pub(super) nested_function_defs: Vec<ExternalDecl>,
 }
 
 impl Parser {
@@ -306,6 +311,7 @@ impl Parser {
             enum_constants: FxHashMap::default(),
             unevaluable_enum_constants: FxHashSet::default(),
             struct_tag_alignments: FxHashMap::default(),
+            nested_function_defs: Vec::new(),
         }
     }
 
@@ -388,6 +394,10 @@ impl Parser {
         let mut decls = Vec::new();
         while !self.at_eof() {
             if let Some(decl) = self.parse_external_decl() {
+                // Drain any nested function definitions that were lifted to top level
+                // during parsing of this function's body. They must appear before the
+                // enclosing function so they're visible when needed.
+                decls.extend(self.nested_function_defs.drain(..));
                 decls.push(decl);
             } else {
                 // Report error for unrecognized token at top level
