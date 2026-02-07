@@ -891,11 +891,12 @@ impl Preprocessor {
             }
             "warning" => {
                 // GCC extension, collect warning for structured diagnostic output
+                let expanded = self.macros.expand_line_reuse(rest, &mut self.directive_expanding);
                 self.warnings.push(PreprocessorDiagnostic {
                     file: self.current_file(),
                     line: line_num,
                     col,
-                    message: format!("#warning {}", rest),
+                    message: format!("#warning {}", expanded),
                 });
             }
             "line" => {
@@ -1110,6 +1111,21 @@ int c = 3;
         let (_, errors) = preprocess_with_errors("#else\n#endif\n");
         assert!(errors.iter().any(|e| e.message.contains("#else without #if")),
             "expected '#else without #if' error, got: {:?}", errors);
+    }
+
+    #[test]
+    fn warning_directive_expands_macros() {
+        // Issue #159: #warning should expand macros in its message
+        let mut pp = Preprocessor::new();
+        pp.set_target("x86_64");
+        pp.set_filename("<test>");
+        let _ = pp.preprocess("#define VERSION 42\n#warning Version is VERSION\n");
+        let warnings = &pp.warnings;
+        assert!(!warnings.is_empty(), "expected a warning from #warning directive");
+        assert!(warnings[0].message.contains("42"),
+            "expected macro VERSION to be expanded to 42 in #warning, got: {}", warnings[0].message);
+        assert!(!warnings[0].message.contains("VERSION"),
+            "#warning should expand VERSION macro, got: {}", warnings[0].message);
     }
 
     #[test]
