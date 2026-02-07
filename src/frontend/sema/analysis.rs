@@ -2315,6 +2315,29 @@ impl SemanticAnalyzer {
                     );
                 }
             }
+            return;
+        }
+
+        // Catch-all: struct/union type assigned to/from incompatible type.
+        // Same struct/union is fine; anything else is an error.
+        let target_is_aggregate = matches!(target_ty, CType::Struct(_) | CType::Union(_));
+        let source_is_aggregate = matches!(source_ty, CType::Struct(_) | CType::Union(_));
+        if target_is_aggregate || source_is_aggregate {
+            // Same struct/union key = compatible
+            let compatible = match (target_ty, source_ty) {
+                (CType::Struct(a), CType::Struct(b)) => a == b,
+                (CType::Union(a), CType::Union(b)) => a == b,
+                _ => false,
+            };
+            if !compatible {
+                self.diagnostics.borrow_mut().error(
+                    format!(
+                        "incompatible types when assigning to type '{}' from type '{}'",
+                        target_ty, source_ty
+                    ),
+                    span,
+                );
+            }
         }
     }
 
@@ -3642,5 +3665,39 @@ mod tests {
     fn int_add_int_no_error() {
         let e = sema_errors("int f(void) { int a = 1, b = 2; return a + b; }");
         assert_eq!(e, 0, "int + int should not produce error");
+    }
+
+    // ---- incompatible type assignment (issue #88) ----
+
+    #[test]
+    fn assign_function_to_struct_error() {
+        let e = sema_errors(
+            "int g(void) { return 0; } void f(void) { struct { int x; } s; s = g; (void)s; }"
+        );
+        assert!(e > 0, "assigning function to struct should produce error");
+    }
+
+    #[test]
+    fn assign_int_to_struct_error() {
+        let e = sema_errors(
+            "void f(void) { struct { int x; } s; s = 42; (void)s; }"
+        );
+        assert!(e > 0, "assigning int to struct should produce error");
+    }
+
+    #[test]
+    fn assign_struct_to_int_error() {
+        let e = sema_errors(
+            "void f(void) { struct { int x; } s; int x = 0; x = s; (void)x; (void)s; }"
+        );
+        assert!(e > 0, "assigning struct to int should produce error");
+    }
+
+    #[test]
+    fn assign_same_struct_no_error() {
+        let e = sema_errors(
+            "struct S { int x; }; void f(void) { struct S a, b; a = b; (void)a; }"
+        );
+        assert_eq!(e, 0, "assigning same struct type should not produce error");
     }
 }
