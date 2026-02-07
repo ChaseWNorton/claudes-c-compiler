@@ -794,7 +794,7 @@ impl<'a> SemaConstEval<'a> {
         use crate::common::types::target_ptr_size;
         let ptr_sz = target_ptr_size();
         match spec {
-            TypeSpecifier::Void => Some(0),
+            TypeSpecifier::Void => Some(1), // GCC extension: sizeof(void) == 1
             TypeSpecifier::Char | TypeSpecifier::UnsignedChar => Some(1),
             TypeSpecifier::Short | TypeSpecifier::UnsignedShort => Some(2),
             TypeSpecifier::Int | TypeSpecifier::UnsignedInt
