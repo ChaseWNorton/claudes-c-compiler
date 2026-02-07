@@ -253,6 +253,52 @@ impl Lowerer {
         None
     }
 
+    /// Compute SysV eightbyte classification for the return type of a function
+    /// pointer call. Returns empty Vec if the return type is not a struct/union
+    /// that would use two-register return convention.
+    pub(super) fn get_call_return_eightbyte_classes(&self, func: &Expr) -> Vec<crate::common::types::EightbyteClass> {
+        let func_ctype = match func {
+            Expr::Identifier(name, _) => {
+                if let Some(vi) = self.lookup_var_info(name) {
+                    vi.c_type.clone()
+                } else {
+                    None
+                }
+            }
+            Expr::Deref(..) => {
+                let mut expr = func;
+                while let Expr::Deref(inner, _) = expr {
+                    expr = inner;
+                }
+                self.get_expr_ctype(expr)
+            }
+            _ => self.get_expr_ctype(func),
+        };
+
+        if let Some(ref ctype) = func_ctype {
+            let ret_ctype = ctype.func_ptr_return_type(false);
+            if let Some(ret_ct) = ret_ctype {
+                if ret_ct.is_struct_or_union() {
+                    let size = self.resolve_ctype_size(&ret_ct);
+                    // Only classify if it fits in two registers (≤16 bytes)
+                    if size > 0 && size <= 16 {
+                        let key = match &ret_ct {
+                            CType::Struct(k) | CType::Union(k) => Some(k.as_ref()),
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            let layouts = self.types.borrow_struct_layouts();
+                            if let Some(layout) = layouts.get(key) {
+                                return layout.classify_sysv_eightbytes(&*layouts);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
     /// Check if a builtin name is a polymorphic atomic builtin whose return type
     /// depends on the pointee type of the first argument. These include all
     /// __atomic_fetch_*, __atomic_*_fetch, __sync_fetch_and_*, __sync_*_and_fetch,

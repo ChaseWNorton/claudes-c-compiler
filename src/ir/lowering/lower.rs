@@ -1558,4 +1558,87 @@ mod tests {
             other => panic!("expected Compound for sparse array, got {:?}", std::mem::discriminant(other)),
         }
     }
+
+    #[test]
+    fn fptr_call_mixed_struct_return_has_eightbyte_classes() {
+        // Issue #112: function pointer indirect calls should compute return value
+        // ABI classification so mixed int/float struct returns use correct registers.
+        use crate::common::types::EightbyteClass;
+        let module = compile_to_ir(r#"
+            struct mix { int i; double d; };
+            struct mix (*fp)(void);
+            void f(void) {
+                struct mix m = fp();
+                (void)m;
+            }
+        "#);
+        let func = module.functions.iter().find(|f| f.name == "f").unwrap();
+        // Find the CallIndirect instruction
+        let mut found = false;
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if let Instruction::CallIndirect { info, .. } = inst {
+                    // struct { int; double } is [Integer, SSE]
+                    assert_eq!(info.ret_eightbyte_classes.len(), 2,
+                        "mixed struct should have 2 eightbyte classes, got {:?}", info.ret_eightbyte_classes);
+                    assert_eq!(info.ret_eightbyte_classes[0], EightbyteClass::Integer,
+                        "first eightbyte should be Integer");
+                    assert_eq!(info.ret_eightbyte_classes[1], EightbyteClass::Sse,
+                        "second eightbyte should be SSE");
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "should have a CallIndirect instruction for function pointer call");
+    }
+
+    #[test]
+    fn fptr_call_int_only_struct_return_classes() {
+        // Struct with only integer fields should have [Integer, Integer] or [Integer].
+        use crate::common::types::EightbyteClass;
+        let module = compile_to_ir(r#"
+            struct pair { long a; long b; };
+            struct pair (*fp)(void);
+            void f(void) {
+                struct pair p = fp();
+                (void)p;
+            }
+        "#);
+        let func = module.functions.iter().find(|f| f.name == "f").unwrap();
+        let mut found = false;
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if let Instruction::CallIndirect { info, .. } = inst {
+                    assert_eq!(info.ret_eightbyte_classes.len(), 2,
+                        "16-byte int struct should have 2 eightbyte classes");
+                    assert!(info.ret_eightbyte_classes.iter().all(|c| *c == EightbyteClass::Integer),
+                        "all eightbytes should be Integer, got {:?}", info.ret_eightbyte_classes);
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "should have a CallIndirect for function pointer call");
+    }
+
+    #[test]
+    fn fptr_call_large_struct_no_classes() {
+        // Structs >16 bytes are returned via sret pointer, no eightbyte classification.
+        let module = compile_to_ir(r#"
+            struct big { long a; long b; long c; };
+            struct big (*fp)(void);
+            void f(void) {
+                struct big s = fp();
+                (void)s;
+            }
+        "#);
+        let func = module.functions.iter().find(|f| f.name == "f").unwrap();
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if let Instruction::CallIndirect { info, .. } = inst {
+                    assert!(info.ret_eightbyte_classes.is_empty(),
+                        "large struct should have empty eightbyte classes, got {:?}", info.ret_eightbyte_classes);
+                }
+            }
+        }
+    }
 }

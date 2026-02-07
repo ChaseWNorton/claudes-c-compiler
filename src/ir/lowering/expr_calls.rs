@@ -191,14 +191,13 @@ impl Lowerer {
         let (sret_size, two_reg_size, call_ret_classes) = if let Expr::Identifier(name, _) = stripped_func {
             if self.is_func_ptr_variable(name) {
                 // Indirect call through function pointer variable
-                // TODO: compute ret_eightbyte_classes from the function pointer's
-                // return type to support mixed SSE/INTEGER struct returns via fptrs
+                let classes = self.get_call_return_eightbyte_classes(effective_func);
                 match self.get_call_return_struct_size(effective_func) {
                     Some(size) => {
                         let (s, t) = Self::classify_struct_return(size);
-                        (s, t, Vec::new())
+                        (s, t, classes)
                     }
-                    None => (None, None, Vec::new()),
+                    None => (None, None, classes),
                 }
             } else {
                 // Direct function call - look up by function name
@@ -211,14 +210,13 @@ impl Lowerer {
             }
         } else {
             // Non-identifier function expression (e.g., array[i]())
-            // TODO: compute ret_eightbyte_classes from expression return type
-            // to support mixed SSE/INTEGER struct returns via indirect calls
+            let classes = self.get_call_return_eightbyte_classes(effective_func);
             match self.get_call_return_struct_size(effective_func) {
                 Some(size) => {
                     let (s, t) = Self::classify_struct_return(size);
-                    (s, t, Vec::new())
+                    (s, t, classes)
                 }
-                None => (None, None, Vec::new()),
+                None => (None, None, classes),
             }
         };
 
