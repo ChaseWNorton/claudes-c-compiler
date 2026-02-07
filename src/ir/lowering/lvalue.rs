@@ -50,10 +50,12 @@ impl Lowerer {
                 }
                 if let Some(ginfo) = self.globals.get(name) {
                     // Global register variables have no storage, so they are not
-                    // addressable. Writes are silently dropped (read-only in practice).
-                    // TODO: support writes to global register variables via inline asm
-                    // with an input constraint (e.g., `asm("" : : "{rsp}"(val))`)
+                    // addressable. Emit warning since writes are dropped.
                     if ginfo.asm_register.is_some() {
+                        self.emit_warning(
+                            format!("assignment to global register variable '{}' is silently dropped (not yet implemented)", name),
+                            expr.span(),
+                        );
                         return None;
                     }
                     let addr_space = ginfo.address_space;

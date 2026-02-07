@@ -1972,4 +1972,14 @@ mod tests {
         assert!(diag.warning_count() >= 1,
             "expected warning for __builtin_frame_address(1), got {} warnings", diag.warning_count());
     }
+
+    #[test]
+    fn global_register_write_warns() {
+        let (_, diag) = compile_to_ir_with_diag(r#"
+            register unsigned long sp asm("rsp");
+            void f(void) { sp = 0x1000; }
+        "#);
+        assert!(diag.warning_count() >= 1,
+            "expected warning for global register write, got {} warnings", diag.warning_count());
+    }
 }
