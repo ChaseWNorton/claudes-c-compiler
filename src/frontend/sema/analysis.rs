@@ -36,6 +36,7 @@ use crate::frontend::parser::ast::{
     ExternalDecl,
     ForInit,
     FunctionDef,
+    GenericAssociation,
     Initializer,
     InitializerItem,
     SizeofArg,
@@ -1886,11 +1887,13 @@ impl SemanticAnalyzer {
             Expr::VaArg(ap_expr, _, _) => {
                 self.analyze_expr(ap_expr);
             }
-            Expr::GenericSelection(controlling, associations, _) => {
+            Expr::GenericSelection(controlling, associations, span) => {
                 self.analyze_expr(controlling);
                 for assoc in associations {
                     self.analyze_expr(&assoc.expr);
                 }
+                // C11 §6.5.1.1: validate _Generic selection
+                self.check_generic_selection(controlling, associations, *span);
             }
             // Literals don't need analysis
             Expr::IntLiteral(_, _)
@@ -2583,6 +2586,71 @@ impl SemanticAnalyzer {
                 field_idx += 1;
             } else {
                 field_idx += 1; // Move past the designated field
+            }
+        }
+    }
+
+    /// Validate a _Generic selection per C11 §6.5.1.1.
+    /// - No two associations may specify compatible types
+    /// - If no association matches and there's no default, it's a constraint violation
+    fn check_generic_selection(
+        &self,
+        controlling: &Expr,
+        associations: &[GenericAssociation],
+        span: Span,
+    ) {
+        let checker = super::type_checker::ExprTypeChecker {
+            symbols: &self.symbol_table,
+            types: &self.result.type_context,
+            functions: &self.result.functions,
+            expr_types: Some(&self.result.expr_types),
+        };
+
+        // Resolve all association types for duplicate checking
+        let mut resolved_types: Vec<CType> = Vec::new();
+        let mut has_default = false;
+        let mut has_match = false;
+        let ctrl_ty = checker.infer_expr_ctype(controlling);
+
+        for assoc in associations {
+            match &assoc.type_spec {
+                None => { has_default = true; }
+                Some(ts) => {
+                    let assoc_ct = self.type_spec_to_ctype(ts);
+                    // Check for duplicate type associations
+                    for prev_ct in &resolved_types {
+                        if *prev_ct == assoc_ct {
+                            self.diagnostics.borrow_mut().error(
+                                format!(
+                                    "duplicate type '{}' in _Generic association",
+                                    assoc_ct
+                                ),
+                                span,
+                            );
+                            break;
+                        }
+                    }
+                    // Check if this matches the controlling expression
+                    if let Some(ref ct) = ctrl_ty {
+                        if *ct == assoc_ct {
+                            has_match = true;
+                        }
+                    }
+                    resolved_types.push(assoc_ct);
+                }
+            }
+        }
+
+        // If no match found and no default, it's an error
+        if !has_match && !has_default {
+            if let Some(ref ct) = ctrl_ty {
+                self.diagnostics.borrow_mut().error(
+                    format!(
+                        "controlling expression type '{}' not compatible with any _Generic association",
+                        ct
+                    ),
+                    span,
+                );
             }
         }
     }
@@ -3907,5 +3975,39 @@ mod tests {
         );
         assert_eq!(e, 0, "compatible function pointers should not error");
         assert_eq!(w, 0, "compatible function pointers should not warn");
+    }
+
+    // ---- _Generic validation (issue #106) ----
+
+    #[test]
+    fn generic_no_match_no_default_error() {
+        let e = sema_errors(
+            "int f(void) { int x; return _Generic(x, float: 1, double: 2); }"
+        );
+        assert!(e > 0, "_Generic with no matching type and no default should error");
+    }
+
+    #[test]
+    fn generic_with_default_no_error() {
+        let e = sema_errors(
+            "int f(void) { int x; return _Generic(x, float: 1, default: 2); }"
+        );
+        assert_eq!(e, 0, "_Generic with default should not error even without match");
+    }
+
+    #[test]
+    fn generic_matching_type_no_error() {
+        let e = sema_errors(
+            "int f(void) { int x; return _Generic(x, int: 1, float: 2); }"
+        );
+        assert_eq!(e, 0, "_Generic with matching type should not error");
+    }
+
+    #[test]
+    fn generic_duplicate_type_error() {
+        let e = sema_errors(
+            "int f(void) { int x; return _Generic(x, int: 1, int: 2); }"
+        );
+        assert!(e > 0, "_Generic with duplicate type should error");
     }
 }
