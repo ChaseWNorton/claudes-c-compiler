@@ -66,8 +66,8 @@ static BUILTIN_MAP: LazyLock<FxHashMap<&'static str, BuiltinInfo>> = LazyLock::n
     m.insert("__builtin_nextafter", BuiltinInfo::simple("nextafter"));
     m.insert("__builtin_nextafterf", BuiltinInfo::simple("nextafterf"));
     m.insert("__builtin_nextafterl", BuiltinInfo::simple("nextafterl"));
-    // TODO: __builtin_nan(s) ignores the string payload argument (NaN payload).
-    // For common usage with "" this is correct; full payload support needs custom lowering.
+    // NaN payload is parsed from the string argument in const_eval and expr_builtins.
+    // The ConstantF64 value here is only used as a fallback when no string arg is available.
     m.insert("__builtin_nan", BuiltinInfo::constant_f64(f64::NAN));
     m.insert("__builtin_nanf", BuiltinInfo::constant_f64(f64::NAN));
     m.insert("__builtin_inf", BuiltinInfo::constant_f64(f64::INFINITY));

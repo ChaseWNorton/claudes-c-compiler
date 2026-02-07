@@ -66,6 +66,28 @@ pub fn eval_literal(expr: &Expr) -> Option<IrConst> {
 /// - __builtin_parity{,l,ll}, __builtin_clrsb{,l,ll}
 ///
 /// `eval_fn` is the caller's recursive eval_const_expr function.
+/// Parse a NaN payload from the string argument of __builtin_nan/nanl.
+fn parse_nan_payload_u64(args: &[Expr]) -> u64 {
+    if let Some(Expr::StringLiteral(s, _)) = args.first() {
+        if s.is_empty() { return 0; }
+        let s = s.trim();
+        if s.starts_with("0x") || s.starts_with("0X") {
+            u64::from_str_radix(&s[2..], 16).unwrap_or(0)
+        } else if s.starts_with('0') && s.len() > 1 {
+            u64::from_str_radix(&s[1..], 8).unwrap_or(0)
+        } else {
+            s.parse::<u64>().unwrap_or(0)
+        }
+    } else {
+        0
+    }
+}
+
+/// Parse a NaN payload from the string argument of __builtin_nanf.
+fn parse_nan_payload_u32(args: &[Expr]) -> u32 {
+    parse_nan_payload_u64(args) as u32
+}
+
 pub fn eval_builtin_call(
     name: &str,
     args: &[Expr],
@@ -248,9 +270,21 @@ pub fn eval_builtin_call(
         // Without these, eval_const_expr returns None and global_init.rs
         // falls through to GlobalInit::Zero, silently zero-initializing
         // the variable instead of storing NaN/Infinity.
-        "__builtin_nan" => Some(IrConst::F64(f64::NAN)),
-        "__builtin_nanf" => Some(IrConst::F32(f32::NAN)),
-        "__builtin_nanl" => Some(IrConst::long_double(f64::NAN)),
+        "__builtin_nan" => {
+            let payload = parse_nan_payload_u64(args);
+            let bits = 0x7FF8_0000_0000_0000u64 | (payload & 0x0007_FFFF_FFFF_FFFFu64);
+            Some(IrConst::F64(f64::from_bits(bits)))
+        }
+        "__builtin_nanf" => {
+            let payload = parse_nan_payload_u32(args);
+            let bits = 0x7FC0_0000u32 | (payload & 0x003F_FFFFu32);
+            Some(IrConst::F32(f32::from_bits(bits)))
+        }
+        "__builtin_nanl" => {
+            let payload = parse_nan_payload_u64(args);
+            let bits = 0x7FF8_0000_0000_0000u64 | (payload & 0x0007_FFFF_FFFF_FFFFu64);
+            Some(IrConst::long_double(f64::from_bits(bits)))
+        }
         "__builtin_inf" => Some(IrConst::F64(f64::INFINITY)),
         "__builtin_inff" => Some(IrConst::F32(f32::INFINITY)),
         "__builtin_infl" => Some(IrConst::long_double(f64::INFINITY)),

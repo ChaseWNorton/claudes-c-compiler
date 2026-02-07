@@ -1937,4 +1937,30 @@ mod tests {
             unsigned long get_sp(void) { return current_stack_pointer; }
         "#);
     }
+
+    #[test]
+    fn builtin_nan_payload_preserved() {
+        use crate::ir::module::GlobalInit;
+        use crate::ir::constants::IrConst;
+        // __builtin_nan("1") should produce a NaN with payload 1, not a generic NaN.
+        let module = compile_to_ir(r#"
+            double x = __builtin_nan("1");
+            double y = __builtin_nan("0");
+        "#);
+        let gx = module.globals.iter().find(|g| g.name == "x").expect("global 'x'");
+        let gy = module.globals.iter().find(|g| g.name == "y").expect("global 'y'");
+        match (&gx.init, &gy.init) {
+            (GlobalInit::Scalar(IrConst::F64(xv)), GlobalInit::Scalar(IrConst::F64(yv))) => {
+                // Both should be NaN
+                assert!(xv.is_nan(), "x should be NaN");
+                assert!(yv.is_nan(), "y should be NaN");
+                // But they should have different bit patterns (payload 1 vs 0)
+                assert_ne!(xv.to_bits(), yv.to_bits(),
+                    "NaN payloads should differ: x=0x{:016x}, y=0x{:016x}", xv.to_bits(), yv.to_bits());
+                // x should have payload bit 0 set
+                assert_eq!(xv.to_bits() & 1, 1, "NaN payload 1 should have LSB set");
+            }
+            other => panic!("expected (Scalar(F64), Scalar(F64)), got {:?}", other),
+        }
+    }
 }

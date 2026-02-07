@@ -235,18 +235,69 @@ impl Lowerer {
                 Some(args.first().map_or(Operand::Const(IrConst::I64(0)), |a| self.lower_expr(a)))
             }
             BuiltinKind::ConstantF64(val) => {
+                let is_nan_variant = name == "__builtin_nan"
+                    || name == "__builtin_nanf"
+                    || name == "__builtin_nanl";
                 let is_float_variant = name == "__builtin_inff"
                     || name == "__builtin_huge_valf"
                     || name == "__builtin_nanf";
                 let is_long_double_variant = name == "__builtin_infl"
                     || name == "__builtin_huge_vall"
                     || name == "__builtin_nanl";
-                if is_float_variant {
-                    Some(Operand::Const(IrConst::F32(*val as f32)))
-                } else if is_long_double_variant {
-                    Some(Operand::Const(IrConst::long_double(*val)))
+
+                // Parse NaN payload from the string argument if present
+                let nan_val = if is_nan_variant {
+                    let payload = args.first().and_then(|arg| {
+                        if let Expr::StringLiteral(s, _) = arg {
+                            if s.is_empty() {
+                                return Some(0u64);
+                            }
+                            let s = s.trim();
+                            if s.starts_with("0x") || s.starts_with("0X") {
+                                u64::from_str_radix(&s[2..], 16).ok()
+                            } else if s.starts_with('0') && s.len() > 1 {
+                                u64::from_str_radix(&s[1..], 8).ok()
+                            } else {
+                                s.parse::<u64>().ok()
+                            }
+                        } else {
+                            None
+                        }
+                    }).unwrap_or(0);
+                    // Construct quiet NaN with payload: set quiet bit + payload bits
+                    // IEEE 754 double: sign(1) | exponent(11, all 1s) | quiet(1) | payload(51)
+                    let nan_bits = 0x7FF8_0000_0000_0000u64 | (payload & 0x0007_FFFF_FFFF_FFFFu64);
+                    f64::from_bits(nan_bits)
                 } else {
-                    Some(Operand::Const(IrConst::F64(*val)))
+                    *val
+                };
+
+                if is_float_variant {
+                    if is_nan_variant {
+                        // nanf: construct f32 NaN with payload
+                        let payload = args.first().and_then(|arg| {
+                            if let Expr::StringLiteral(s, _) = arg {
+                                if s.is_empty() { return Some(0u32); }
+                                let s = s.trim();
+                                if s.starts_with("0x") || s.starts_with("0X") {
+                                    u32::from_str_radix(&s[2..], 16).ok()
+                                } else if s.starts_with('0') && s.len() > 1 {
+                                    u32::from_str_radix(&s[1..], 8).ok()
+                                } else {
+                                    s.parse::<u32>().ok()
+                                }
+                            } else { None }
+                        }).unwrap_or(0);
+                        // IEEE 754 float: sign(1) | exponent(8, all 1s) | quiet(1) | payload(22)
+                        let nan_bits = 0x7FC0_0000u32 | (payload & 0x003F_FFFFu32);
+                        Some(Operand::Const(IrConst::F32(f32::from_bits(nan_bits))))
+                    } else {
+                        Some(Operand::Const(IrConst::F32(nan_val as f32)))
+                    }
+                } else if is_long_double_variant {
+                    Some(Operand::Const(IrConst::long_double(nan_val)))
+                } else {
+                    Some(Operand::Const(IrConst::F64(nan_val)))
                 }
             }
             BuiltinKind::Intrinsic(intrinsic) => {
