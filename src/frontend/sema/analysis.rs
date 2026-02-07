@@ -497,6 +497,21 @@ impl SemanticAnalyzer {
                 }
             }
 
+            // C11 6.7.9: diagnose excess initializer elements for arrays with explicit size.
+            // e.g. int arr[1] = {1, 2, 3} → error: excess elements in array initializer
+            if let CType::Array(ref elem, Some(declared_size)) = full_type {
+                if let Some(ref init) = init_decl.init {
+                    if let Some(init_count) = self.count_initializer_elements(init, elem) {
+                        if init_count > declared_size {
+                            self.diagnostics.borrow_mut().error(
+                                "excess elements in array initializer",
+                                init_decl.span,
+                            );
+                        }
+                    }
+                }
+            }
+
             // Check if this is a function declaration (prototype)
             if let CType::Function(ref ft) = full_type {
                 let is_noreturn = init_decl.attrs.is_noreturn();
@@ -3361,5 +3376,41 @@ mod tests {
     fn compound_literal_valid_field_no_error() {
         let (e, _) = sema_counts("struct A { int x; }; void f(void) { (struct A){.x = 1}; }");
         assert_eq!(e, 0, "valid field designator should not produce error");
+    }
+
+    // ---- excess initializer elements for arrays ----
+
+    #[test]
+    fn excess_array_initializer_error() {
+        // int arr[1] = {1, 2, 3} → excess elements
+        let e = sema_errors("void f(void) { int arr[1] = {1, 2, 3}; }");
+        assert!(e > 0, "excess elements in array initializer should produce error");
+    }
+
+    #[test]
+    fn exact_array_initializer_no_error() {
+        // int arr[3] = {1, 2, 3} → exact match, no error
+        let e = sema_errors("void f(void) { int arr[3] = {1, 2, 3}; }");
+        assert_eq!(e, 0, "exact match initializer should not produce error");
+    }
+
+    #[test]
+    fn fewer_array_initializer_no_error() {
+        // int arr[3] = {1} → fewer elements is valid (zero-fills rest)
+        let e = sema_errors("void f(void) { int arr[3] = {1}; }");
+        assert_eq!(e, 0, "fewer elements than array size should not produce error");
+    }
+
+    #[test]
+    fn incomplete_array_initializer_no_error() {
+        // int arr[] = {1, 2, 3} → size inferred from initializer, no error
+        let e = sema_errors("void f(void) { int arr[] = {1, 2, 3}; (void)arr; }");
+        assert_eq!(e, 0, "incomplete array with initializer should not produce error");
+    }
+
+    #[test]
+    fn excess_global_array_initializer_error() {
+        let e = sema_errors("int arr[2] = {1, 2, 3};");
+        assert!(e > 0, "excess elements in global array initializer should produce error");
     }
 }
