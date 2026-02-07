@@ -26,18 +26,37 @@ cd claudes-c-compiler
 git remote add upstream https://github.com/anthropics/claudes-c-compiler.git
 ```
 
-Verify:
-```bash
-git remote -v
-# origin    git@github.com:YOUR_USERNAME/claudes-c-compiler.git (push)
-# upstream  https://github.com/anthropics/claudes-c-compiler.git (fetch)
-```
-
 **Rule: `origin` = your fork (you push here). `upstream` = the canonical repo (PRs target here). You'll accumulate more remotes as you work — that's by design.**
 
-### 3. Open Claude Code and type `/ccc`
+### 3. Bootstrap: get onto the chain
 
-That's it. Claude syncs you to the chain tip, shows project state, and asks what you want to do.
+**This is critical.** The `/ccc` command and all the skills live in the chain — they don't exist on `main`. A fresh clone of the upstream repo has none of the `.claude/commands/` or `.claude/skills/` files. You need to get onto the chain tip before `/ccc` will work.
+
+The chain tip can be on any contributor's fork. Run this to find it and sync up:
+
+```bash
+# Find the chain tip: whose fork, which branch
+CHAIN_INFO=$(gh pr list --repo anthropics/claudes-c-compiler --state open \
+  --json number,title,headRefName,isDraft,headRepositoryOwner --limit 100 \
+  | jq '[.[] | select(.title | test("^\\[CC\\]")) | select(.isDraft | not)]
+        | sort_by(.number) | last')
+
+OWNER=$(echo "$CHAIN_INFO" | jq -r '.headRepositoryOwner.login')
+BRANCH=$(echo "$CHAIN_INFO" | jq -r '.headRefName')
+
+# Add their fork as a remote and fetch
+git remote add "$OWNER" "https://github.com/$OWNER/claudes-c-compiler.git"
+git fetch "$OWNER" "$BRANCH"
+
+# Get on the chain
+git switch -c working "$OWNER/$BRANCH"
+```
+
+After this, your local tree has all the skills, all the fixes, and everything you need.
+
+### 4. Open Claude Code and type `/ccc`
+
+Now it works. Claude syncs you to the chain tip, shows project state, and asks what you want to do. From here on, `/ccc` handles remote additions automatically when the chain tip moves to a different fork.
 
 ---
 
