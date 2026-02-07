@@ -1927,4 +1927,14 @@ mod tests {
         "#);
         assert!(diag.warning_count() >= 1, "expected warning for call to error-attributed function, got {}", diag.warning_count());
     }
+
+    #[test]
+    fn asm_global_register_output_no_panic() {
+        // Issue #174: asm with global register output operands should not panic.
+        // Previously had expect()/unreachable!() that could crash on edge cases.
+        let _module = compile_to_ir(r#"
+            register unsigned long current_stack_pointer asm("rsp");
+            unsigned long get_sp(void) { return current_stack_pointer; }
+        "#);
+    }
 }

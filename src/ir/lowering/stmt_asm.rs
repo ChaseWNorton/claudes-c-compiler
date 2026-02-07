@@ -12,6 +12,7 @@
 use crate::frontend::parser::ast::{AsmOperand, Expr};
 use crate::ir::reexports::{
     BlockId,
+    IrConst,
     Instruction,
     Operand,
     Value,
@@ -121,12 +122,22 @@ impl Lowerer {
                 let stripped_for_mem_check = constraint.replace('+', "");
                 let needs_address = constraint_needs_address(&stripped_for_mem_check, self.is_riscv(), self.is_arm());
                 let input_operand = if is_global_reg {
-                    if let Expr::Identifier(ref var_name, _) = &out.expr {
-                        let asm_reg = self.get_asm_register(var_name)
-                            .expect("global register variable must have an asm register");
-                        self.read_global_register(&asm_reg, out_ty)
+                    if let Expr::Identifier(ref var_name, span) = &out.expr {
+                        if let Some(asm_reg) = self.get_asm_register(var_name) {
+                            self.read_global_register(&asm_reg, out_ty)
+                        } else {
+                            self.emit_warning(
+                                format!("global register variable '{}' has no associated asm register", var_name),
+                                *span,
+                            );
+                            Operand::Const(IrConst::zero(out_ty))
+                        }
                     } else {
-                        unreachable!("asm output for global register variable must be an identifier")
+                        self.emit_warning(
+                            "asm output operand for global register variable is not an identifier".to_string(),
+                            out.expr.span(),
+                        );
+                        Operand::Const(IrConst::zero(out_ty))
                     }
                 } else if needs_address {
                     // For "+m" (memory-only read-write) and "+A" (RISC-V address for
