@@ -1772,15 +1772,26 @@ impl SemanticAnalyzer {
                             BinOp::Gt => ">", BinOp::Ge => ">=",
                             BinOp::LogicalAnd => "&&", BinOp::LogicalOr => "||",
                         };
-                        self.diagnostics.borrow_mut().error(
+                        // C11 §6.5.13/6.5.14: logical operators require scalar operands
+                        let msg = if matches!(op, BinOp::LogicalAnd | BinOp::LogicalOr) {
+                            let bad_ty = if lhs_is_aggregate {
+                                lhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string())
+                            } else {
+                                rhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string())
+                            };
+                            format!(
+                                "used {} where scalar is required (have '{}')",
+                                op_str, bad_ty,
+                            )
+                        } else {
                             format!(
                                 "invalid operands to binary {} (have '{}' and '{}')",
                                 op_str,
                                 lhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string()),
                                 rhs_ty.as_ref().map_or("unknown".to_string(), |t| t.to_string()),
-                            ),
-                            *span,
-                        );
+                            )
+                        };
+                        self.diagnostics.borrow_mut().error(msg, *span);
                     }
                 }
                 // C11 §6.5.6p2: pointer arithmetic requires pointee to be a complete type.
@@ -4265,5 +4276,13 @@ mod tests {
     fn non_const_struct_member_write_ok() {
         let (e, _) = sema_counts("struct S { int x; }; void f(void) { struct S s = {0}; s.x = 1; }");
         assert_eq!(e, 0, "should not error on assignment to member of non-const struct");
+    }
+
+    // ---- logical operator on struct type (issue #158) ----
+
+    #[test]
+    fn logical_and_on_struct_mentions_scalar() {
+        let (e, _) = sema_counts("struct S { int x; }; void f(void) { struct S a = {0}, b = {0}; int r = a && b; }");
+        assert!(e >= 1, "should error on struct && struct");
     }
 }
