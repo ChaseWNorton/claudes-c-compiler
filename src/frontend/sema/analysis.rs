@@ -2359,20 +2359,70 @@ impl SemanticAnalyzer {
     /// Check if an lvalue expression refers to a const-qualified variable.
     /// If so, emit an error: "assignment of read-only variable 'x'" (matches GCC).
     fn check_const_modification(&self, expr: &Expr, span: Span) {
-        let name = match expr {
-            Expr::Identifier(name, _) => name,
-            // For dereferences, member access, subscripts — the constness
-            // lives in the pointer's pointee type, which we don't track yet.
-            // Focus on the direct variable case for now.
-            _ => return,
-        };
-        if let Some(sym) = self.symbol_table.lookup(name) {
-            if sym.is_const {
-                self.diagnostics.borrow_mut().error(
-                    format!("assignment of read-only variable '{}'", name),
-                    span,
-                );
+        match expr {
+            Expr::Identifier(name, _) => {
+                if let Some(sym) = self.symbol_table.lookup(name) {
+                    if sym.is_const {
+                        self.diagnostics.borrow_mut().error(
+                            format!("assignment of read-only variable '{}'", name),
+                            span,
+                        );
+                    }
+                }
             }
+            // const_struct.field = value
+            Expr::MemberAccess(base, field, _) | Expr::PointerMemberAccess(base, field, _) => {
+                if let Some(name) = Self::extract_base_identifier(base) {
+                    if let Some(sym) = self.symbol_table.lookup(&name) {
+                        if sym.is_const {
+                            self.diagnostics.borrow_mut().error(
+                                format!("assignment of member '{}' in read-only object", field),
+                                span,
+                            );
+                        }
+                    }
+                }
+            }
+            // const_arr[i] = value
+            Expr::ArraySubscript(base, _, _) => {
+                if let Some(name) = Self::extract_base_identifier(base) {
+                    if let Some(sym) = self.symbol_table.lookup(&name) {
+                        if sym.is_const {
+                            self.diagnostics.borrow_mut().error(
+                                format!("assignment of read-only location '{}[...]'", name),
+                                span,
+                            );
+                        }
+                    }
+                }
+            }
+            // *const_ptr = value (where the pointer variable itself is const)
+            Expr::Deref(inner, _) => {
+                if let Some(name) = Self::extract_base_identifier(inner) {
+                    if let Some(sym) = self.symbol_table.lookup(&name) {
+                        if sym.is_const {
+                            self.diagnostics.borrow_mut().error(
+                                format!("assignment of read-only location '*{}'", name),
+                                span,
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Extract the base identifier name from an expression, walking through
+    /// member access, subscript, and deref chains.
+    fn extract_base_identifier(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Identifier(name, _) => Some(name.clone()),
+            Expr::MemberAccess(base, _, _)
+            | Expr::PointerMemberAccess(base, _, _)
+            | Expr::ArraySubscript(base, _, _)
+            | Expr::Deref(base, _) => Self::extract_base_identifier(base),
+            _ => None,
         }
     }
 
@@ -4195,5 +4245,25 @@ mod tests {
         "#);
         // Should compile without panicking (B wraps to i64::MIN)
         let _ = e;
+    }
+
+    // ---- const modification extended checks (issue #146) ----
+
+    #[test]
+    fn const_struct_member_write_error() {
+        let (e, _) = sema_counts("struct S { int x; }; void f(void) { const struct S s = {0}; s.x = 1; }");
+        assert!(e >= 1, "should error on assignment to member of const struct");
+    }
+
+    #[test]
+    fn const_array_subscript_write_error() {
+        let (e, _) = sema_counts("void f(void) { const int arr[3] = {0}; arr[0] = 1; }");
+        assert!(e >= 1, "should error on assignment to const array element");
+    }
+
+    #[test]
+    fn non_const_struct_member_write_ok() {
+        let (e, _) = sema_counts("struct S { int x; }; void f(void) { struct S s = {0}; s.x = 1; }");
+        assert_eq!(e, 0, "should not error on assignment to member of non-const struct");
     }
 }
