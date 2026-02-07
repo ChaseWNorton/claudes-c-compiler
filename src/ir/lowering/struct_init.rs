@@ -260,6 +260,16 @@ impl Lowerer {
 
         // Find the first index designator in the remaining designators
         let remaining_desigs = &item.designators[1..];
+        let has_unevaluable_index = remaining_desigs.iter().any(|d| {
+            if let Designator::Index(ref idx_expr) = d {
+                self.eval_const_expr(idx_expr).and_then(|c| c.to_usize()).is_none()
+            } else {
+                false
+            }
+        });
+        if has_unevaluable_index {
+            self.emit_warning("designator index is not a constant expression; defaulting to 0", crate::common::source::Span::dummy());
+        }
         let (first_idx_pos, idx) = remaining_desigs.iter().enumerate().find_map(|(i, d)| {
             if let Designator::Index(ref idx_expr) = d {
                 self.eval_const_expr(idx_expr).and_then(|c| c.to_usize()).map(|v| (i, v))
@@ -345,6 +355,16 @@ impl Lowerer {
         remaining_index_desigs: &[Designator],
     ) {
         if let CType::Array(inner_elem_ty, Some(inner_size)) = elem_ty {
+            let has_unevaluable_inner = remaining_index_desigs.iter().any(|d| {
+                if let Designator::Index(ref idx_expr) = d {
+                    self.eval_const_expr(idx_expr).and_then(|c| c.to_usize()).is_none()
+                } else {
+                    false
+                }
+            });
+            if has_unevaluable_inner {
+                self.emit_warning("designator index is not a constant expression; defaulting to 0", crate::common::source::Span::dummy());
+            }
             let inner_idx = remaining_index_desigs.iter().find_map(|d| {
                 if let Designator::Index(ref idx_expr) = d {
                     self.eval_const_expr(idx_expr).and_then(|c| c.to_usize())

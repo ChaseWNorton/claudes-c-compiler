@@ -1719,4 +1719,26 @@ mod tests {
             other => panic!("expected Scalar(I32) for global int, got {:?}", std::mem::discriminant(other)),
         }
     }
+
+    #[test]
+    fn valid_designator_index_no_panic() {
+        // Issue #148: valid constant designator indices should still work correctly.
+        compile_to_ir(r#"
+            void f(void) {
+                struct { int a[10]; } s = { .a[3] = 42 };
+                (void)s;
+            }
+        "#);
+    }
+
+    #[test]
+    fn nested_designator_index_no_panic() {
+        // Multi-dimensional array designators should work.
+        compile_to_ir(r#"
+            void f(void) {
+                int a[3][3] = { [1][2] = 99 };
+                (void)a;
+            }
+        "#);
+    }
 }
