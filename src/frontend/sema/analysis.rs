@@ -2443,10 +2443,25 @@ impl SemanticAnalyzer {
             (CType::Array(ea, _), CType::Array(eb, _)) => {
                 Self::pointee_types_compatible(ea, eb)
             }
-            // Function types: just check broad compatibility
-            (CType::Function(_), CType::Function(_)) => {
-                // Simplification: treat all function pointers as compatible
-                true
+            // Function types: check return type, parameter count/types, variadic-ness
+            (CType::Function(fa), CType::Function(fb)) => {
+                // C11 §6.2.7: compatible function types require compatible return types,
+                // same number of parameters, and compatible parameter types.
+                if !Self::pointee_types_compatible(&fa.return_type, &fb.return_type) {
+                    return false;
+                }
+                if fa.variadic != fb.variadic {
+                    return false;
+                }
+                // Old-style () (empty params) is compatible with any param list (C11 §6.7.6.3p15)
+                if fa.params.is_empty() || fb.params.is_empty() {
+                    return true;
+                }
+                if fa.params.len() != fb.params.len() {
+                    return false;
+                }
+                fa.params.iter().zip(fb.params.iter())
+                    .all(|((ta, _), (tb, _))| Self::pointee_types_compatible(ta, tb))
             }
             // Enum types are integer types in C (C11 6.7.2.2p4), so enum pointers
             // are compatible with integer pointers of the same size for pointer
@@ -3849,5 +3864,48 @@ mod tests {
     fn incomplete_ptr_postinc_error() {
         let e = sema_errors("struct X; void f(struct X *p) { p++; }");
         assert!(e > 0, "incomplete struct p++ should produce error");
+    }
+
+    // ---- function pointer type compatibility (issue #107) ----
+
+    #[test]
+    fn func_ptr_mismatched_return_type_warns() {
+        let (_, w) = sema_counts(
+            "void f(void) { int (*fp)(int); double (*gp)(int); fp = gp; (void)fp; }"
+        );
+        assert!(w > 0, "mismatched return types should produce warning");
+    }
+
+    #[test]
+    fn func_ptr_mismatched_param_count_warns() {
+        let (_, w) = sema_counts(
+            "void f(void) { int (*fp)(int, int); int (*gp)(int); fp = gp; (void)fp; }"
+        );
+        assert!(w > 0, "mismatched param counts should produce warning");
+    }
+
+    #[test]
+    fn func_ptr_mismatched_param_types_warns() {
+        let (_, w) = sema_counts(
+            "void f(void) { int (*fp)(int); int (*gp)(float); fp = gp; (void)fp; }"
+        );
+        assert!(w > 0, "mismatched param types should produce warning");
+    }
+
+    #[test]
+    fn func_ptr_variadic_mismatch_warns() {
+        let (_, w) = sema_counts(
+            "void f(void) { int (*fp)(int, ...); int (*gp)(int); fp = gp; (void)fp; }"
+        );
+        assert!(w > 0, "variadic vs non-variadic should produce warning");
+    }
+
+    #[test]
+    fn func_ptr_compatible_no_warning() {
+        let (e, w) = sema_counts(
+            "void f(void) { int (*fp)(int); int (*gp)(int); fp = gp; (void)fp; }"
+        );
+        assert_eq!(e, 0, "compatible function pointers should not error");
+        assert_eq!(w, 0, "compatible function pointers should not warn");
     }
 }
