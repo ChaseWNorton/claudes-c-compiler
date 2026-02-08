@@ -6,6 +6,7 @@ pub(crate) mod ir;
 pub(crate) mod passes;
 pub mod backend;
 pub mod driver;
+pub mod superopt;
 
 /// Shared entry point for all compiler binaries. Spawns the real work on a
 /// thread with a large stack so deeply recursive C files don't overflow.

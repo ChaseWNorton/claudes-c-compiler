@@ -25,6 +25,10 @@ path = "src/bin/ccc_riscv.rs"
 name = "ccc-i686"
 path = "src/bin/ccc_i686.rs"
 
+[[bin]]
+name = "ccc-superopt"
+path = "src/bin/ccc_superopt.rs"
+
 [features]
 # Allow GCC as a linker fallback. When enabled and GCC is used, a warning is printed.
 gcc_linker = []
