@@ -244,7 +244,7 @@ impl SemanticAnalyzer {
         self.collect_enum_constants_from_type_spec(&func.return_type);
 
         let params: Vec<(CType, Option<String>)> = func.params.iter().map(|p| {
-            let ty = self.type_spec_to_ctype(&p.type_spec);
+            let ty = self.param_to_ctype(p);
             (ty, p.name.clone())
         }).collect();
 
@@ -294,7 +294,7 @@ impl SemanticAnalyzer {
         // Declare parameters in function scope
         for param in &func.params {
             if let Some(name) = &param.name {
-                let ty = self.type_spec_to_ctype(&param.type_spec);
+                let ty = self.param_to_ctype(param);
                 // Same logic as local variables: `const int *p` means the
                 // pointee is const, not the pointer variable itself.
                 let param_is_const = if matches!(ty, CType::Pointer(..)) {
@@ -2979,6 +2979,39 @@ impl SemanticAnalyzer {
         self.resolve_type_spec_to_ctype(spec)
     }
 
+    /// Get the CType for a function parameter, correctly handling function pointer
+    /// parameters where `fptr_params` carries the pointed-to function's signature.
+    ///
+    /// For `long (*fp)(struct R *)`, the parser stores:
+    ///   type_spec = Pointer(Long)   (the (*) indirection folded in)
+    ///   fptr_params = Some([ParamDecl for struct R *])
+    ///
+    /// Without this, `type_spec_to_ctype` alone produces `long *` instead of
+    /// `long (*)(struct R *)`.
+    fn param_to_ctype(&self, param: &crate::frontend::parser::ast::ParamDecl) -> CType {
+        if let Some(ref fptr_params) = param.fptr_params {
+            let return_ctype = self.type_spec_to_ctype(&param.type_spec);
+            // Peel one Pointer layer — the parser folds the (*name) indirection
+            // into type_spec as one Pointer wrapping. Remaining layers are the
+            // actual return type's pointer depth.
+            let actual_return = if let CType::Pointer(inner, _) = return_ctype {
+                *inner
+            } else {
+                return_ctype
+            };
+            let param_types: Vec<(CType, Option<String>)> = fptr_params.iter()
+                .map(|p| (self.param_to_ctype(p), p.name.clone()))
+                .collect();
+            let func_type = CType::Function(Box::new(crate::common::types::FunctionType {
+                return_type: actual_return,
+                params: param_types,
+                variadic: false,
+            }));
+            return CType::Pointer(Box::new(func_type), AddressSpace::Default);
+        }
+        self.type_spec_to_ctype(&param.type_spec)
+    }
+
     fn convert_struct_fields(&self, fields: &[StructFieldDecl]) -> Vec<crate::common::types::StructField> {
         fields.iter().map(|f| {
             let ty = if f.derived.is_empty() {
@@ -4313,6 +4346,32 @@ mod tests {
              }"
         );
         assert!(e > 0, "two identical const T * should be duplicate in _Generic");
+    }
+
+    // ---- Function pointer parameter type resolution ----
+
+    #[test]
+    fn fnptr_param_assign_to_struct_field() {
+        // Function pointer parameter should be correctly typed as a function
+        // pointer, not as a plain pointer (e.g., `long *` instead of
+        // `long (*)(struct R *)`). This is needed for Linux kernel's
+        // restart_block.fn and similar patterns.
+        let w = sema_warnings(
+            "struct R { long (*fn)(struct R *); };
+             void test(struct R *r, long (*fp)(struct R *)) { r->fn = fp; }"
+        );
+        assert_eq!(w, 0, "function pointer param assigned to function pointer field should not warn");
+    }
+
+    #[test]
+    fn fnptr_param_type_matches_local() {
+        let w = sema_warnings(
+            "void test(void (*callback)(int)) {
+                 void (*local)(int) = callback;
+                 (void)local;
+             }"
+        );
+        assert_eq!(w, 0, "function pointer param assigned to matching local should not warn");
     }
 
     // ---- #pragma GCC diagnostic push/pop/ignored/warning/error ----

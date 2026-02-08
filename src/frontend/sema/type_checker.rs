@@ -807,7 +807,35 @@ impl<'a> ExprTypeChecker<'a> {
                 DerivedDeclarator::Array(None) => {
                     ctype = CType::Array(Box::new(ctype), None);
                 }
-                _ => {} // Function/FunctionPointer not expected in struct fields
+                DerivedDeclarator::FunctionPointer(params, variadic) => {
+                    // e.g. long (*fn)(struct R *) — ctype is the return type,
+                    // Pointer was already applied, wrap in Function then Pointer
+                    let param_cts: Vec<(CType, Option<String>)> = params.iter().map(|p| {
+                        (self.resolve_type_spec(&p.type_spec), p.name.clone())
+                    }).collect();
+                    // The preceding Pointer derivation was the (*) indirection,
+                    // which made ctype = Pointer(return_type). Unwrap it to get
+                    // the return type, then build Pointer(Function(...)).
+                    let ret_type = match ctype {
+                        CType::Pointer(inner, _) => *inner,
+                        other => other,
+                    };
+                    ctype = CType::Pointer(Box::new(CType::Function(Box::new(FunctionType {
+                        return_type: ret_type,
+                        params: param_cts,
+                        variadic: *variadic,
+                    }))), AddressSpace::Default);
+                }
+                DerivedDeclarator::Function(params, variadic) => {
+                    let param_cts: Vec<(CType, Option<String>)> = params.iter().map(|p| {
+                        (self.resolve_type_spec(&p.type_spec), p.name.clone())
+                    }).collect();
+                    ctype = CType::Function(Box::new(FunctionType {
+                        return_type: ctype,
+                        params: param_cts,
+                        variadic: *variadic,
+                    }));
+                }
             }
         }
         ctype
