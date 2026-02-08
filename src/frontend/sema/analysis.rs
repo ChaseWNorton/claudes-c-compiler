@@ -2873,8 +2873,11 @@ impl SemanticAnalyzer {
             expr_types: Some(&self.result.expr_types),
         };
 
-        // Resolve all association types for duplicate checking
-        let mut resolved_types: Vec<CType> = Vec::new();
+        // Resolve all association types for duplicate checking.
+        // Track (CType, is_const) pairs because CType doesn't encode qualifiers —
+        // e.g. `const struct page *` and `struct page *` have the same CType but
+        // different is_const flags and are distinct association types per C11 §6.5.1.1.
+        let mut resolved_types: Vec<(CType, bool)> = Vec::new();
         let mut has_default = false;
         let mut has_match = false;
         let ctrl_ty = checker.infer_expr_ctype(controlling);
@@ -2885,8 +2888,8 @@ impl SemanticAnalyzer {
                 Some(ts) => {
                     let assoc_ct = self.type_spec_to_ctype(ts);
                     // Check for duplicate type associations
-                    for prev_ct in &resolved_types {
-                        if *prev_ct == assoc_ct {
+                    for (prev_ct, prev_const) in &resolved_types {
+                        if *prev_ct == assoc_ct && *prev_const == assoc.is_const {
                             self.diagnostics.borrow_mut().error(
                                 format!(
                                     "duplicate type '{}' in _Generic association",
@@ -2903,7 +2906,7 @@ impl SemanticAnalyzer {
                             has_match = true;
                         }
                     }
-                    resolved_types.push(assoc_ct);
+                    resolved_types.push((assoc_ct, assoc.is_const));
                 }
             }
         }
@@ -4278,6 +4281,38 @@ mod tests {
             "int f(void) { int x; return _Generic(x, int: 1, int: 2); }"
         );
         assert!(e > 0, "_Generic with duplicate type should error");
+    }
+
+    #[test]
+    fn generic_const_pointer_not_duplicate() {
+        // C11 §6.5.1.1: const struct foo * and struct foo * are distinct types
+        // in _Generic associations. This pattern is used extensively in the Linux
+        // kernel's pagemap.h (page_folio() macro).
+        let e = sema_errors(
+            "struct page { int x; };
+             struct folio { int x; };
+             struct folio *_compound_head(const struct page *p);
+             int f(struct page *p) {
+                 return _Generic(p,
+                     const struct page *: 1,
+                     struct page *: 2);
+             }"
+        );
+        assert_eq!(e, 0, "const T * and T * should not be duplicate in _Generic");
+    }
+
+    #[test]
+    fn generic_const_pointer_actually_duplicate() {
+        // Two associations with the same const-qualified pointer type ARE duplicates.
+        let e = sema_errors(
+            "struct page { int x; };
+             int f(const struct page *p) {
+                 return _Generic(p,
+                     const struct page *: 1,
+                     const struct page *: 2);
+             }"
+        );
+        assert!(e > 0, "two identical const T * should be duplicate in _Generic");
     }
 
     // ---- #pragma GCC diagnostic push/pop/ignored/warning/error ----
