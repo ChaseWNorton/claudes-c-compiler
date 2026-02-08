@@ -2,8 +2,9 @@
 
 use crate::ir::reexports::{IrBinOp, Operand, Value};
 use crate::common::types::IrType;
+use crate::backend::regalloc::PhysReg;
 use crate::emit;
-use super::emit::{I686Codegen, alu_mnemonic, shift_mnemonic};
+use super::emit::{I686Codegen, alu_mnemonic, shift_mnemonic, phys_reg_name, phys_reg_to_cache_idx};
 
 impl I686Codegen {
     pub(super) fn emit_float_neg_impl(&mut self, ty: IrType) {
@@ -37,8 +38,6 @@ impl I686Codegen {
     }
 
     pub(super) fn emit_int_ctz_impl(&mut self, _ty: IrType) {
-        // tzcntl works for all integer widths on i686: the value is in %eax
-        // and trailing zero count is the same regardless of nominal width.
         self.state.emit("    tzcntl %eax, %eax");
     }
 
@@ -56,6 +55,26 @@ impl I686Codegen {
 
     pub(super) fn emit_int_binop_impl(&mut self, dest: &Value, op: IrBinOp, lhs: &Operand, rhs: &Operand, _ty: IrType) {
         let prev_tag = if self.cost_map { Some(self.set_cost_tag("COMPUTE")) } else { None };
+
+        // Register-direct path: when dest has a physical register, operate directly in it
+        if let Some(dest_phys) = self.dest_reg(dest) {
+            let is_simple_alu = matches!(op, IrBinOp::Add | IrBinOp::Sub | IrBinOp::And
+                | IrBinOp::Or | IrBinOp::Xor | IrBinOp::Mul);
+            if is_simple_alu {
+                self.emit_alu_reg_direct(dest, op, lhs, rhs, dest_phys);
+                if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
+                return;
+            }
+            if matches!(op, IrBinOp::Shl | IrBinOp::AShr | IrBinOp::LShr) {
+                self.emit_shift_reg_direct(dest, op, lhs, rhs, dest_phys);
+                if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
+                return;
+            }
+            // Division: ISA requires edx:eax — fall through to accumulator
+        }
+
+        // Accumulator path (dest on stack, or division)
+
         // Immediate optimization for ALU ops
         if matches!(op, IrBinOp::Add | IrBinOp::Sub | IrBinOp::And | IrBinOp::Or | IrBinOp::Xor) {
             if let Some(imm) = Self::const_as_imm32(rhs) {
@@ -100,9 +119,7 @@ impl I686Codegen {
             }
         }
 
-        // Direct-operand path: use register/memory source directly, avoiding ecx scratch.
-        // Works for add, sub, mul, and, or, xor — but NOT shifts (require %cl) or
-        // division (require edx:eax pair with ecx divisor).
+        // Direct-operand path: use register/memory source directly
         if matches!(op, IrBinOp::Add | IrBinOp::Sub | IrBinOp::Mul
                       | IrBinOp::And | IrBinOp::Or | IrBinOp::Xor) {
             if let Some(rhs_str) = self.rhs_operand_str(rhs) {
@@ -110,7 +127,6 @@ impl I686Codegen {
                 match op {
                     IrBinOp::Mul => {
                         if rhs_str.starts_with('$') {
-                            // imull with immediate requires 3-operand form
                             emit!(self.state, "    imull {}, %eax, %eax", rhs_str);
                         } else {
                             emit!(self.state, "    imull {}, %eax", rhs_str);
@@ -164,5 +180,118 @@ impl I686Codegen {
         self.state.reg_cache.invalidate_acc();
         if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
         self.store_eax_to(dest);
+    }
+
+    /// Register-direct ALU for simple ops (add/sub/and/or/xor/mul).
+    /// Operates directly in the destination register, avoiding the eax round-trip.
+    fn emit_alu_reg_direct(&mut self, dest: &Value, op: IrBinOp, lhs: &Operand,
+                           rhs: &Operand, dest_phys: PhysReg) {
+        let dest_name = phys_reg_name(dest_phys);
+
+        // Immediate form
+        if let Some(imm) = Self::const_as_imm32(rhs) {
+            self.operand_to_reg(lhs, dest_phys);
+            if op == IrBinOp::Mul {
+                match imm {
+                    3 => emit!(self.state, "    leal (%{0}, %{0}, 2), %{0}", dest_name),
+                    5 => emit!(self.state, "    leal (%{0}, %{0}, 4), %{0}", dest_name),
+                    9 => emit!(self.state, "    leal (%{0}, %{0}, 8), %{0}", dest_name),
+                    _ => emit!(self.state, "    imull ${}, %{}, %{}", imm, dest_name, dest_name),
+                }
+            } else {
+                let mnem = alu_mnemonic(op);
+                emit!(self.state, "    {}l ${}, %{}", mnem, imm, dest_name);
+            }
+            // eax not touched — cache stays valid
+            if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+                self.state.reg_cache.set_reg(idx, dest.0, false);
+            }
+            return;
+        }
+
+        // Register/memory operand form
+        let rhs_phys = self.operand_reg(rhs);
+        let rhs_conflicts = rhs_phys.is_some_and(|r| r.0 == dest_phys.0);
+
+        if rhs_conflicts {
+            // rhs is in dest register — use eax as scratch
+            self.operand_to_eax(rhs);
+            self.operand_to_reg(lhs, dest_phys);
+            if op == IrBinOp::Mul {
+                emit!(self.state, "    imull %eax, %{}", dest_name);
+            } else {
+                let mnem = alu_mnemonic(op);
+                emit!(self.state, "    {}l %eax, %{}", mnem, dest_name);
+            }
+            self.state.reg_cache.invalidate_acc(); // eax was clobbered
+        } else {
+            self.operand_to_reg(lhs, dest_phys);
+            if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                if op == IrBinOp::Mul {
+                    if rhs_str.starts_with('$') {
+                        emit!(self.state, "    imull {}, %{}, %{}", rhs_str, dest_name, dest_name);
+                    } else {
+                        emit!(self.state, "    imull {}, %{}", rhs_str, dest_name);
+                    }
+                } else {
+                    let mnem = alu_mnemonic(op);
+                    emit!(self.state, "    {}l {}, %{}", mnem, rhs_str, dest_name);
+                }
+                // eax not touched — cache stays valid
+            } else {
+                // rhs has no direct representation — load to eax as scratch
+                self.operand_to_eax(rhs);
+                if op == IrBinOp::Mul {
+                    emit!(self.state, "    imull %eax, %{}", dest_name);
+                } else {
+                    let mnem = alu_mnemonic(op);
+                    emit!(self.state, "    {}l %eax, %{}", mnem, dest_name);
+                }
+                self.state.reg_cache.invalidate_acc(); // eax was clobbered
+            }
+        }
+
+        // Update dest register in cache
+        if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+            self.state.reg_cache.set_reg(idx, dest.0, false);
+        }
+    }
+
+    /// Register-direct shift operations. ISA requires shift count in %cl.
+    fn emit_shift_reg_direct(&mut self, dest: &Value, op: IrBinOp, lhs: &Operand,
+                             rhs: &Operand, dest_phys: PhysReg) {
+        let dest_name = phys_reg_name(dest_phys);
+        let mnem = shift_mnemonic(op);
+
+        // Immediate shift
+        if let Some(imm) = Self::const_as_imm32(rhs) {
+            self.operand_to_reg(lhs, dest_phys);
+            let shift_amount = (imm as u32) & 31;
+            emit!(self.state, "    {} ${}, %{}", mnem, shift_amount, dest_name);
+            // eax not touched — cache stays valid
+            if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+                self.state.reg_cache.set_reg(idx, dest.0, false);
+            }
+            return;
+        }
+
+        // Variable shift — ISA requires %cl
+        let rhs_conflicts = self.operand_reg(rhs).is_some_and(|r| r.0 == dest_phys.0);
+        if rhs_conflicts {
+            // rhs is in dest register — load ecx first, then lhs
+            self.operand_to_ecx(rhs);
+            self.operand_to_reg(lhs, dest_phys);
+        } else {
+            self.operand_to_reg(lhs, dest_phys);
+            self.operand_to_ecx(rhs);
+        }
+        emit!(self.state, "    {} %cl, %{}", mnem, dest_name);
+
+        // ecx was used for shift count — invalidate its cache
+        self.state.reg_cache.invalidate_reg(4);
+        // Update dest register in cache
+        if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+            self.state.reg_cache.set_reg(idx, dest.0, false);
+        }
     }
 }

@@ -5,7 +5,7 @@ use crate::common::types::IrType;
 use crate::backend::state::{StackSlot, SlotAddr};
 use crate::backend::traits::ArchCodegen;
 use crate::emit;
-use super::emit::{I686Codegen, phys_reg_name};
+use super::emit::{I686Codegen, phys_reg_name, phys_reg_to_cache_idx};
 
 impl I686Codegen {
     // ---- Store/Load overrides ----
@@ -74,6 +74,29 @@ impl I686Codegen {
             }
             self.state.reg_cache.invalidate_acc();
             return;
+        }
+        // Register-direct store: if val is in a register, store directly (skip eax)
+        if let Some(val_phys) = self.operand_reg(val) {
+            if let Some(reg_name) = Self::phys_reg_for_type(val_phys, ty) {
+                let addr = self.state.resolve_slot_addr(ptr.0);
+                if let Some(addr) = addr {
+                    let store_instr = self.store_instr_for_type(ty);
+                    match addr {
+                        SlotAddr::Direct(slot) => {
+                            let sr = self.slot_ref(slot);
+                            emit!(self.state, "    {} {}, {}", store_instr, reg_name, sr);
+                            return;
+                        }
+                        SlotAddr::Indirect(slot) if val_phys.0 != 4 => {
+                            // val not in ecx — safe to load ptr to ecx
+                            self.emit_load_ptr_from_slot(slot, ptr.0);
+                            emit!(self.state, "    {} {}, (%ecx)", store_instr, reg_name);
+                            return;
+                        }
+                        _ => {} // fall through to default
+                    }
+                }
+            }
         }
         crate::backend::traits::emit_store_default(self, val, ptr, ty);
     }
@@ -212,7 +235,34 @@ impl I686Codegen {
             self.state.reg_cache.invalidate_acc();
             return;
         }
-        // Delegate to default for other types
+        // Register-direct store: if val is in a register, store directly (skip eax)
+        if let Some(val_phys) = self.operand_reg(val) {
+            if let Some(reg_name) = Self::phys_reg_for_type(val_phys, ty) {
+                let addr = self.state.resolve_slot_addr(base.0);
+                if let Some(ref addr) = addr {
+                    let store_instr = self.store_instr_for_type(ty);
+                    match addr {
+                        SlotAddr::Direct(slot) => {
+                            let folded_slot = StackSlot(slot.0 + offset);
+                            let sr = self.slot_ref(folded_slot);
+                            emit!(self.state, "    {} {}, {}", store_instr, reg_name, sr);
+                            return;
+                        }
+                        SlotAddr::Indirect(slot) if val_phys.0 != 4 => {
+                            // val not in ecx — safe to load ptr to ecx
+                            self.emit_load_ptr_from_slot(*slot, base.0);
+                            if offset != 0 {
+                                self.emit_add_offset_to_addr_reg(offset);
+                            }
+                            emit!(self.state, "    {} {}, (%ecx)", store_instr, reg_name);
+                            return;
+                        }
+                        _ => {} // fall through
+                    }
+                }
+            }
+        }
+        // Accumulator fallback
         self.operand_to_eax(val);
         let addr = self.state.resolve_slot_addr(base.0);
         if let Some(addr) = addr {
@@ -306,7 +356,39 @@ impl I686Codegen {
             self.state.reg_cache.invalidate_acc();
             return;
         }
-        // Delegate to default for other types
+        // Register-direct load: when dest has a PhysReg, load directly to it
+        if let Some(dest_phys) = self.dest_reg(dest) {
+            let dest_name = phys_reg_name(dest_phys);
+            let addr = self.state.resolve_slot_addr(base.0);
+            if let Some(ref addr) = addr {
+                let load_instr = self.load_instr_for_type(ty);
+                match addr {
+                    SlotAddr::Direct(slot) => {
+                        let folded_slot = StackSlot(slot.0 + offset);
+                        let sr = self.slot_ref(folded_slot);
+                        emit!(self.state, "    {} {}, %{}", load_instr, sr, dest_name);
+                        if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+                            self.state.reg_cache.set_reg(idx, dest.0, false);
+                        }
+                        return;
+                    }
+                    SlotAddr::Indirect(slot) if dest_phys.0 != 4 => {
+                        // dest not in ecx — safe to use ecx for ptr
+                        self.emit_load_ptr_from_slot(*slot, base.0);
+                        if offset != 0 {
+                            self.emit_add_offset_to_addr_reg(offset);
+                        }
+                        emit!(self.state, "    {} (%ecx), %{}", load_instr, dest_name);
+                        if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+                            self.state.reg_cache.set_reg(idx, dest.0, false);
+                        }
+                        return;
+                    }
+                    _ => {} // fall through to accumulator
+                }
+            }
+        }
+        // Accumulator fallback
         let addr = self.state.resolve_slot_addr(base.0);
         if let Some(addr) = addr {
             let load_instr = self.load_instr_for_type(ty);

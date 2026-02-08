@@ -106,7 +106,7 @@ pub(super) fn phys_reg_name(reg: PhysReg) -> &'static str {
 /// Map PhysReg to RegCache index for multi-register tracking.
 /// RegCache: 0=eax, 1=ebx, 2=esi, 3=edi, 4=ecx, 5=edx.
 /// PhysReg:  0=ebx, 1=esi, 2=edi, 3=ebp, 4=ecx, 5=edx.
-fn phys_reg_to_cache_idx(reg: PhysReg) -> Option<usize> {
+pub(super) fn phys_reg_to_cache_idx(reg: PhysReg) -> Option<usize> {
     match reg.0 {
         0 => Some(1), // ebx
         1 => Some(2), // esi
@@ -263,6 +263,14 @@ impl I686Codegen {
 
     pub(super) fn dest_reg(&self, dest: &Value) -> Option<PhysReg> {
         self.reg_assignments.get(&dest.0).copied()
+    }
+
+    /// Get the physical register assigned to an operand's value, if any.
+    pub(super) fn operand_reg(&self, op: &Operand) -> Option<PhysReg> {
+        match op {
+            Operand::Value(v) => self.reg_assignments.get(&v.0).copied(),
+            _ => None,
+        }
     }
 
     /// Load the address of va_list storage into %edx.
@@ -489,6 +497,92 @@ impl I686Codegen {
         }
     }
 
+    /// Load an operand into a specific physical register.
+    /// Generic register loader — the i686 equivalent of x86-64's operand_to_callee_reg().
+    /// Handles constants, register-allocated values, stack values, and allocas.
+    pub(super) fn operand_to_reg(&mut self, op: &Operand, target: PhysReg) {
+        let target_name = phys_reg_name(target);
+        let target_cache_idx = phys_reg_to_cache_idx(target);
+
+        // Check if value is already in the target register
+        if let Operand::Value(v) = op {
+            let is_alloca = self.state.is_alloca(v.0);
+            // Static assignment: value permanently lives in target
+            if let Some(&assigned) = self.reg_assignments.get(&v.0) {
+                if assigned.0 == target.0 {
+                    return;
+                }
+            }
+            // Dynamic cache: target already holds this value
+            if let Some(idx) = target_cache_idx {
+                if self.state.reg_cache.find_value(v.0, is_alloca) == Some(idx) {
+                    return;
+                }
+            }
+        }
+
+        match op {
+            Operand::Const(c) => {
+                match c {
+                    IrConst::I8(v) if *v == 0 => emit!(self.state, "    xorl %{0}, %{0}", target_name),
+                    IrConst::I16(v) if *v == 0 => emit!(self.state, "    xorl %{0}, %{0}", target_name),
+                    IrConst::I32(0) => emit!(self.state, "    xorl %{0}, %{0}", target_name),
+                    IrConst::I64(0) => emit!(self.state, "    xorl %{0}, %{0}", target_name),
+                    IrConst::Zero => emit!(self.state, "    xorl %{0}, %{0}", target_name),
+                    IrConst::I8(v) => emit!(self.state, "    movl ${}, %{}", *v as i32, target_name),
+                    IrConst::I16(v) => emit!(self.state, "    movl ${}, %{}", *v as i32, target_name),
+                    IrConst::I32(v) => emit!(self.state, "    movl ${}, %{}", v, target_name),
+                    IrConst::I64(v) => emit!(self.state, "    movl ${}, %{}", *v as i32, target_name),
+                    IrConst::I128(v) => emit!(self.state, "    movl ${}, %{}", *v as i32, target_name),
+                    IrConst::F32(fval) => emit!(self.state, "    movl ${}, %{}", fval.to_bits() as i32, target_name),
+                    IrConst::F64(fval) => emit!(self.state, "    movl ${}, %{}", fval.to_bits() as i32, target_name),
+                    IrConst::LongDouble(_, bytes) => {
+                        let low = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                        emit!(self.state, "    movl ${}, %{}", low, target_name);
+                    }
+                }
+            }
+            Operand::Value(v) => {
+                let is_alloca = self.state.is_alloca(v.0);
+                // Check reg_assignments first
+                if let Some(phys) = self.reg_assignments.get(&v.0).copied() {
+                    if phys.0 != target.0 {
+                        let src = phys_reg_name(phys);
+                        emit!(self.state, "    movl %{}, %{}", src, target_name);
+                    }
+                } else if let Some(slot) = self.state.get_slot(v.0) {
+                    let sr = self.slot_ref(slot);
+                    if is_alloca {
+                        if let Some(align) = self.state.alloca_over_align(v.0) {
+                            emit!(self.state, "    leal {}, %{}", sr, target_name);
+                            emit!(self.state, "    addl ${}, %{}", align - 1, target_name);
+                            emit!(self.state, "    andl ${}, %{}", -(align as i32), target_name);
+                        } else {
+                            emit!(self.state, "    leal {}, %{}", sr, target_name);
+                        }
+                    } else {
+                        emit!(self.state, "    movl {}, %{}", sr, target_name);
+                    }
+                } else if let Some(idx) = self.state.reg_cache.find_value(v.0, is_alloca) {
+                    // Value is in another register (RegCache) — move from there
+                    let src = cache_idx_to_reg_name(idx);
+                    emit!(self.state, "    movl %{}, %{}", src, target_name);
+                } else {
+                    // Value has no known location — zero initialize
+                    emit!(self.state, "    xorl %{0}, %{0}", target_name);
+                }
+            }
+        }
+
+        // Update RegCache for the target register
+        if let Operand::Value(v) = op {
+            let is_alloca = self.state.is_alloca(v.0);
+            if let Some(idx) = target_cache_idx {
+                self.state.reg_cache.set_reg(idx, v.0, is_alloca);
+            }
+        }
+    }
+
     /// Store %eax to a value's destination (callee-saved register or stack slot).
     pub(super) fn store_eax_to(&mut self, dest: &Value) {
         let prev_tag = if self.cost_map {
@@ -563,6 +657,37 @@ impl I686Codegen {
             IrType::I8 | IrType::U8 => "%al",
             IrType::I16 | IrType::U16 => "%ax",
             _ => "%eax",
+        }
+    }
+
+    /// Return the sub-register name for a PhysReg based on type width.
+    /// Returns None for byte types when the register lacks a byte form (esi, edi, ebp).
+    pub(super) fn phys_reg_for_type(phys: PhysReg, ty: IrType) -> Option<&'static str> {
+        match ty {
+            IrType::I8 | IrType::U8 => match phys.0 {
+                0 => Some("%bl"),
+                4 => Some("%cl"),
+                5 => Some("%dl"),
+                _ => None, // esi, edi, ebp have no byte forms in 32-bit mode
+            },
+            IrType::I16 | IrType::U16 => Some(match phys.0 {
+                0 => "%bx",
+                1 => "%si",
+                2 => "%di",
+                3 => "%bp",
+                4 => "%cx",
+                5 => "%dx",
+                _ => return None,
+            }),
+            _ => Some(match phys.0 {
+                0 => "%ebx",
+                1 => "%esi",
+                2 => "%edi",
+                3 => "%ebp",
+                4 => "%ecx",
+                5 => "%edx",
+                _ => return None,
+            }),
         }
     }
 
@@ -1917,8 +2042,17 @@ impl ArchCodegen for I686Codegen {
             }
         }
 
-        self.emit_load_operand(src);
-        self.emit_store_result(dest);
+        // Register-direct copy: load directly to dest register, skip eax
+        if let Some(dest_phys) = self.dest_reg(dest) {
+            self.operand_to_reg(src, dest_phys);
+            // Cache dest value (not src value) in the register
+            if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+                self.state.reg_cache.set_reg(idx, dest.0, false);
+            }
+        } else {
+            self.emit_load_operand(src);
+            self.emit_store_result(dest);
+        }
     }
 
     fn emit_inline_asm(&mut self, ops: crate::backend::traits::AsmOperands) {

@@ -4,7 +4,7 @@ use crate::ir::reexports::{IrCmpOp, Operand, Value};
 use crate::common::types::IrType;
 use crate::emit;
 use crate::backend::traits::ArchCodegen;
-use super::emit::I686Codegen;
+use super::emit::{I686Codegen, phys_reg_name};
 
 impl I686Codegen {
     pub(super) fn emit_float_cmp_impl(&mut self, dest: &Value, op: IrCmpOp, lhs: &Operand, rhs: &Operand, ty: IrType) {
@@ -106,19 +106,40 @@ impl I686Codegen {
     pub(super) fn emit_int_cmp_impl(&mut self, dest: &Value, op: IrCmpOp, lhs: &Operand, rhs: &Operand, _ty: IrType) {
         use crate::ir::reexports::IrConst;
         let prev_tag = if self.cost_map { Some(self.set_cost_tag("COMPUTE")) } else { None };
-        self.operand_to_eax(lhs);
-        // Use testl/cmpl with immediate/memory operands when possible
-        match rhs {
-            Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
-            | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
-                self.state.emit("    testl %eax, %eax");
+
+        // Register-direct path: compare directly in lhs register
+        if let Some(lhs_phys) = self.operand_reg(lhs) {
+            let lhs_name = phys_reg_name(lhs_phys);
+            match rhs {
+                Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
+                | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
+                    emit!(self.state, "    testl %{0}, %{0}", lhs_name);
+                }
+                _ => {
+                    if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                        emit!(self.state, "    cmpl {}, %{}", rhs_str, lhs_name);
+                    } else {
+                        // lhs is in a PhysReg (not eax), safe to use eax for rhs
+                        self.operand_to_eax(rhs);
+                        emit!(self.state, "    cmpl %eax, %{}", lhs_name);
+                    }
+                }
             }
-            _ => {
-                if let Some(rhs_str) = self.rhs_operand_str(rhs) {
-                    emit!(self.state, "    cmpl {}, %eax", rhs_str);
-                } else {
-                    self.operand_to_ecx(rhs);
-                    self.state.emit("    cmpl %ecx, %eax");
+        } else {
+            // Accumulator fallback
+            self.operand_to_eax(lhs);
+            match rhs {
+                Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
+                | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
+                    self.state.emit("    testl %eax, %eax");
+                }
+                _ => {
+                    if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                        emit!(self.state, "    cmpl {}, %eax", rhs_str);
+                    } else {
+                        self.operand_to_ecx(rhs);
+                        self.state.emit("    cmpl %ecx, %eax");
+                    }
                 }
             }
         }
@@ -153,27 +174,40 @@ impl I686Codegen {
     ) {
         use crate::ir::reexports::IrConst;
         let prev_tag = if self.cost_map { Some(self.set_cost_tag("BRANCH")) } else { None };
-        self.operand_to_eax(lhs);
-        // Optimize: use testl/cmpl with immediate/memory operands instead of
-        // loading rhs into ecx. Saves 4-7 bytes per fused comparison.
-        match rhs {
-            Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
-            | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
-                // Compare against zero: testl is shorter than cmpl $0
-                self.state.emit("    testl %eax, %eax");
+
+        // Register-direct path: compare directly in lhs register (no eax involvement)
+        if let Some(lhs_phys) = self.operand_reg(lhs) {
+            let lhs_name = phys_reg_name(lhs_phys);
+            match rhs {
+                Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
+                | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
+                    emit!(self.state, "    testl %{0}, %{0}", lhs_name);
+                }
+                _ => {
+                    if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                        emit!(self.state, "    cmpl {}, %{}", rhs_str, lhs_name);
+                    } else {
+                        // lhs is in a PhysReg (not eax), safe to use eax for rhs
+                        self.operand_to_eax(rhs);
+                        emit!(self.state, "    cmpl %eax, %{}", lhs_name);
+                    }
+                }
             }
-            _ => {
-                if let Some(rhs_str) = self.rhs_operand_str(rhs) {
-                    emit!(self.state, "    cmpl {}, %eax", rhs_str);
-                } else {
-                    self.operand_to_ecx(rhs);
-                    self.state.emit("    cmpl %ecx, %eax");
-                    let jcc = Self::cmp_op_to_jcc(op);
-                    emit!(self.state, "    {} {}", jcc, true_label);
-                    emit!(self.state, "    jmp {}", false_label);
-                    self.state.reg_cache.invalidate_all();
-                    if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
-                    return;
+        } else {
+            // Accumulator fallback
+            self.operand_to_eax(lhs);
+            match rhs {
+                Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
+                | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
+                    self.state.emit("    testl %eax, %eax");
+                }
+                _ => {
+                    if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                        emit!(self.state, "    cmpl {}, %eax", rhs_str);
+                    } else {
+                        self.operand_to_ecx(rhs);
+                        self.state.emit("    cmpl %ecx, %eax");
+                    }
                 }
             }
         }

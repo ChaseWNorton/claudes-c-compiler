@@ -4205,6 +4205,128 @@ fn fold_mask_test_branch(store: &mut LineStore, infos: &mut [LineInfo]) -> bool 
     changed
 }
 
+// ── Pass: Redundant testl after flag-setting ALU ─────────────────────────────
+
+/// Eliminate `testl %REG, %REG` when the preceding ALU instruction (andl/orl/xorl)
+/// on the same register already set flags identically (ZF, SF, PF; CF=0, OF=0).
+/// Allows up to 2 intervening flag-neutral instructions (movl, leal, push, pop).
+///
+/// Pattern: `andl $IMM, %ebx; [flag-neutral...]; testl %ebx, %ebx; je .L`
+/// →        `andl $IMM, %ebx; [flag-neutral...]; je .L`
+fn eliminate_redundant_test_after_alu(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
+    let len = infos.len();
+    let mut changed = false;
+    let mut i = 0;
+
+    while i < len {
+        if infos[i].is_nop() || infos[i].kind != LineKind::Cmp {
+            i += 1;
+            continue;
+        }
+
+        let test_line = trimmed(store, &infos[i], i);
+        // Parse testl %REG, %REG (same register on both sides)
+        let test_reg = if let Some(rest) = test_line.strip_prefix("testl %") {
+            if let Some(comma_pos) = rest.find(", %") {
+                let r1 = &rest[..comma_pos];
+                let r2 = &rest[comma_pos + 3..];
+                if r1 == r2 { register_family(&format!("%{}", r1)) } else { REG_NONE }
+            } else {
+                REG_NONE
+            }
+        } else {
+            REG_NONE
+        };
+
+        if test_reg == REG_NONE || test_reg == REG_ESP {
+            i += 1;
+            continue;
+        }
+
+        // Scan backward up to 3 non-NOP instructions for a flag-setting ALU on same register
+        let test_reg_name = reg32_name(test_reg);
+        let target_suffix = format!(", {}", test_reg_name);
+        let mut k = i;
+        let mut scan_count = 0;
+        let mut found_alu = false;
+
+        loop {
+            if k == 0 { break; }
+            k -= 1;
+            if infos[k].is_nop() || infos[k].kind == LineKind::Empty { continue; }
+            scan_count += 1;
+            if scan_count > 3 { break; }
+
+            // Control flow barrier
+            if matches!(infos[k].kind, LineKind::Label | LineKind::Jmp | LineKind::CondJmp
+                | LineKind::Ret | LineKind::Call | LineKind::JmpIndirect) {
+                break;
+            }
+
+            let sk = trimmed(store, &infos[k], k);
+
+            // Check if this is andl/orl/xorl with same dest register
+            // These set flags identically to testl (CF=0, OF=0, ZF/SF/PF from result)
+            if (sk.starts_with("andl ") || sk.starts_with("orl ") || sk.starts_with("xorl "))
+                && sk.ends_with(&target_suffix)
+            {
+                found_alu = true;
+                break;
+            }
+
+            // Check if this is a flag-setting instruction (would invalidate our flags)
+            match infos[k].kind {
+                LineKind::Cmp | LineKind::SetCC { .. } => break,
+                LineKind::Other { .. } => {
+                    // Flag-neutral: movl, leal, push, pop, cmov, movzbl, movsbl
+                    if sk.starts_with("movl ") || sk.starts_with("leal ")
+                        || sk.starts_with("cmov") || sk.starts_with("movzbl ")
+                        || sk.starts_with("movsbl ") || sk.starts_with("movzwl ")
+                        || sk.starts_with("movswl ") || sk.starts_with("nop")
+                    {
+                        // Check if this instruction modifies the test register
+                        // (would invalidate the flags we're trying to reuse)
+                        let dest = match infos[k].kind {
+                            LineKind::Other { dest_reg } => dest_reg,
+                            _ => REG_NONE,
+                        };
+                        if dest == test_reg {
+                            break; // Register was modified between ALU and test
+                        }
+                        continue; // flag-neutral and doesn't modify test_reg
+                    }
+                    break; // Other instruction — likely flag-setting
+                }
+                LineKind::Move { dst, .. } => {
+                    if dst == test_reg { break; } // register modified
+                    continue; // flag-neutral
+                }
+                LineKind::StoreEbp { .. } | LineKind::Push { .. } | LineKind::Directive => {
+                    continue; // flag-neutral
+                }
+                LineKind::Pop { reg } => {
+                    if reg == test_reg { break; }
+                    continue;
+                }
+                LineKind::LoadEbp { reg, .. } => {
+                    if reg == test_reg { break; }
+                    continue;
+                }
+                _ => break,
+            }
+        }
+
+        if found_alu {
+            infos[i].kind = LineKind::Nop;
+            changed = true;
+        }
+
+        i += 1;
+    }
+
+    changed
+}
+
 // ── Pass: Memory operand folding ─────────────────────────────────────────────
 
 /// Fold `movl -N(%ebp), %ecx; addl %ecx, %eax` into `addl -N(%ebp), %eax`.
@@ -9187,6 +9309,7 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
     let global_changed = global_changed | eliminate_dead_esp_stores(&store, &mut infos);
     let global_changed = global_changed | fuse_compare_and_branch(&mut store, &mut infos);
     let global_changed = global_changed | fold_mask_test_branch(&mut store, &mut infos);
+    let global_changed = global_changed | eliminate_redundant_test_after_alu(&mut store, &mut infos);
     let global_changed = global_changed | fold_memory_operands(&mut store, &mut infos);
     let global_changed = global_changed | optimize_select_to_cmov(&mut store, &mut infos);
     let global_changed =
@@ -9204,6 +9327,7 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
             changed2 |= eliminate_dead_reg_moves(&store, &mut infos);
             changed2 |= eliminate_dead_stores(&store, &mut infos);
             changed2 |= eliminate_dead_esp_stores(&store, &mut infos);
+            changed2 |= eliminate_redundant_test_after_alu(&mut store, &mut infos);
             changed2 |= fold_memory_operands(&mut store, &mut infos);
             changed2 |= optimize_select_to_cmov(&mut store, &mut infos);
             changed2 |= eliminate_redundant_condition_tests(&mut store, &mut infos);
