@@ -184,6 +184,20 @@ const MAX_CALLER_INSTRUCTIONS_HARD_CAP: usize = 500;
 ///    undefined symbols, inline asm "i" constraints, section mismatches)
 const MAX_CALLER_INSTRUCTIONS_ABSOLUTE_CAP: usize = 1000;
 
+/// Maximum instructions for a callee to be eligible for size-positive inlining
+/// at -Os. These functions exceed normal -Os limits but may shrink when inlined
+/// at call sites with constant arguments (constant propagation eliminates branches).
+/// GCC's -Os does this: inline when the result is smaller than the call + standalone.
+const MAX_SIZE_POSITIVE_INSTRUCTIONS: usize = 200;
+
+/// Maximum blocks for a size-positive inlining candidate.
+const MAX_SIZE_POSITIVE_BLOCKS: usize = 50;
+
+/// Maximum number of size-positive inline trials per caller function.
+/// Each trial clones the function and runs optimization passes, so we cap
+/// the total to limit compile time.
+const MAX_SIZE_POSITIVE_TRIALS_PER_CALLER: usize = 20;
+
 /// Maximum iterations when tracing IR value chains (Load->Store->Copy->GEP->...)
 /// to resolve inline asm operands back to GlobalAddr or constant values.
 const MAX_TRACE_CHAIN_LENGTH: usize = 20;
@@ -574,6 +588,13 @@ pub fn run(module: &mut IrModule, optimize_size: bool) -> usize {
 
     }
 
+    // Size-positive inlining pass: at -Os, try inlining functions that exceed
+    // normal limits at call sites with constant arguments. Clone the caller,
+    // inline + optimize, and keep only if the result is smaller.
+    if optimize_size {
+        total_inlined += run_size_positive_inline_pass(module, &callee_map, &mut global_max_block_id, debug_inline, &skip_list);
+    }
+
     // After ALL inlining is complete, resolve input_symbols for InlineAsm instructions.
     // This must run after the entire inlining pass because multi-level inline chains
     // (e.g., arch_static_branch → static_key_false → trace_tlb_flush) need all levels
@@ -938,6 +959,10 @@ struct CalleeData {
     /// same to match GCC behavior and enable critical optimizations (e.g.,
     /// constant propagation of shift amounts in ror32 used by blake2s).
     is_static_inline: bool,
+    /// Whether this callee is a candidate for size-positive inlining at -Os.
+    /// These are static functions that exceed normal -Os inline limits but
+    /// could shrink when inlined at call sites with constant arguments.
+    is_size_positive_candidate: bool,
 }
 
 /// A call site that is eligible for inlining.
@@ -966,6 +991,145 @@ fn global_init_contains_local_label(init: &GlobalInit) -> bool {
         GlobalInit::Compound(inits) => inits.iter().any(global_init_contains_local_label),
         _ => false,
     }
+}
+
+/// Size-positive inlining pass for -Os.
+///
+/// For each call site where the callee is a size-positive candidate and at least
+/// one argument is a constant, perform a trial inline:
+/// 1. Clone the caller function
+/// 2. Inline the callee into the clone
+/// 3. Run mem2reg + constfold + copy_prop + simplify + cfg_simplify + DCE
+/// 4. If the clone has fewer instructions than the original, commit
+///
+/// This matches GCC's -Os behavior: inline when constant propagation makes the
+/// inlined result smaller than the call + standalone function.
+fn run_size_positive_inline_pass(
+    module: &mut IrModule,
+    callee_map: &HashMap<String, CalleeData>,
+    global_max_block_id: &mut u32,
+    debug_inline: bool,
+    skip_list: &[String],
+) -> usize {
+    let mut total_inlined = 0;
+
+    for func_idx in 0..module.functions.len() {
+        if module.functions[func_idx].is_declaration {
+            continue;
+        }
+
+        let mut trials_remaining = MAX_SIZE_POSITIVE_TRIALS_PER_CALLER;
+        let mut not_profitable: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        loop {
+            if trials_remaining == 0 {
+                break;
+            }
+
+            // Find call sites to size-positive candidates with constant args.
+            let site = find_size_positive_call_site(
+                &module.functions[func_idx],
+                callee_map,
+                skip_list,
+                &not_profitable,
+            );
+            let (site, callee_name) = match site {
+                Some(s) => s,
+                None => break,
+            };
+            let callee_data = &callee_map[&callee_name];
+
+            // Count instructions before inlining.
+            let original_inst_count: usize = module.functions[func_idx].blocks.iter()
+                .map(|b| b.instructions.len()).sum();
+
+            // Trial: clone → inline → optimize → measure.
+            let saved_max_block_id = *global_max_block_id;
+            let mut trial = module.functions[func_idx].clone();
+            let success = inline_call_site(&mut trial, &site, callee_data, global_max_block_id);
+            if !success {
+                *global_max_block_id = saved_max_block_id;
+                not_profitable.insert(callee_name.clone());
+                trials_remaining -= 1;
+                continue;
+            }
+
+            // Run the same optimization pipeline as post-inline:
+            // mem2reg (promote inlined param allocas) → constfold → copy_prop →
+            // simplify → constfold → cfg_simplify → DCE
+            crate::ir::mem2reg::promote_function(&mut trial, true);
+            super::constant_fold::fold_function(&mut trial);
+            super::copy_prop::propagate_copies(&mut trial);
+            super::simplify::simplify_function(&mut trial);
+            super::constant_fold::fold_function(&mut trial);
+            super::copy_prop::propagate_copies(&mut trial);
+            super::cfg_simplify::run_function(&mut trial);
+            super::dce::eliminate_dead_code(&mut trial);
+
+            let trial_inst_count: usize = trial.blocks.iter()
+                .map(|b| b.instructions.len()).sum();
+
+            if trial_inst_count < original_inst_count {
+                // Size-positive: the inlined + optimized version is smaller.
+                // Commit: replace the function body with the optimized trial.
+                module.functions[func_idx].blocks = trial.blocks;
+                module.functions[func_idx].next_value_id = trial.next_value_id;
+                module.functions[func_idx].has_inlined_calls = true;
+                total_inlined += 1;
+                // Continue to look for more size-positive sites in this function.
+            } else {
+                // Not profitable: discard the trial, restore block ID counter.
+                *global_max_block_id = saved_max_block_id;
+                not_profitable.insert(callee_name.clone());
+            }
+            trials_remaining -= 1;
+        }
+    }
+
+    total_inlined
+}
+
+/// Find a call site in `func` where the callee is a size-positive candidate
+/// and at least one argument is a constant.
+fn find_size_positive_call_site(
+    func: &IrFunction,
+    callee_map: &HashMap<String, CalleeData>,
+    skip_list: &[String],
+    not_profitable: &std::collections::HashSet<String>,
+) -> Option<(InlineCallSite, String)> {
+    for (block_idx, block) in func.blocks.iter().enumerate() {
+        for (inst_idx, inst) in block.instructions.iter().enumerate() {
+            if let Instruction::Call { func: callee_name, info } = inst {
+                if callee_name == &func.name {
+                    continue; // Skip recursive calls
+                }
+                if skip_list.iter().any(|s| s == callee_name) {
+                    continue;
+                }
+                if not_profitable.contains(callee_name) {
+                    continue;
+                }
+                if let Some(callee_data) = callee_map.get(callee_name) {
+                    if !callee_data.is_size_positive_candidate {
+                        continue;
+                    }
+                    // Require at least one constant argument.
+                    let has_const_arg = info.args.iter().any(|a| matches!(a, Operand::Const(_)));
+                    if !has_const_arg {
+                        continue;
+                    }
+                    return Some((InlineCallSite {
+                        block_idx,
+                        inst_idx,
+                        callee_name: callee_name.clone(),
+                        dest: info.dest,
+                        args: info.args.clone(),
+                    }, callee_name.clone()));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Check if a function has static local variables whose initializers reference
@@ -1044,7 +1208,16 @@ fn build_callee_map(module: &IrModule, optimize_size: bool) -> HashMap<String, C
             && !is_small_static
             && inst_count_for_static <= max_inline_instructions
             && func.blocks.len() <= max_inline_blocks;
+        // At -Os, static functions that exceed normal limits may still be
+        // profitable to inline at call sites with constant arguments. GCC -Os
+        // does this: it inlines when constant propagation + DCE makes the
+        // inlined result smaller than the call + standalone function.
+        let is_size_positive_candidate = optimize_size && func.is_static
+            && !is_always_inline && !is_trivially_empty && !is_small_static && !is_medium_static
+            && inst_count_for_static <= MAX_SIZE_POSITIVE_INSTRUCTIONS
+            && func.blocks.len() <= MAX_SIZE_POSITIVE_BLOCKS;
         if !is_always_inline && !is_trivially_empty && !is_small_static && !is_medium_static
+            && !is_size_positive_candidate
             && (!func.is_static || !func.is_inline) {
                 if debug_callee {
                     eprintln!("[INLINE_DEBUG] {} skipped: is_static={}, is_inline={}, is_declaration={}",
@@ -1076,6 +1249,8 @@ fn build_callee_map(module: &IrModule, optimize_size: bool) -> HashMap<String, C
             if !fits_relaxed {
                 continue;
             }
+        } else if is_size_positive_candidate {
+            // Size-positive candidates already checked against MAX_SIZE_POSITIVE limits.
         } else {
             // For static inline: admit if within normal limits OR within relaxed limits
             // (the latter only used for section-attributed callers).
@@ -1149,6 +1324,7 @@ fn build_callee_map(module: &IrModule, optimize_size: bool) -> HashMap<String, C
             is_always_inline,
             exceeds_normal_limits: exceeds_normal,
             is_static_inline: func.is_static && func.is_inline,
+            is_size_positive_candidate,
         });
     }
 

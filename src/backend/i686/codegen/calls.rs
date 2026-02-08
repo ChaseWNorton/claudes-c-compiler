@@ -5,7 +5,7 @@ use crate::common::types::IrType;
 use crate::backend::call_abi;
 use crate::emit;
 use crate::backend::traits::ArchCodegen;
-use super::emit::I686Codegen;
+use super::emit::{I686Codegen, phys_reg_name};
 use crate::backend::generation::is_i128_type;
 
 impl I686Codegen {
@@ -60,6 +60,7 @@ impl I686Codegen {
     pub(super) fn emit_call_stack_args_impl(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass],
                             arg_types: &[IrType], stack_arg_space: usize,
                             _fptr_spill: usize, _f128_temp_space: usize) -> i64 {
+        let prev_tag = if self.cost_map { Some(self.set_cost_tag("ARG_COPY")) } else { None };
         // At -Os, use push-based argument passing when all stack args are simple
         // (4-byte or 8-byte). This saves ~8 bytes per 2-arg call vs subl+movl.
         if self.optimize_size && stack_arg_space > 0 {
@@ -102,8 +103,7 @@ impl I686Codegen {
                         self.emit_call_8byte_stack_arg(&args[i], ty, stack_offset);
                         stack_offset += 8;
                     } else {
-                        self.operand_to_eax(&args[i]);
-                        emit!(self.state, "    movl %eax, {}(%esp)", stack_offset);
+                        self.emit_call_direct_stack_arg(&args[i], stack_offset);
                         stack_offset += 4;
                     }
                 }
@@ -117,6 +117,7 @@ impl I686Codegen {
             }
         }
 
+        if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
         stack_arg_space as i64
     }
 
@@ -166,7 +167,10 @@ impl I686Codegen {
                 emit!(self.state, "    pushl ${}", val as i32);
             }
             Operand::Value(v) => {
-                if let Some(slot) = self.state.get_slot(v.0) {
+                if let Some(phys) = self.reg_assignments.get(&v.0).copied() {
+                    let reg = phys_reg_name(phys);
+                    emit!(self.state, "    pushl %{}", reg);
+                } else if let Some(slot) = self.state.get_slot(v.0) {
                     let sr = self.slot_ref(slot);
                     emit!(self.state, "    pushl {}", sr);
                 } else {
@@ -235,6 +239,47 @@ impl I686Codegen {
         }
     }
 
+    /// Store a 4-byte arg to the stack at `offset(%esp)`, avoiding the eax
+    /// round-trip when the source is a register or constant.
+    fn emit_call_direct_stack_arg(&mut self, arg: &Operand, offset: usize) {
+        match arg {
+            Operand::Const(c) => {
+                let val = match c {
+                    IrConst::I32(v) => Some(*v as i32),
+                    IrConst::I8(v) => Some(*v as i32),
+                    IrConst::I16(v) => Some(*v as i32),
+                    IrConst::Zero => Some(0),
+                    _ => None,
+                };
+                if let Some(v) = val {
+                    emit!(self.state, "    movl ${}, {}(%esp)", v, offset);
+                } else {
+                    self.operand_to_eax(arg);
+                    emit!(self.state, "    movl %eax, {}(%esp)", offset);
+                }
+            }
+            Operand::Value(v) => {
+                if let Some(phys) = self.reg_assignments.get(&v.0).copied() {
+                    let reg = phys_reg_name(phys);
+                    emit!(self.state, "    movl %{}, {}(%esp)", reg, offset);
+                } else if let Some(slot) = self.state.get_slot(v.0) {
+                    // Stack-to-stack: must go through a register
+                    let sr = self.slot_ref(slot);
+                    emit!(self.state, "    movl {}, %eax", sr);
+                    emit!(self.state, "    movl %eax, {}(%esp)", offset);
+                    self.state.reg_cache.invalidate_acc();
+                } else {
+                    self.operand_to_eax(arg);
+                    emit!(self.state, "    movl %eax, {}(%esp)", offset);
+                }
+            }
+            _ => {
+                self.operand_to_eax(arg);
+                emit!(self.state, "    movl %eax, {}(%esp)", offset);
+            }
+        }
+    }
+
     pub(super) fn emit_call_reg_args_impl(&mut self, args: &[Operand], arg_classes: &[call_abi::CallArgClass],
                           _arg_types: &[IrType], _stack_info: (i64, usize, usize),
                           _struct_arg_riscv_float_classes: &[Option<crate::common::types::RiscvFloatClass>]) {
@@ -270,6 +315,7 @@ impl I686Codegen {
 
     pub(super) fn emit_call_instruction_impl(&mut self, direct_name: Option<&str>, func_ptr: Option<&Operand>,
                              indirect: bool, _stack_arg_space: usize) {
+        let prev_tag = if self.cost_map { Some(self.set_cost_tag("CALL")) } else { None };
         if let Some(name) = direct_name {
             if self.state.needs_plt(name) {
                 emit!(self.state, "    call {}@PLT", name);
@@ -282,12 +328,15 @@ impl I686Codegen {
             }
             self.state.emit("    call *%eax");
         }
+        if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
     }
 
     pub(super) fn emit_call_cleanup_impl(&mut self, stack_arg_space: usize, _f128_temp_space: usize, _indirect: bool) {
         if stack_arg_space > 0 {
+            let prev_tag = if self.cost_map { Some(self.set_cost_tag("CALL_SETUP")) } else { None };
             emit!(self.state, "    addl ${}, %esp", stack_arg_space);
             self.esp_adjust -= stack_arg_space as i64;
+            if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
         }
     }
 

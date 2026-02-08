@@ -105,6 +105,7 @@ impl I686Codegen {
 
     pub(super) fn emit_int_cmp_impl(&mut self, dest: &Value, op: IrCmpOp, lhs: &Operand, rhs: &Operand, _ty: IrType) {
         use crate::ir::reexports::IrConst;
+        let prev_tag = if self.cost_map { Some(self.set_cost_tag("COMPUTE")) } else { None };
         self.operand_to_eax(lhs);
         // Use testl/cmpl with immediate/memory operands when possible
         match rhs {
@@ -137,6 +138,7 @@ impl I686Codegen {
         emit!(self.state, "    {} %al", set_instr);
         self.state.emit("    movzbl %al, %eax");
         self.state.reg_cache.invalidate_acc();
+        if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
         self.store_eax_to(dest);
     }
 
@@ -150,6 +152,7 @@ impl I686Codegen {
         false_label: &str,
     ) {
         use crate::ir::reexports::IrConst;
+        let prev_tag = if self.cost_map { Some(self.set_cost_tag("BRANCH")) } else { None };
         self.operand_to_eax(lhs);
         // Optimize: use testl/cmpl with immediate/memory operands instead of
         // loading rhs into ecx. Saves 4-7 bytes per fused comparison.
@@ -169,6 +172,7 @@ impl I686Codegen {
                     emit!(self.state, "    {} {}", jcc, true_label);
                     emit!(self.state, "    jmp {}", false_label);
                     self.state.reg_cache.invalidate_all();
+                    if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
                     return;
                 }
             }
@@ -178,6 +182,7 @@ impl I686Codegen {
         emit!(self.state, "    {} {}", jcc, true_label);
         emit!(self.state, "    jmp {}", false_label);
         self.state.reg_cache.invalidate_all();
+        if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
     }
 
     fn cmp_op_to_jcc(op: IrCmpOp) -> &'static str {

@@ -1228,6 +1228,8 @@ fn generate_instruction(cg: &mut dyn ArchCodegen, inst: &Instruction, gep_fold_m
 
 /// Generate a Copy instruction, handling coalesced slots, i128, and wide values.
 fn generate_copy(cg: &mut dyn ArchCodegen, dest: &Value, src: &Operand) {
+    let prev_tag = cg.state().cost_tag;
+    cg.state().cost_tag = Some("PHI_COPY");
     // Skip Copy when dest and src share the same stack slot (from copy coalescing).
     if let Operand::Value(src_val) = src {
         let dest_slot = cg.state_ref().get_slot(dest.0);
@@ -1237,6 +1239,7 @@ fn generate_copy(cg: &mut dyn ArchCodegen, dest: &Value, src: &Operand) {
                 if cg.state_ref().reg_cache.acc_has(src_val.0, false) {
                     cg.state().reg_cache.set_acc(dest.0, false);
                 }
+                cg.state().cost_tag = prev_tag;
                 return;
             }
         }
@@ -1251,6 +1254,7 @@ fn generate_copy(cg: &mut dyn ArchCodegen, dest: &Value, src: &Operand) {
         cg.state().i128_values.insert(dest.0);
         cg.emit_copy_i128(dest, src);
         cg.state().reg_cache.invalidate_all();
+        cg.state().cost_tag = prev_tag;
         return;
     }
 
@@ -1270,6 +1274,7 @@ fn generate_copy(cg: &mut dyn ArchCodegen, dest: &Value, src: &Operand) {
         cg.state().wide_values.insert(dest.0);
     }
     cg.emit_copy_value(dest, src);
+    cg.state().cost_tag = prev_tag;
 }
 
 /// Generate a Load instruction with segment override, kernel code model,
@@ -1363,16 +1368,28 @@ fn generate_terminator(cg: &mut dyn ArchCodegen, term: &Terminator, frame_size: 
             cg.emit_return(val.as_ref(), frame_size);
         }
         Terminator::Branch(label) => {
+            let prev = cg.state().cost_tag;
+            cg.state().cost_tag = Some("BRANCH");
             cg.emit_branch_to_block(*label);
+            cg.state().cost_tag = prev;
         }
         Terminator::CondBranch { cond, true_label, false_label } => {
+            let prev = cg.state().cost_tag;
+            cg.state().cost_tag = Some("BRANCH");
             cg.emit_cond_branch_blocks(cond, *true_label, *false_label);
+            cg.state().cost_tag = prev;
         }
         Terminator::IndirectBranch { target, .. } => {
+            let prev = cg.state().cost_tag;
+            cg.state().cost_tag = Some("BRANCH");
             cg.emit_indirect_branch(target);
+            cg.state().cost_tag = prev;
         }
         Terminator::Switch { val, cases, default, ty } => {
+            let prev = cg.state().cost_tag;
+            cg.state().cost_tag = Some("BRANCH");
             cg.emit_switch(val, cases, default, *ty);
+            cg.state().cost_tag = prev;
         }
         Terminator::Unreachable => {
             cg.emit_unreachable();

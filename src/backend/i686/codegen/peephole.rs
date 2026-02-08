@@ -2806,7 +2806,7 @@ fn reg_dead_at_branch_target(store: &LineStore, infos: &[LineInfo], start: usize
                                         }
                                         break;
                                     }
-                                    LineKind::Ret => { dead_at_target = reg != REG_EAX; break; }
+                                    LineKind::Ret => { dead_at_target = reg != REG_EAX && reg != REG_EDX; break; }
                                     LineKind::Pop { reg: r } if r == reg => { dead_at_target = true; break; }
                                     // Follow unconditional jumps (e.g., jmp to epilogue)
                                     LineKind::Jmp if inner_jmps < 1 => {
@@ -2857,7 +2857,7 @@ fn reg_dead_at_branch_target(store: &LineStore, infos: &[LineInfo], start: usize
                 }
                 return false;
             }
-            LineKind::Ret => return reg != REG_EAX,
+            LineKind::Ret => return reg != REG_EAX && reg != REG_EDX,
             LineKind::Pop { reg: r } => { if r == reg { return true; } k += 1; count += 1; continue; }
             LineKind::Push { reg: r } => { if r == reg { return false; } k += 1; count += 1; continue; }
             LineKind::Move { src, dst } => {
@@ -2930,8 +2930,8 @@ fn is_reg_dead_after(store: &LineStore, infos: &[LineInfo], start: usize, len: u
         if infos[j].is_nop() || infos[j].kind == LineKind::Empty { j += 1; continue; }
 
         match infos[j].kind {
-            // Return: eax is live (holds return value), all others are dead
-            LineKind::Ret => return reg != REG_EAX,
+            // Return: eax/edx are live (return value registers), others are dead
+            LineKind::Ret => return reg != REG_EAX && reg != REG_EDX,
 
             // Indirect jump: can't resolve target, conservatively assume live.
             LineKind::JmpIndirect => return false,
@@ -4568,8 +4568,11 @@ fn is_reg_dead_from_no_jmp(store: &LineStore, infos: &[LineInfo], from: usize, r
     while k < len && count < 10 {
         if infos[k].is_nop() || infos[k].kind == LineKind::Empty { k += 1; continue; }
         match infos[k].kind {
-            // Ret: caller-saved regs are dead (not preserved across returns)
-            LineKind::Ret => return is_caller_saved(reg),
+            // Ret: eax/edx are LIVE (return value registers); only ecx is dead
+            LineKind::Ret => {
+                if reg == REG_EAX || reg == REG_EDX { return false; }
+                return is_caller_saved(reg);
+            }
             LineKind::Label | LineKind::Jmp | LineKind::JmpIndirect
             | LineKind::CondJmp => return false,
             LineKind::Call => {
@@ -4703,8 +4706,11 @@ fn is_reg_dead_from_inner(store: &LineStore, infos: &[LineInfo], from: usize, re
                 }
                 return false;
             }
-            // Ret: caller-saved regs are dead (not preserved across returns)
-            LineKind::Ret => return is_caller_saved(reg),
+            // Ret: eax/edx are LIVE (return value registers); only ecx is dead
+            LineKind::Ret => {
+                if reg == REG_EAX || reg == REG_EDX { return false; }
+                return is_caller_saved(reg);
+            }
             // Labels are just markers; continue scanning the fall-through path
             LineKind::Label => { k += 1; count += 1; continue; }
             // Other control flow: conservatively assume live
@@ -7730,6 +7736,28 @@ mod tests {
         ].join("\n") + "\n";
         let result = peephole_optimize(asm);
         assert_eq!(result.matches("movl").count(), 1, "reverse move should be eliminated: {}", result);
+    }
+
+    #[test]
+    fn test_imull_const_not_removed() {
+        // Simulate codegen for: int f(int x) { return x * 30; }
+        let asm = [
+            "mul_const:",
+            ".cfi_startproc",
+            "    pushl %ebp",
+            "    movl %esp, %ebp",
+            "    subl $8, %esp",
+            "    movl 8(%ebp), %eax",
+            "    imull $30, %eax, %eax",
+            "    movl %eax, -4(%ebp)",
+            "    movl -4(%ebp), %eax",
+            "    movl %ebp, %esp",
+            "    popl %ebp",
+            "    ret",
+            ".cfi_endproc",
+        ].join("\n") + "\n";
+        let result = peephole_optimize(asm);
+        assert!(result.contains("imull"), "peephole must not remove imull: {}", result);
     }
 
 }

@@ -55,6 +55,7 @@ impl I686Codegen {
     }
 
     pub(super) fn emit_int_binop_impl(&mut self, dest: &Value, op: IrBinOp, lhs: &Operand, rhs: &Operand, _ty: IrType) {
+        let prev_tag = if self.cost_map { Some(self.set_cost_tag("COMPUTE")) } else { None };
         // Immediate optimization for ALU ops
         if matches!(op, IrBinOp::Add | IrBinOp::Sub | IrBinOp::And | IrBinOp::Or | IrBinOp::Xor) {
             if let Some(imm) = Self::const_as_imm32(rhs) {
@@ -62,6 +63,7 @@ impl I686Codegen {
                 let mnem = alu_mnemonic(op);
                 emit!(self.state, "    {}l ${}, %eax", mnem, imm);
                 self.state.reg_cache.invalidate_acc();
+                if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
                 self.store_eax_to(dest);
                 return;
             }
@@ -78,6 +80,7 @@ impl I686Codegen {
                     _ => emit!(self.state, "    imull ${}, %eax, %eax", imm),
                 }
                 self.state.reg_cache.invalidate_acc();
+                if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
                 self.store_eax_to(dest);
                 return;
             }
@@ -91,6 +94,7 @@ impl I686Codegen {
                 let shift_amount = (imm as u32) & 31;
                 emit!(self.state, "    {} ${}, %eax", mnem, shift_amount);
                 self.state.reg_cache.invalidate_acc();
+                if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
                 self.store_eax_to(dest);
                 return;
             }
@@ -104,13 +108,21 @@ impl I686Codegen {
             if let Some(rhs_str) = self.rhs_operand_str(rhs) {
                 self.operand_to_eax(lhs);
                 match op {
-                    IrBinOp::Mul => emit!(self.state, "    imull {}, %eax", rhs_str),
+                    IrBinOp::Mul => {
+                        if rhs_str.starts_with('$') {
+                            // imull with immediate requires 3-operand form
+                            emit!(self.state, "    imull {}, %eax, %eax", rhs_str);
+                        } else {
+                            emit!(self.state, "    imull {}, %eax", rhs_str);
+                        }
+                    }
                     _ => {
                         let mnem = alu_mnemonic(op);
                         emit!(self.state, "    {}l {}, %eax", mnem, rhs_str);
                     }
                 }
                 self.state.reg_cache.invalidate_acc();
+                if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
                 self.store_eax_to(dest);
                 return;
             }
@@ -150,6 +162,7 @@ impl I686Codegen {
             }
         }
         self.state.reg_cache.invalidate_acc();
+        if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
         self.store_eax_to(dest);
     }
 }

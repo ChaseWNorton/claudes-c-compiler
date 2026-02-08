@@ -137,6 +137,7 @@ impl I686Codegen {
     // ---- emit_prologue ----
 
     pub(super) fn emit_prologue_impl(&mut self, _func: &IrFunction, frame_size: i64) {
+        let prev_tag = if self.cost_map { Some(self.set_cost_tag("PROLOGUE")) } else { None };
         if self.omit_frame_pointer {
             // No frame pointer setup; use ESP-relative addressing.
             // frame_base_offset and esp_adjust will be set after callee-saved pushes.
@@ -180,11 +181,13 @@ impl I686Codegen {
             self.frame_base_offset = callee_saved_bytes + frame_size;
             self.esp_adjust = 0;
         }
+        if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
     }
 
     // ---- emit_epilogue ----
 
     pub(super) fn emit_epilogue_impl(&mut self, _frame_size: i64) {
+        let prev_tag = if self.cost_map { Some(self.set_cost_tag("PROLOGUE")) } else { None };
         if self.omit_frame_pointer {
             let callee_saved_bytes = self.used_callee_saved.len() as i64 * 4;
             let total = self.frame_base_offset - callee_saved_bytes;
@@ -208,6 +211,7 @@ impl I686Codegen {
         if !self.omit_frame_pointer {
             self.state.emit("    popl %ebp");
         }
+        if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
     }
 
     // ---- emit_store_params ----

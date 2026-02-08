@@ -234,6 +234,8 @@ pub struct Driver {
     /// _REENTRANT=1 (matching GCC/Clang behavior). Build systems that detect
     /// pthread support via configure (ax_pthread.m4) add -lpthread themselves.
     pub(super) pthread: bool,
+    /// Whether to emit cost-map annotations on assembly instructions (--cost-map).
+    pub(super) cost_map: bool,
 }
 
 impl Driver {
@@ -302,6 +304,7 @@ impl Driver {
             no_unwind_tables: false,
             raw_args: Vec::new(),
             pthread: false,
+            cost_map: false,
         }
     }
 
@@ -1132,6 +1135,7 @@ impl Driver {
             omit_frame_pointer: self.omit_frame_pointer,
             emit_cfi: !self.no_unwind_tables,
             optimize_size: self.optimize_size,
+            cost_map: self.cost_map,
         };
         let asm = self.target.generate_assembly_with_opts_and_debug(
             &module, &opts, source_manager.as_ref(),

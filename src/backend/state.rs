@@ -205,6 +205,9 @@ pub struct CodegenState {
     /// Whether to emit CFI directives (.cfi_startproc, .cfi_endproc, etc.)
     /// for generating .eh_frame unwind tables. Enabled by default (like GCC).
     pub emit_cfi: bool,
+    /// Cost-map tag for the current instruction category (--cost-map).
+    /// When Some, instruction lines (starting with whitespace) get a `# TAG` suffix.
+    pub cost_tag: Option<&'static str>,
 }
 
 impl CodegenState {
@@ -248,6 +251,7 @@ impl CodegenState {
             data_sections: false,
             needs_divdi3_helpers: false,
             emit_cfi: true,
+            cost_tag: None,
         }
     }
 
@@ -264,13 +268,39 @@ impl CodegenState {
     }
 
     pub fn emit(&mut self, s: &str) {
+        if let Some(tag) = self.cost_tag {
+            if s.starts_with(' ') || s.starts_with('\t') {
+                self.out.buf.push_str(s);
+                self.out.buf.push_str("    # ");
+                self.out.buf.push_str(tag);
+                self.out.buf.push('\n');
+                return;
+            }
+        }
         self.out.emit(s);
     }
 
     /// Emit formatted assembly directly (no temporary String allocation).
     #[inline]
     pub fn emit_fmt(&mut self, args: std::fmt::Arguments<'_>) {
-        self.out.emit_fmt(args);
+        if let Some(tag) = self.cost_tag {
+            use std::fmt::Write;
+            let start = self.out.buf.len();
+            Write::write_fmt(&mut self.out.buf, args).unwrap();
+            // Check if the emitted line starts with whitespace (is an instruction)
+            if self.out.buf.len() > start {
+                let first = self.out.buf.as_bytes()[start];
+                if first == b' ' || first == b'\t' {
+                    self.out.buf.push_str("    # ");
+                    self.out.buf.push_str(tag);
+                    self.out.buf.push('\n');
+                    return;
+                }
+            }
+            self.out.buf.push('\n');
+        } else {
+            self.out.emit_fmt(args);
+        }
     }
 
     /// Emit a visibility directive (.hidden, .protected, .internal) if the symbol

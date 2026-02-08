@@ -167,7 +167,7 @@ impl GlobalInit {
 }
 
 /// An IR function.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IrFunction {
     pub name: String,
     pub return_type: IrType,

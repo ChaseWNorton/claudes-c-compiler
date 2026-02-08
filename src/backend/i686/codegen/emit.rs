@@ -74,6 +74,8 @@ pub struct I686Codegen {
     /// Whether to optimize for code size (-Os). Enables push-based argument
     /// passing, 4-byte stack alignment, and other size-preferring codegen.
     pub(super) optimize_size: bool,
+    /// Whether to emit cost-map annotations (--cost-map).
+    pub(super) cost_map: bool,
 }
 
 // Callee-saved physical register indices for i686
@@ -145,6 +147,7 @@ impl I686Codegen {
             frame_base_offset: 0,
             esp_adjust: 0,
             optimize_size: false,
+            cost_map: false,
         }
     }
 
@@ -164,6 +167,27 @@ impl I686Codegen {
         self.omit_frame_pointer = opts.omit_frame_pointer;
         self.state.emit_cfi = opts.emit_cfi;
         self.optimize_size = opts.optimize_size;
+        self.cost_map = opts.cost_map;
+    }
+
+    /// Set the cost tag for subsequent emissions, returning the previous tag.
+    /// Tags are automatically appended by CodegenState::emit/emit_fmt.
+    pub(super) fn set_cost_tag(&mut self, tag: &'static str) -> Option<&'static str> {
+        let prev = self.state.cost_tag;
+        self.state.cost_tag = Some(tag);
+        prev
+    }
+
+    /// Clear the cost tag, returning the previous tag.
+    pub(super) fn clear_cost_tag(&mut self) -> Option<&'static str> {
+        let prev = self.state.cost_tag;
+        self.state.cost_tag = None;
+        prev
+    }
+
+    /// Restore a previously saved cost tag.
+    pub(super) fn restore_cost_tag(&mut self, tag: Option<&'static str>) {
+        self.state.cost_tag = tag;
     }
 
     // --- i686 helper methods ---
@@ -249,6 +273,23 @@ impl I686Codegen {
             }
         }
 
+        // Set cost tag based on operand kind
+        let prev_tag = if self.cost_map {
+            let tag = match op {
+                Operand::Const(_) => "COMPUTE",
+                Operand::Value(v) => {
+                    if self.reg_assignments.contains_key(&v.0) {
+                        "ACCUM_IN"
+                    } else {
+                        "RELOAD"
+                    }
+                }
+            };
+            Some(self.set_cost_tag(tag))
+        } else {
+            None
+        };
+
         match op {
             Operand::Const(c) => {
                 match c {
@@ -318,6 +359,10 @@ impl I686Codegen {
                     self.state.reg_cache.set_acc(v.0, is_alloca);
                 }
             }
+        }
+
+        if let Some(prev) = prev_tag {
+            self.restore_cost_tag(prev);
         }
     }
 
@@ -409,6 +454,12 @@ impl I686Codegen {
 
     /// Store %eax to a value's destination (callee-saved register or stack slot).
     pub(super) fn store_eax_to(&mut self, dest: &Value) {
+        let prev_tag = if self.cost_map {
+            let tag = if self.dest_reg(dest).is_some() { "ACCUM_OUT" } else { "SPILL" };
+            Some(self.set_cost_tag(tag))
+        } else {
+            None
+        };
         if let Some(phys) = self.dest_reg(dest) {
             let reg = phys_reg_name(phys);
             emit!(self.state, "    movl %eax, %{}", reg);
@@ -426,6 +477,9 @@ impl I686Codegen {
                 emit!(self.state, "    movl $0, {}", sr4);
             }
             self.state.reg_cache.set_acc(dest.0, false);
+        }
+        if let Some(prev) = prev_tag {
+            self.restore_cost_tag(prev);
         }
     }
 

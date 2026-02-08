@@ -121,6 +121,11 @@ pub(crate) struct CodegenOptions {
     /// and disables jump tables. Used for the Linux kernel boot code where the
     /// setup image must fit within 32KB.
     pub(crate) optimize_size: bool,
+    /// Whether to emit cost-map annotations on assembly instructions (--cost-map).
+    /// When true, each instruction gets a `# CATEGORY` comment suffix indicating
+    /// why it was emitted (COMPUTE, SPILL, RELOAD, etc.), and a cost breakdown
+    /// is printed to stderr. Peephole optimization is skipped in this mode.
+    pub(crate) cost_map: bool,
 }
 
 /// Target architecture.
@@ -318,11 +323,17 @@ impl Target {
                 cg.state.function_sections = opts.function_sections;
                 cg.state.data_sections = opts.data_sections;
                 let raw = generation::generate_module_with_debug(&mut cg, module, opts.debug_info, source_mgr);
-                let optimized = i686::codegen::peephole::peephole_optimize(raw);
-                if opts.code16gcc {
-                    format!(".code16gcc\n{}", optimized)
+                if opts.cost_map {
+                    // Skip peephole when cost_map is enabled (comment tags break pattern matching)
+                    i686::codegen::cost_map::print_cost_map(&raw);
+                    raw
                 } else {
-                    optimized
+                    let optimized = i686::codegen::peephole::peephole_optimize(raw);
+                    if opts.code16gcc {
+                        format!(".code16gcc\n{}", optimized)
+                    } else {
+                        optimized
+                    }
                 }
             }
             Target::Aarch64 => {

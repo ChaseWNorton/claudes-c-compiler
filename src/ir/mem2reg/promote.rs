@@ -76,20 +76,13 @@ struct AllocaInfo {
 /// Promote allocas in a single function to SSA form.
 /// If `promote_params` is true, parameter allocas in the entry block are also
 /// eligible for promotion.
-fn promote_function(func: &mut IrFunction, promote_params: bool) {
+pub(crate) fn promote_function(func: &mut IrFunction, promote_params: bool) {
     if func.blocks.is_empty() {
         return;
     }
 
     // Step 1: Identify promotable allocas
     let mut alloca_infos = find_promotable_allocas(func, promote_params);
-    if std::env::var("CCC_DEBUG_MEM2REG").is_ok() {
-        let total_allocas: usize = func.blocks[0].instructions.iter()
-            .filter(|i| matches!(i, Instruction::Alloca { .. }))
-            .count();
-        eprintln!("[mem2reg] func '{}': {} total allocas, {} promotable, {} params",
-            func.name, total_allocas, alloca_infos.len(), func.params.len());
-    }
     if alloca_infos.is_empty() {
         return;
     }

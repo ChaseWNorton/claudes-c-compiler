@@ -15,3 +15,4 @@ mod atomics;
 mod i128_ops;
 mod float_ops;
 pub(crate) mod peephole;
+pub(crate) mod cost_map;

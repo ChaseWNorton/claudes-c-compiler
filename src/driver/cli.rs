@@ -311,6 +311,7 @@ impl Driver {
 
                 // Verbose/diagnostic flags
                 "-v" | "--verbose" => self.verbose = true,
+                "--cost-map" => self.cost_map = true,
 
                 // Linker library flags: -lfoo
                 arg if arg.starts_with("-l") => {
