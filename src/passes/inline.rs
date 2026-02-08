@@ -591,8 +591,15 @@ pub fn run(module: &mut IrModule, optimize_size: bool) -> usize {
     // Size-positive inlining pass: at -Os, try inlining functions that exceed
     // normal limits at call sites with constant arguments. Clone the caller,
     // inline + optimize, and keep only if the result is smaller.
+    // Also inline single-use static functions with callee credit: the caller
+    // may grow, but the standalone callee is eliminated, for a net win.
     if optimize_size {
-        total_inlined += run_size_positive_inline_pass(module, &callee_map, &mut global_max_block_id, debug_inline, &skip_list);
+        // Count remaining call sites per function (after normal inlining).
+        let call_site_counts = count_call_sites(module);
+        total_inlined += run_size_positive_inline_pass(module, &callee_map, &mut global_max_block_id, debug_inline, &skip_list, &call_site_counts);
+        // Eliminate static functions that have zero remaining call sites
+        // (all calls were inlined). Clear their blocks so codegen emits nothing.
+        eliminate_dead_static_callees(module, debug_inline);
     }
 
     // After ALL inlining is complete, resolve input_symbols for InlineAsm instructions.
@@ -938,6 +945,7 @@ fn short_inst_name(inst: &Instruction) -> &'static str {
 }
 
 /// Information about a callee function eligible for inlining.
+#[derive(Clone)]
 struct CalleeData {
     blocks: Vec<BasicBlock>,
     /// For each param, Some(size) if it's a struct-by-value parameter, None otherwise.
@@ -993,6 +1001,84 @@ fn global_init_contains_local_label(init: &GlobalInit) -> bool {
     }
 }
 
+/// Count call sites per function across the entire module.
+/// Returns a map from callee name to the number of Call instructions referencing it.
+fn count_call_sites(module: &IrModule) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for func in &module.functions {
+        if func.is_declaration {
+            continue;
+        }
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if let Instruction::Call { func: callee_name, .. } = inst {
+                    *counts.entry(callee_name.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    counts
+}
+
+/// Count ALL references to each function name (calls + address-of + global initializers).
+/// A function is referenced if:
+/// - Any instruction has a Call to it
+/// - Any instruction takes its address via GlobalAddr
+/// - Any global variable's initializer references it (e.g., function pointers in structs)
+fn count_all_references(module: &IrModule) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    // Scan instructions in all functions.
+    for func in &module.functions {
+        if func.is_declaration {
+            continue;
+        }
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                match inst {
+                    Instruction::Call { func: callee_name, .. } => {
+                        *counts.entry(callee_name.clone()).or_insert(0) += 1;
+                    }
+                    Instruction::GlobalAddr { name, .. } => {
+                        *counts.entry(name.clone()).or_insert(0) += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Scan global variable initializers (struct initializers with function pointers,
+    // dispatch tables, etc.).
+    for global in &module.globals {
+        global.init.for_each_ref(&mut |name| {
+            *counts.entry(name.to_string()).or_insert(0) += 1;
+        });
+    }
+    counts
+}
+
+/// Eliminate static functions that have zero remaining references.
+/// After inlining all calls to a single-use static function, clear its blocks
+/// so codegen emits nothing (the function section will be empty/absent).
+/// Checks both Call and GlobalAddr (address-of) references to avoid
+/// eliminating functions that are used as function pointers.
+fn eliminate_dead_static_callees(module: &mut IrModule, debug_inline: bool) {
+    let ref_counts = count_all_references(module);
+    for func in &mut module.functions {
+        if func.is_declaration || !func.is_static || func.blocks.is_empty() {
+            continue;
+        }
+        // Only eliminate if zero references remain (no calls AND no address-of).
+        let ref_count = ref_counts.get(&func.name).copied().unwrap_or(0);
+        if ref_count == 0 {
+            if debug_inline {
+                eprintln!("[INLINE] Eliminating dead static function '{}' (zero remaining references)", func.name);
+            }
+            func.blocks.clear();
+            func.is_declaration = true;
+        }
+    }
+}
+
 /// Size-positive inlining pass for -Os.
 ///
 /// For each call site where the callee is a size-positive candidate and at least
@@ -1002,6 +1088,11 @@ fn global_init_contains_local_label(init: &GlobalInit) -> bool {
 /// 3. Run mem2reg + constfold + copy_prop + simplify + cfg_simplify + DCE
 /// 4. If the clone has fewer instructions than the original, commit
 ///
+/// For single-use callees (called exactly once in the module), the const-arg
+/// requirement is dropped and a callee credit is applied: the inline is
+/// profitable if the caller's growth is less than the callee's instruction count
+/// (since the standalone callee will be eliminated).
+///
 /// This matches GCC's -Os behavior: inline when constant propagation makes the
 /// inlined result smaller than the call + standalone function.
 fn run_size_positive_inline_pass(
@@ -1010,6 +1101,7 @@ fn run_size_positive_inline_pass(
     global_max_block_id: &mut u32,
     debug_inline: bool,
     skip_list: &[String],
+    call_site_counts: &HashMap<String, usize>,
 ) -> usize {
     let mut total_inlined = 0;
 
@@ -1026,18 +1118,57 @@ fn run_size_positive_inline_pass(
                 break;
             }
 
-            // Find call sites to size-positive candidates with constant args.
+            // Find call sites to size-positive candidates.
+            // For single-use callees, the const-arg requirement is relaxed.
             let site = find_size_positive_call_site(
                 &module.functions[func_idx],
                 callee_map,
                 skip_list,
                 &not_profitable,
+                call_site_counts,
             );
             let (site, callee_name) = match site {
                 Some(s) => s,
                 None => break,
             };
-            let callee_data = &callee_map[&callee_name];
+            // Use the CURRENT callee body from the module, not the stale snapshot
+            // from callee_map. If a callee was modified by earlier inlines in this
+            // pass (e.g., its own callees were inlined into it), the snapshot body
+            // still has Call instructions that were already expanded, causing double
+            // inlining when the callee is subsequently inlined into a caller.
+            let callee_func_idx = module.functions.iter()
+                .position(|f| f.name == callee_name);
+            let current_callee_data = match callee_func_idx {
+                Some(idx) if idx != func_idx && !module.functions[idx].is_declaration
+                    && !module.functions[idx].blocks.is_empty() =>
+                {
+                    let func = &module.functions[idx];
+                    CalleeData {
+                        blocks: func.blocks.clone(),
+                        param_struct_sizes: func.params.iter().map(|p| p.struct_size).collect(),
+                        return_type: func.return_type,
+                        num_params: func.params.len(),
+                        next_value_id: func.next_value_id,
+                        max_block_id: func.blocks.iter().map(|b| b.label.0).max().unwrap_or(0),
+                        is_always_inline: false,
+                        exceeds_normal_limits: false,
+                        is_static_inline: false,
+                        is_size_positive_candidate: true,
+                    }
+                },
+                _ => {
+                    // Callee was eliminated or can't be found; use snapshot.
+                    callee_map[&callee_name].clone()
+                }
+            };
+            let callee_inst_count: usize = current_callee_data.blocks.iter()
+                .map(|b| b.instructions.len()).sum();
+            // Use ORIGINAL call count for callee credit, not remaining.
+            // If a function is called from N>1 sites, each inline adds code.
+            // Callee credit (callee elimination) only pays off if ALL N sites
+            // are inlined, but the total growth could exceed the callee size.
+            // Restrict callee credit to truly single-use functions.
+            let is_single_use = call_site_counts.get(&callee_name).copied().unwrap_or(0) <= 1;
 
             // Count instructions before inlining.
             let original_inst_count: usize = module.functions[func_idx].blocks.iter()
@@ -1046,7 +1177,7 @@ fn run_size_positive_inline_pass(
             // Trial: clone → inline → optimize → measure.
             let saved_max_block_id = *global_max_block_id;
             let mut trial = module.functions[func_idx].clone();
-            let success = inline_call_site(&mut trial, &site, callee_data, global_max_block_id);
+            let success = inline_call_site(&mut trial, &site, &current_callee_data, global_max_block_id);
             if !success {
                 *global_max_block_id = saved_max_block_id;
                 not_profitable.insert(callee_name.clone());
@@ -1069,8 +1200,23 @@ fn run_size_positive_inline_pass(
             let trial_inst_count: usize = trial.blocks.iter()
                 .map(|b| b.instructions.len()).sum();
 
-            if trial_inst_count < original_inst_count {
-                // Size-positive: the inlined + optimized version is smaller.
+            // For single-use callees, apply callee credit: the standalone callee
+            // will be eliminated, so the net change is (trial_growth - callee_size).
+            // For multi-use callees, use strict comparison (caller must shrink).
+            let profitable = if is_single_use {
+                // Caller growth must be less than the callee we're eliminating.
+                let caller_growth = trial_inst_count as isize - original_inst_count as isize;
+                caller_growth < callee_inst_count as isize
+            } else {
+                trial_inst_count < original_inst_count
+            };
+
+            if profitable {
+                if debug_inline {
+                    let delta = trial_inst_count as isize - original_inst_count as isize;
+                    eprintln!("[INLINE] Size-positive: inlined '{}' into '{}' (delta={}, callee_size={}, single_use={})",
+                        callee_name, module.functions[func_idx].name, delta, callee_inst_count, is_single_use);
+                }
                 // Commit: replace the function body with the optimized trial.
                 module.functions[func_idx].blocks = trial.blocks;
                 module.functions[func_idx].next_value_id = trial.next_value_id;
@@ -1089,13 +1235,15 @@ fn run_size_positive_inline_pass(
     total_inlined
 }
 
-/// Find a call site in `func` where the callee is a size-positive candidate
-/// and at least one argument is a constant.
+/// Find a call site in `func` where the callee is a size-positive candidate.
+/// For multi-use callees, requires at least one constant argument.
+/// For single-use callees, any call site is eligible (callee credit applies).
 fn find_size_positive_call_site(
     func: &IrFunction,
     callee_map: &HashMap<String, CalleeData>,
     skip_list: &[String],
     not_profitable: &std::collections::HashSet<String>,
+    call_site_counts: &HashMap<String, usize>,
 ) -> Option<(InlineCallSite, String)> {
     for (block_idx, block) in func.blocks.iter().enumerate() {
         for (inst_idx, inst) in block.instructions.iter().enumerate() {
@@ -1113,10 +1261,18 @@ fn find_size_positive_call_site(
                     if !callee_data.is_size_positive_candidate {
                         continue;
                     }
-                    // Require at least one constant argument.
-                    let has_const_arg = info.args.iter().any(|a| matches!(a, Operand::Const(_)));
-                    if !has_const_arg {
-                        continue;
+                    // Use ORIGINAL call count for single-use determination.
+                    let is_single_use = call_site_counts.get(callee_name).copied().unwrap_or(0) <= 1;
+                    // For multi-use callees, require at least one constant argument
+                    // (constant propagation enables DCE to shrink the inlined code).
+                    // For single-use callees, skip the const-arg check: the callee
+                    // will be eliminated, so even without const-prop the net size
+                    // change may be favorable.
+                    if !is_single_use {
+                        let has_const_arg = info.args.iter().any(|a| matches!(a, Operand::Const(_)));
+                        if !has_const_arg {
+                            continue;
+                        }
                     }
                     return Some((InlineCallSite {
                         block_idx,
@@ -1208,12 +1364,18 @@ fn build_callee_map(module: &IrModule, optimize_size: bool) -> HashMap<String, C
             && !is_small_static
             && inst_count_for_static <= max_inline_instructions
             && func.blocks.len() <= max_inline_blocks;
-        // At -Os, static functions that exceed normal limits may still be
+        // At -Os, static functions that exceed normal -Os limits may still be
         // profitable to inline at call sites with constant arguments. GCC -Os
         // does this: it inlines when constant propagation + DCE makes the
         // inlined result smaller than the call + standalone function.
+        // This includes small_static/medium_static functions that fit -O2 limits
+        // but exceed the tighter -Os limits (15 inst, 2 blocks).
+        let exceeds_os_normal = optimize_size
+            && (inst_count_for_static > max_inline_instructions
+                || func.blocks.len() > max_inline_blocks);
         let is_size_positive_candidate = optimize_size && func.is_static
-            && !is_always_inline && !is_trivially_empty && !is_small_static && !is_medium_static
+            && !is_always_inline && !is_trivially_empty
+            && ((!is_small_static && !is_medium_static) || exceeds_os_normal)
             && inst_count_for_static <= MAX_SIZE_POSITIVE_INSTRUCTIONS
             && func.blocks.len() <= MAX_SIZE_POSITIVE_BLOCKS;
         if !is_always_inline && !is_trivially_empty && !is_small_static && !is_medium_static
