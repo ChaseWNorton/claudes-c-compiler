@@ -82,10 +82,12 @@ pub(super) const I686_CALLEE_SAVED: &[PhysReg] = &[PhysReg(0), PhysReg(1), PhysR
 // Extended callee-saved list including ebp (used when -fomit-frame-pointer)
 pub(super) const I686_CALLEE_SAVED_WITH_EBP: &[PhysReg] = &[PhysReg(0), PhysReg(1), PhysReg(2), PhysReg(3)];
 // Caller-saved registers available for allocation.
-// PhysReg(4) = ecx: assigned to values whose live ranges don't span calls.
-// eax is the accumulator (always clobbered) and edx has too many implicit uses
-// (division, 64-bit returns, va_list) to safely allocate.
-pub(super) const I686_CALLER_SAVED: &[PhysReg] = &[PhysReg(4)];
+// PhysReg(4) = ecx: assigned to values whose live ranges don't span calls or ecx clobbers.
+// PhysReg(5) = edx: assigned to values whose live ranges don't span calls or edx clobbers.
+// eax is the accumulator (always clobbered).
+// ecx clobbers: indirect loads/stores, GEP, shifts, division, float cmp, intrinsics.
+// edx clobbers: division (edx:eax), indirect stores (emit_save_acc), 64-bit casts.
+pub(super) const I686_CALLER_SAVED: &[PhysReg] = &[PhysReg(4), PhysReg(5)];
 
 pub(super) fn phys_reg_name(reg: PhysReg) -> &'static str {
     match reg.0 {
@@ -94,6 +96,7 @@ pub(super) fn phys_reg_name(reg: PhysReg) -> &'static str {
         2 => "edi",
         3 => "ebp",
         4 => "ecx",
+        5 => "edx",
         _ => panic!("invalid i686 phys reg: {:?}", reg),
     }
 }
@@ -105,6 +108,7 @@ pub(super) fn i686_constraint_to_phys(constraint: &str) -> Option<PhysReg> {
         "S" | "{esi}" | "esi" => Some(PhysReg(1)),
         "D" | "{edi}" | "edi" => Some(PhysReg(2)),
         "c" | "{ecx}" | "ecx" => Some(PhysReg(4)),
+        "d" | "{edx}" | "edx" => Some(PhysReg(5)),
         _ => None,
     }
 }
@@ -116,6 +120,7 @@ pub(super) fn i686_clobber_to_phys(clobber: &str) -> Option<PhysReg> {
         "esi" | "~{esi}" => Some(PhysReg(1)),
         "edi" | "~{edi}" => Some(PhysReg(2)),
         "ecx" | "~{ecx}" => Some(PhysReg(4)),
+        "edx" | "~{edx}" => Some(PhysReg(5)),
         _ => None,
     }
 }

@@ -45,12 +45,12 @@ pub struct LivenessResult {
     /// Program points that are Call or CallIndirect instructions.
     /// Used by the register allocator to identify values that cross call boundaries.
     pub call_points: Vec<u32>,
-    /// Program points where the codegen will clobber scratch/caller-saved registers
-    /// (ecx on i686). This includes Store, Load, GEP (indirect addressing uses ecx),
-    /// non-immediate shifts (require %cl), and division (uses ecx as divisor).
-    /// Used by the regalloc to prevent allocating caller-saved registers to values
-    /// whose live ranges span these instructions.
-    pub scratch_clobber_points: Vec<u32>,
+    /// Per-register clobber points for caller-saved registers on i686.
+    /// Index 0 = ecx clobber points (Store, Load, GEP, shifts, division, float cmp, intrinsics).
+    /// Index 1 = edx clobber points (division, indirect stores, 64-bit casts).
+    /// Used by the regalloc to prevent allocating each caller-saved register to values
+    /// whose live ranges span that register's clobber points.
+    pub scratch_clobber_points: Vec<Vec<u32>>,
     /// Loop nesting depth for each block (block_index -> depth).
     /// Depth 0 = not in any loop. Depth 1 = in one loop. Depth 2 = nested, etc.
     /// Used by the register allocator to weight uses inside loops more heavily.
@@ -144,7 +144,7 @@ struct ProgramPointState {
     block_id_to_idx: FxHashMap<u32, usize>,
     setjmp_block_indices: Vec<usize>,
     call_points: Vec<u32>,
-    scratch_clobber_points: Vec<u32>,
+    scratch_clobber_points: Vec<Vec<u32>>,
     num_points: u32,
 }
 
@@ -160,7 +160,7 @@ struct ProgramPointState {
 pub fn compute_live_intervals(func: &IrFunction) -> LivenessResult {
     let num_blocks = func.blocks.len();
     if num_blocks == 0 {
-        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: Vec::new(), block_loop_depth: Vec::new() };
+        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: vec![Vec::new(), Vec::new()], block_loop_depth: Vec::new() };
     }
 
     let alloca_set = collect_alloca_set(func);
@@ -168,7 +168,7 @@ pub fn compute_live_intervals(func: &IrFunction) -> LivenessResult {
 
     let num_values = value_ids.len();
     if num_values == 0 {
-        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: Vec::new(), block_loop_depth: Vec::new() };
+        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: vec![Vec::new(), Vec::new()], block_loop_depth: Vec::new() };
     }
 
     // Phase 1: Assign program points and build gen/kill sets.
@@ -292,7 +292,9 @@ fn assign_program_points(
     let mut block_id_to_idx: FxHashMap<u32, usize> = FxHashMap::default();
     let mut setjmp_block_indices: Vec<usize> = Vec::new();
     let mut call_points: Vec<u32> = Vec::new();
-    let mut scratch_clobber_points: Vec<u32> = Vec::new();
+    // Per-register clobber points: [0]=ecx, [1]=edx
+    let mut ecx_clobber_points: Vec<u32> = Vec::new();
+    let mut edx_clobber_points: Vec<u32> = Vec::new();
     let is_32bit = crate::common::types::target_is_32bit();
 
     for (block_idx, block) in func.blocks.iter().enumerate() {
@@ -364,49 +366,55 @@ fn assign_program_points(
                 _ => {}
             }
 
-            // Track scratch register clobber points (i686: ecx used as scratch).
-            // On 32-bit targets, the codegen uses ecx for indirect memory access,
-            // shift counts, and division. Caller-saved registers can't be allocated
-            // to values spanning these instructions.
+            // Track per-register scratch clobber points (i686).
+            // ecx: indirect memory access, shift counts, division, float cmp, intrinsics.
+            // edx: division (edx:eax pair), indirect stores (emit_save_acc), 64-bit casts.
             if is_32bit {
                 match inst {
-                    // Store/Load through non-alloca pointers use ecx for indirect
-                    // addressing. Stores/loads to alloca pointers use direct stack
-                    // slot references and don't clobber ecx.
+                    // Store through non-alloca pointers: ecx for addressing, edx for save_acc
                     Instruction::Store { ptr, .. } if !alloca_set.contains(&ptr.0) => {
-                        scratch_clobber_points.push(point);
+                        ecx_clobber_points.push(point);
+                        edx_clobber_points.push(point);
                     }
+                    // Load through non-alloca pointers: ecx for addressing (edx NOT clobbered)
                     Instruction::Load { ptr, .. } if !alloca_set.contains(&ptr.0) => {
-                        scratch_clobber_points.push(point);
+                        ecx_clobber_points.push(point);
                     }
-                    // GEP may use ecx for complex address computation
+                    // GEP: ecx for complex address computation (edx NOT clobbered)
                     Instruction::GetElementPtr { .. } => {
-                        scratch_clobber_points.push(point);
+                        ecx_clobber_points.push(point);
                     }
-                    // Non-immediate shifts require %cl, non-i128 division uses ecx
+                    // Non-immediate shifts require %cl (ecx only), division uses both
                     Instruction::BinOp { op, rhs, ty, .. }
                         if !matches!(ty, IrType::I128 | IrType::U128) =>
                     {
                         match op {
                             IrBinOp::Shl | IrBinOp::AShr | IrBinOp::LShr => {
-                                // Only non-immediate shifts clobber ecx
                                 if !matches!(rhs, Operand::Const(_)) {
-                                    scratch_clobber_points.push(point);
+                                    ecx_clobber_points.push(point);
                                 }
                             }
                             IrBinOp::SDiv | IrBinOp::UDiv | IrBinOp::SRem | IrBinOp::URem => {
-                                scratch_clobber_points.push(point);
+                                ecx_clobber_points.push(point);
+                                edx_clobber_points.push(point);
                             }
                             _ => {}
                         }
                     }
+                    // 64-bit casts: edx used for eax:edx pair (cltd, xorl %edx, etc.)
+                    Instruction::Cast { from_ty, to_ty, .. }
+                        if (matches!(from_ty, IrType::I64 | IrType::U64) || matches!(to_ty, IrType::I64 | IrType::U64))
+                            && !matches!((from_ty, to_ty), (IrType::I64, IrType::U64) | (IrType::U64, IrType::I64)) =>
+                    {
+                        edx_clobber_points.push(point);
+                    }
                     // Float comparison (F32) uses ecx for SSE movd
                     Instruction::Cmp { ty, .. } if ty.is_float() => {
-                        scratch_clobber_points.push(point);
+                        ecx_clobber_points.push(point);
                     }
                     // Some intrinsics (SSE pinsrw/pinsrd, CRC32) use ecx
                     Instruction::Intrinsic { .. } => {
-                        scratch_clobber_points.push(point);
+                        ecx_clobber_points.push(point);
                     }
                     _ => {}
                 }
@@ -475,7 +483,7 @@ fn assign_program_points(
         block_id_to_idx,
         setjmp_block_indices,
         call_points,
-        scratch_clobber_points,
+        scratch_clobber_points: vec![ecx_clobber_points, edx_clobber_points],
         num_points: point,
     }
 }
