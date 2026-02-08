@@ -63,7 +63,13 @@ impl I686Codegen {
         }
         let available_regs = filter_available_regs(callee_saved_set, &asm_clobbered_regs);
 
-        let caller_saved_regs = I686_CALLER_SAVED.to_vec();
+        // Filter caller-saved registers: remove any explicitly clobbered by inline asm.
+        // Empty asm barriers (no inputs/outputs) aren't call points, so caller-saved
+        // values would persist across them — but the asm may destroy the register.
+        let caller_saved_regs: Vec<PhysReg> = I686_CALLER_SAVED.iter()
+            .copied()
+            .filter(|r| !asm_clobbered_regs.contains(r))
+            .collect();
 
         let (reg_assigned, cached_liveness) = run_regalloc_and_merge_clobbers(
             func, available_regs, caller_saved_regs, &asm_clobbered_regs,

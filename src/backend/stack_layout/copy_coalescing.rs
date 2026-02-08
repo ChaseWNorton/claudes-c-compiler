@@ -132,7 +132,151 @@ pub(super) fn build_copy_alias_map(
         copy_alias.retain(|dest_id, _| !asm_output_ptrs.contains(dest_id));
     }
 
+    // Phase 2: Coalesce phi relay values — values whose ONLY definitions are
+    // Copy instructions and whose ONLY uses are in Copy instructions.
+    // These are pure intermediates created by phi elimination that can share
+    // their copy target's slot, eliminating entire copy chains.
+    coalesce_phi_relays(func, &mut copy_alias, reg_assigned);
+
     copy_alias
+}
+
+/// Coalesce "phi relay" values with their copy targets.
+///
+/// A phi relay value is defined ONLY by Copy instructions (never by computation)
+/// and used ONLY as the source operand of Copy instructions. These values are
+/// pure intermediates created by phi elimination when nested phi nodes generate
+/// cascading copies (e.g., `Copy count_next = count_a; Copy count = count_next`).
+///
+/// By coalescing a relay value V with its copy target W (making them share a
+/// slot), all copies in the chain become same-slot no-ops:
+/// - `Copy V = X`: stores X into the shared slot (overwrites W, which is dead)
+/// - `Copy W = V`: reads and writes the same slot → eliminated
+/// - `Copy V = W` (identity path): reads and writes the same slot → eliminated
+///
+/// Safety: phi elimination places copies at the end of blocks, after all
+/// computation. So when `Copy V = X` overwrites the shared slot, W's value
+/// has already been read by all uses in that block.
+fn coalesce_phi_relays(
+    func: &IrFunction,
+    copy_alias: &mut FxHashMap<u32, u32>,
+    reg_assigned: &FxHashMap<u32, PhysReg>,
+) {
+    // Step 1: Find which values are defined ONLY by Copy instructions.
+    // A value defined by any non-Copy instruction is not a relay.
+    let mut only_copy_defs: FxHashSet<u32> = FxHashSet::default();
+    let mut has_non_copy_def: FxHashSet<u32> = FxHashSet::default();
+
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            if let Some(dest) = inst.dest() {
+                if matches!(inst, Instruction::Copy { .. }) {
+                    if !has_non_copy_def.contains(&dest.0) {
+                        only_copy_defs.insert(dest.0);
+                    }
+                } else {
+                    only_copy_defs.remove(&dest.0);
+                    has_non_copy_def.insert(dest.0);
+                }
+            }
+        }
+    }
+
+    if only_copy_defs.is_empty() {
+        return;
+    }
+
+    // Step 2: Check which of these "copy-only" values are used ONLY as operands
+    // of Copy instructions (not as pointers, not in computation, not in terminators).
+    // Collect: for each relay candidate, the set of Copy targets it feeds into.
+    let mut relay_targets: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+    let mut has_non_copy_use: FxHashSet<u32> = FxHashSet::default();
+
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            match inst {
+                Instruction::Copy { dest, src: Operand::Value(v) } => {
+                    if only_copy_defs.contains(&v.0) && !has_non_copy_use.contains(&v.0) {
+                        relay_targets.entry(v.0).or_default().push(dest.0);
+                    }
+                }
+                _ => {
+                    // Check if any relay candidate is used as an operand in a non-Copy instruction
+                    for_each_operand_in_instruction(inst, |op| {
+                        if let Operand::Value(v) = op {
+                            if only_copy_defs.contains(&v.0) {
+                                has_non_copy_use.insert(v.0);
+                                relay_targets.remove(&v.0);
+                            }
+                        }
+                    });
+                    // Also check Value-ref uses (ptr in Store/Load, etc.)
+                    for_each_value_use_in_instruction(inst, |v| {
+                        if only_copy_defs.contains(&v.0) {
+                            has_non_copy_use.insert(v.0);
+                            relay_targets.remove(&v.0);
+                        }
+                    });
+                }
+            }
+        }
+        // Check terminator operands
+        for_each_operand_in_terminator(&block.terminator, |op| {
+            if let Operand::Value(v) = op {
+                if only_copy_defs.contains(&v.0) {
+                    has_non_copy_use.insert(v.0);
+                    relay_targets.remove(&v.0);
+                }
+            }
+        });
+    }
+
+    // Collect alloca IDs to exclude from coalescing targets.
+    let alloca_ids: FxHashSet<u32> = func.blocks.iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter_map(|inst| {
+            if let Instruction::Alloca { dest, .. } = inst { Some(dest.0) } else { None }
+        })
+        .collect();
+
+    // Step 3: For each relay value with exactly one copy target, coalesce.
+    // With multiple targets, pick the one that isn't already aliased.
+    const MAX_CHAIN: usize = 100;
+
+    for (relay_id, targets) in &relay_targets {
+        if reg_assigned.contains_key(relay_id) {
+            continue;
+        }
+
+        // Find the best target to coalesce with (prefer non-aliased, non-alloca).
+        let mut best_target: Option<u32> = None;
+        for &t in targets {
+            if alloca_ids.contains(&t) || reg_assigned.contains_key(&t) {
+                continue;
+            }
+            // Resolve the target through existing aliases to find its root.
+            let mut root = t;
+            let mut depth = 0;
+            while let Some(&parent) = copy_alias.get(&root) {
+                root = parent;
+                depth += 1;
+                if depth > MAX_CHAIN { break; }
+            }
+            // Don't create a self-cycle.
+            if root == *relay_id {
+                continue;
+            }
+            if alloca_ids.contains(&root) {
+                continue;
+            }
+            best_target = Some(root);
+            break;
+        }
+
+        if let Some(target_root) = best_target {
+            copy_alias.insert(*relay_id, target_root);
+        }
+    }
 }
 
 /// Identify values that can skip stack slot allocation because they are

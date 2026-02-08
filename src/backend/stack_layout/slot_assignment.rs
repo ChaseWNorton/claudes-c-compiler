@@ -398,8 +398,30 @@ fn classify_value(
         Some(IrType::I32) | Some(IrType::U32) |
         Some(IrType::F32)
     );
+    let mut is_wide_32 = crate::common::types::target_is_32bit() && matches!(
+        inst.result_type(),
+        Some(IrType::F64) | Some(IrType::I64) | Some(IrType::U64));
+    // Copy instructions have result_type() = None, so also check if the source
+    // is a wide value or a wide constant. If it is, the dest needs an 8-byte slot.
+    if crate::common::types::target_is_32bit() && !is_wide_32 {
+        if let Instruction::Copy { src, .. } = inst {
+            match src {
+                Operand::Value(src_val) => {
+                    if state.wide_values.contains(&src_val.0) {
+                        is_wide_32 = true;
+                    }
+                }
+                Operand::Const(IrConst::F64(_)) | Operand::Const(IrConst::I64(_)) => {
+                    is_wide_32 = true;
+                }
+                _ => {}
+            }
+        }
+    }
     let slot_size: i64 = if is_i128 || is_f128 {
         16
+    } else if crate::common::types::target_is_32bit() && !is_wide_32 {
+        4
     } else {
         8
     };

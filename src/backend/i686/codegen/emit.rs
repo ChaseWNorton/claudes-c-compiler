@@ -81,8 +81,11 @@ pub struct I686Codegen {
 pub(super) const I686_CALLEE_SAVED: &[PhysReg] = &[PhysReg(0), PhysReg(1), PhysReg(2)];
 // Extended callee-saved list including ebp (used when -fomit-frame-pointer)
 pub(super) const I686_CALLEE_SAVED_WITH_EBP: &[PhysReg] = &[PhysReg(0), PhysReg(1), PhysReg(2), PhysReg(3)];
-// No caller-saved registers available for allocation (eax/ecx/edx are scratch)
-pub(super) const I686_CALLER_SAVED: &[PhysReg] = &[];
+// Caller-saved registers available for allocation.
+// PhysReg(4) = ecx: assigned to values whose live ranges don't span calls.
+// eax is the accumulator (always clobbered) and edx has too many implicit uses
+// (division, 64-bit returns, va_list) to safely allocate.
+pub(super) const I686_CALLER_SAVED: &[PhysReg] = &[PhysReg(4)];
 
 pub(super) fn phys_reg_name(reg: PhysReg) -> &'static str {
     match reg.0 {
@@ -90,26 +93,29 @@ pub(super) fn phys_reg_name(reg: PhysReg) -> &'static str {
         1 => "esi",
         2 => "edi",
         3 => "ebp",
+        4 => "ecx",
         _ => panic!("invalid i686 phys reg: {:?}", reg),
     }
 }
 
-/// Map inline asm constraint register names to callee-saved PhysReg indices.
+/// Map inline asm constraint register names to allocated PhysReg indices.
 pub(super) fn i686_constraint_to_phys(constraint: &str) -> Option<PhysReg> {
     match constraint {
         "b" | "{ebx}" | "ebx" => Some(PhysReg(0)),
         "S" | "{esi}" | "esi" => Some(PhysReg(1)),
         "D" | "{edi}" | "edi" => Some(PhysReg(2)),
+        "c" | "{ecx}" | "ecx" => Some(PhysReg(4)),
         _ => None,
     }
 }
 
-/// Map inline asm clobber register names to callee-saved PhysReg indices.
+/// Map inline asm clobber register names to allocated PhysReg indices.
 pub(super) fn i686_clobber_to_phys(clobber: &str) -> Option<PhysReg> {
     match clobber {
         "ebx" | "~{ebx}" => Some(PhysReg(0)),
         "esi" | "~{esi}" => Some(PhysReg(1)),
         "edi" | "~{edi}" => Some(PhysReg(2)),
+        "ecx" | "~{ecx}" => Some(PhysReg(4)),
         _ => None,
     }
 }
@@ -501,6 +507,38 @@ impl I686Codegen {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Returns an assembly operand string for the given operand without emitting
+    /// any instructions or clobbering any registers. Used for direct-operand ALU
+    /// and CMP instructions (e.g., `addl %ebx, %eax` or `cmpl 8(%esp), %eax`).
+    /// Returns None if the operand cannot be expressed as a direct operand.
+    pub(super) fn rhs_operand_str(&self, op: &Operand) -> Option<String> {
+        match op {
+            Operand::Const(c) => {
+                match c {
+                    IrConst::I8(v) => Some(format!("${}", *v as i32)),
+                    IrConst::I16(v) => Some(format!("${}", *v as i32)),
+                    IrConst::I32(v) => Some(format!("${}", v)),
+                    IrConst::I64(v) => Some(format!("${}", *v as i32)),
+                    IrConst::I128(v) => Some(format!("${}", *v as i32)),
+                    IrConst::Zero => Some("$0".to_string()),
+                    _ => None,
+                }
+            }
+            Operand::Value(v) => {
+                if self.state.is_alloca(v.0) {
+                    return None;
+                }
+                if let Some(phys) = self.reg_assignments.get(&v.0).copied() {
+                    Some(format!("%{}", phys_reg_name(phys)))
+                } else if let Some(slot) = self.state.get_slot(v.0) {
+                    Some(self.slot_ref(slot).to_string())
+                } else {
+                    None
+                }
+            }
         }
     }
 

@@ -96,7 +96,27 @@ impl I686Codegen {
             }
         }
 
-        // General case: load lhs to eax, rhs to ecx
+        // Direct-operand path: use register/memory source directly, avoiding ecx scratch.
+        // Works for add, sub, mul, and, or, xor — but NOT shifts (require %cl) or
+        // division (require edx:eax pair with ecx divisor).
+        if matches!(op, IrBinOp::Add | IrBinOp::Sub | IrBinOp::Mul
+                      | IrBinOp::And | IrBinOp::Or | IrBinOp::Xor) {
+            if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                self.operand_to_eax(lhs);
+                match op {
+                    IrBinOp::Mul => emit!(self.state, "    imull {}, %eax", rhs_str),
+                    _ => {
+                        let mnem = alu_mnemonic(op);
+                        emit!(self.state, "    {}l {}, %eax", mnem, rhs_str);
+                    }
+                }
+                self.state.reg_cache.invalidate_acc();
+                self.store_eax_to(dest);
+                return;
+            }
+        }
+
+        // Fallback: load lhs to eax, rhs to ecx
         self.operand_to_eax(lhs);
         self.operand_to_ecx(rhs);
 

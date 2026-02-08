@@ -450,36 +450,40 @@ fn detect_cmp_branch_fusion(block: &BasicBlock, use_counts: &[u32]) -> Option<us
         _ => return None,
     };
 
-    // Find the last instruction that is a Cmp producing this value
-    let last_idx = block.instructions.len().checked_sub(1)?;
-    let last_inst = &block.instructions[last_idx];
+    // Scan backward through the block to find a Cmp producing the condition value.
+    // SSA guarantees operands are immutable so intervening instructions can't affect
+    // the Cmp's inputs — we just defer the compare emission to the block end.
+    for idx in (0..block.instructions.len()).rev() {
+        let inst = &block.instructions[idx];
 
-    let (dest, _op, _lhs, _rhs, ty) = match last_inst {
-        Instruction::Cmp { dest, op, lhs, rhs, ty } => (dest, op, lhs, rhs, ty),
-        _ => return None,
-    };
+        let (dest, _op, _lhs, _rhs, ty) = match inst {
+            Instruction::Cmp { dest, op, lhs, rhs, ty } => (dest, op, lhs, rhs, ty),
+            _ => continue,
+        };
 
-    // The Cmp dest must be the same as the CondBranch cond
-    if dest.0 != cond_val.0 {
-        return None;
-    }
+        // The Cmp dest must be the same as the CondBranch cond
+        if dest.0 != cond_val.0 {
+            continue;
+        }
 
-    // Don't fuse wide-int or float comparisons (they have special codegen paths).
-    // On 32-bit targets, also exclude I64/U64: the fused compare-and-branch
-    // uses 32-bit cmpl which only tests the low half of a 64-bit value.
-    if is_wide_int_type(*ty) || ty.is_float() {
-        return None;
-    }
-    if crate::common::types::target_is_32bit() && matches!(ty, IrType::I64 | IrType::U64) {
-        return None;
-    }
+        // Don't fuse wide-int or float comparisons (they have special codegen paths).
+        // On 32-bit targets, also exclude I64/U64: the fused compare-and-branch
+        // uses 32-bit cmpl which only tests the low half of a 64-bit value.
+        if is_wide_int_type(*ty) || ty.is_float() {
+            return None;
+        }
+        if crate::common::types::target_is_32bit() && matches!(ty, IrType::I64 | IrType::U64) {
+            return None;
+        }
 
-    // The Cmp result must be used exactly once (by the CondBranch terminator)
-    if (cond_val.0 as usize) < use_counts.len() && use_counts[cond_val.0 as usize] == 1 {
-        Some(last_idx)
-    } else {
-        None
+        // The Cmp result must be used exactly once (by the CondBranch terminator)
+        if (cond_val.0 as usize) < use_counts.len() && use_counts[cond_val.0 as usize] == 1 {
+            return Some(idx);
+        } else {
+            return None;
+        }
     }
+    None
 }
 
 /// Generate assembly for a module using the given architecture's codegen.

@@ -267,15 +267,24 @@ pub fn allocate_registers(
     used_regs.sort_by_key(|r| r.0);
 
     // Phase 2: Caller-saved registers for non-call-spanning values.
+    // Also reject values whose live ranges span scratch clobber points (i686:
+    // stores/loads/GEPs that use ecx as scratch for indirect addressing).
     if !config.caller_saved_regs.is_empty() {
         let caller_candidates = build_sorted_candidates(
             &liveness, &eligible, &assignments, call_points, &use_count, Some(false),
         );
 
+        let scratch_clobbers = &liveness.scratch_clobber_points;
         let num_caller_regs = config.caller_saved_regs.len();
         let mut caller_free_until: Vec<u32> = vec![0; num_caller_regs];
 
         for interval in &caller_candidates {
+            // Skip values that span scratch clobber points (e.g., stores/loads
+            // that use ecx as scratch). The value would be destroyed.
+            if spans_any_call(interval, scratch_clobbers) {
+                continue;
+            }
+
             let mut best: Option<usize> = None;
             let mut best_free_time: u32 = u32::MAX;
 

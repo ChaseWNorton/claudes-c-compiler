@@ -104,9 +104,23 @@ impl I686Codegen {
     }
 
     pub(super) fn emit_int_cmp_impl(&mut self, dest: &Value, op: IrCmpOp, lhs: &Operand, rhs: &Operand, _ty: IrType) {
+        use crate::ir::reexports::IrConst;
         self.operand_to_eax(lhs);
-        self.operand_to_ecx(rhs);
-        self.state.emit("    cmpl %ecx, %eax");
+        // Use testl/cmpl with immediate/memory operands when possible
+        match rhs {
+            Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
+            | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
+                self.state.emit("    testl %eax, %eax");
+            }
+            _ => {
+                if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                    emit!(self.state, "    cmpl {}, %eax", rhs_str);
+                } else {
+                    self.operand_to_ecx(rhs);
+                    self.state.emit("    cmpl %ecx, %eax");
+                }
+            }
+        }
 
         let set_instr = match op {
             IrCmpOp::Eq => "sete",
@@ -135,11 +149,39 @@ impl I686Codegen {
         true_label: &str,
         false_label: &str,
     ) {
+        use crate::ir::reexports::IrConst;
         self.operand_to_eax(lhs);
-        self.operand_to_ecx(rhs);
-        self.state.emit("    cmpl %ecx, %eax");
+        // Optimize: use testl/cmpl with immediate/memory operands instead of
+        // loading rhs into ecx. Saves 4-7 bytes per fused comparison.
+        match rhs {
+            Operand::Const(IrConst::Zero) | Operand::Const(IrConst::I8(0))
+            | Operand::Const(IrConst::I16(0)) | Operand::Const(IrConst::I32(0)) => {
+                // Compare against zero: testl is shorter than cmpl $0
+                self.state.emit("    testl %eax, %eax");
+            }
+            _ => {
+                if let Some(rhs_str) = self.rhs_operand_str(rhs) {
+                    emit!(self.state, "    cmpl {}, %eax", rhs_str);
+                } else {
+                    self.operand_to_ecx(rhs);
+                    self.state.emit("    cmpl %ecx, %eax");
+                    let jcc = Self::cmp_op_to_jcc(op);
+                    emit!(self.state, "    {} {}", jcc, true_label);
+                    emit!(self.state, "    jmp {}", false_label);
+                    self.state.reg_cache.invalidate_all();
+                    return;
+                }
+            }
+        }
 
-        let jcc = match op {
+        let jcc = Self::cmp_op_to_jcc(op);
+        emit!(self.state, "    {} {}", jcc, true_label);
+        emit!(self.state, "    jmp {}", false_label);
+        self.state.reg_cache.invalidate_all();
+    }
+
+    fn cmp_op_to_jcc(op: IrCmpOp) -> &'static str {
+        match op {
             IrCmpOp::Eq  => "je",
             IrCmpOp::Ne  => "jne",
             IrCmpOp::Slt => "jl",
@@ -150,10 +192,7 @@ impl I686Codegen {
             IrCmpOp::Ule => "jbe",
             IrCmpOp::Ugt => "ja",
             IrCmpOp::Uge => "jae",
-        };
-        emit!(self.state, "    {} {}", jcc, true_label);
-        emit!(self.state, "    jmp {}", false_label);
-        self.state.reg_cache.invalidate_all();
+        }
     }
 
     pub(super) fn emit_select_impl(&mut self, dest: &Value, cond: &Operand, true_val: &Operand, false_val: &Operand, ty: IrType) {
