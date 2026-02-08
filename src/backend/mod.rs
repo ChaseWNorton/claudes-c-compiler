@@ -124,7 +124,7 @@ pub(crate) struct CodegenOptions {
     /// Whether to emit cost-map annotations on assembly instructions (--cost-map).
     /// When true, each instruction gets a `# CATEGORY` comment suffix indicating
     /// why it was emitted (COMPUTE, SPILL, RELOAD, etc.), and a cost breakdown
-    /// is printed to stderr. Peephole optimization is skipped in this mode.
+    /// is printed to stderr after peephole optimization.
     pub(crate) cost_map: bool,
 }
 
@@ -323,17 +323,14 @@ impl Target {
                 cg.state.function_sections = opts.function_sections;
                 cg.state.data_sections = opts.data_sections;
                 let raw = generation::generate_module_with_debug(&mut cg, module, opts.debug_info, source_mgr);
+                let optimized = i686::codegen::peephole::peephole_optimize(raw, opts.cost_map);
                 if opts.cost_map {
-                    // Skip peephole when cost_map is enabled (comment tags break pattern matching)
-                    i686::codegen::cost_map::print_cost_map(&raw);
-                    raw
+                    i686::codegen::cost_map::print_cost_map(&optimized);
+                }
+                if opts.code16gcc {
+                    format!(".code16gcc\n{}", optimized)
                 } else {
-                    let optimized = i686::codegen::peephole::peephole_optimize(raw);
-                    if opts.code16gcc {
-                        format!(".code16gcc\n{}", optimized)
-                    } else {
-                        optimized
-                    }
+                    optimized
                 }
             }
             Target::Aarch64 => {

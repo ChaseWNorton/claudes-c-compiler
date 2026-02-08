@@ -7170,10 +7170,45 @@ fn eliminate_dead_esp_stores_aggressive(store: &LineStore, infos: &mut [LineInfo
 
 // ── Main entry point ─────────────────────────────────────────────────────────
 
+/// Known cost-map tags. Used to identify `    # TAG` suffixes.
+const COST_TAGS: &[&str] = &[
+    "SPILL", "RELOAD", "COMPUTE", "ACCUM_IN", "ACCUM_OUT",
+    "ARG_COPY", "PHI_COPY", "CALL", "CALL_SETUP", "PROLOGUE",
+    "BRANCH", "OTHER", "LOAD_ARG",
+];
+
+/// Strip `    # TAG` suffixes from assembly lines, returning the cleaned
+/// assembly and a parallel vector of tags (one per line, None if untagged).
+fn strip_cost_tags(asm: &str) -> (String, Vec<Option<&'static str>>) {
+    let mut clean = String::with_capacity(asm.len());
+    let mut tags: Vec<Option<&'static str>> = Vec::new();
+    for line in asm.split('\n') {
+        if let Some(pos) = line.rfind("    # ") {
+            let after = &line[pos + 6..];
+            if let Some(&tag) = COST_TAGS.iter().find(|&&t| t == after) {
+                clean.push_str(&line[..pos]);
+                clean.push('\n');
+                tags.push(Some(tag));
+                continue;
+            }
+        }
+        clean.push_str(line);
+        clean.push('\n');
+        tags.push(None);
+    }
+    (clean, tags)
+}
+
 /// Run peephole optimization on i686 assembly text.
-/// Returns the optimized assembly string.
-pub fn peephole_optimize(asm: String) -> String {
-    let mut store = LineStore::new(asm);
+/// When `cost_map` is true, cost-tag comments are stripped before optimization
+/// and reattached to surviving lines in the output.
+pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
+    let (clean_asm, cost_tags) = if cost_map {
+        strip_cost_tags(&asm)
+    } else {
+        (asm, Vec::new())
+    };
+    let mut store = LineStore::new(clean_asm);
     let line_count = store.len();
     let mut infos: Vec<LineInfo> = (0..line_count).map(|i| classify_line(store.get(i))).collect();
 
@@ -7369,7 +7404,33 @@ pub fn peephole_optimize(asm: String) -> String {
     eliminate_redundant_flag_tests(&mut store, &mut infos);
     fold_cmpl_zero_to_testl(&mut store, &mut infos);
 
-    store.build_result(|i| infos[i].is_nop())
+    // Phase 10: Invert conditional branches to eliminate unconditional jumps.
+    // Pattern: jcc TARGET; jmp OTHER; TARGET: → jncc OTHER; TARGET:
+    invert_branch_over_jmp(&mut store, &mut infos);
+
+    if cost_map && !cost_tags.is_empty() {
+        // Reattach cost tags to surviving lines.
+        let mut result = String::with_capacity(store.len() * 30);
+        for i in 0..store.len() {
+            if !infos[i].is_nop() {
+                let line = store.get(i);
+                result.push_str(line);
+                if i < cost_tags.len() {
+                    if let Some(tag) = cost_tags[i] {
+                        let trimmed = line.trim_start();
+                        if !trimmed.is_empty() && !trimmed.starts_with('.') && !trimmed.ends_with(':') {
+                            result.push_str("    # ");
+                            result.push_str(tag);
+                        }
+                    }
+                }
+                result.push('\n');
+            }
+        }
+        result
+    } else {
+        store.build_result(|i| infos[i].is_nop())
+    }
 }
 
 /// Eliminate `testl %reg, %reg` when the immediately preceding non-NOP
@@ -7424,6 +7485,87 @@ fn eliminate_redundant_flag_tests(store: &mut LineStore, infos: &mut [LineInfo])
 
 /// Replace `cmpl $0, %reg` with shorter `testl %reg, %reg`.
 /// cmpl $0 encodes as 3-5 bytes while testl is always 2 bytes.
+/// Invert conditional branches to eliminate unconditional jumps.
+///
+/// Pattern: `jcc TARGET; jmp OTHER; TARGET:` → `jncc OTHER; TARGET:`
+/// Saves 2-5 bytes per occurrence (the eliminated jmp instruction).
+fn invert_branch_over_jmp(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
+    let len = infos.len();
+    let mut changed = false;
+    let mut i = 0;
+    while i + 2 < len {
+        // Line i: conditional jump (jcc TARGET)
+        if infos[i].kind != LineKind::CondJmp || infos[i].is_nop() {
+            i += 1;
+            continue;
+        }
+        // Line i+1: unconditional jump (jmp OTHER)
+        let j = i + 1;
+        if infos[j].kind != LineKind::Jmp || infos[j].is_nop() {
+            i += 1;
+            continue;
+        }
+        // Line i+2: label that matches the conditional jump's target
+        let k = j + 1;
+        if infos[k].kind != LineKind::Label || infos[k].is_nop() {
+            i += 1;
+            continue;
+        }
+
+        let cond_line = trimmed(store, &infos[i], i);
+        let jmp_line = trimmed(store, &infos[j], j);
+        let label_line = trimmed(store, &infos[k], k);
+
+        // Extract conditional target: "jne .LBB123" → ".LBB123"
+        let cond_target = cond_line.split_whitespace().nth(1);
+        // Extract jmp target: "jmp .LBB456" → ".LBB456"
+        let jmp_target = jmp_line.split_whitespace().nth(1);
+        // Extract label name: ".LBB123:" → ".LBB123"
+        let label_name = label_line.strip_suffix(':');
+
+        if let (Some(ct), Some(jt), Some(ln)) = (cond_target, jmp_target, label_name) {
+            if ct == ln {
+                // Invert the condition and jump to OTHER instead
+                let mnemonic = cond_line.split_whitespace().next().unwrap_or("");
+                if let Some(inverted) = invert_condition(mnemonic) {
+                    let indent = &store.get(i)[..infos[i].trim_start as usize];
+                    store.replace(i, format!("{}{} {}", indent, inverted, jt));
+                    infos[i] = classify_line(store.get(i));
+                    infos[j] = line_info(LineKind::Nop, 0);
+                    changed = true;
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    changed
+}
+
+/// Invert a conditional jump mnemonic.
+fn invert_condition(mnemonic: &str) -> Option<&'static str> {
+    match mnemonic {
+        "je" => Some("jne"),
+        "jne" => Some("je"),
+        "jg" => Some("jle"),
+        "jge" => Some("jl"),
+        "jl" => Some("jge"),
+        "jle" => Some("jg"),
+        "ja" => Some("jbe"),
+        "jae" => Some("jb"),
+        "jb" => Some("jae"),
+        "jbe" => Some("ja"),
+        "js" => Some("jns"),
+        "jns" => Some("js"),
+        "jo" => Some("jno"),
+        "jno" => Some("jo"),
+        "jp" => Some("jnp"),
+        "jnp" => Some("jp"),
+        _ => None,
+    }
+}
+
 fn fold_cmpl_zero_to_testl(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
     let len = infos.len();
     let mut changed = false;
@@ -7450,7 +7592,7 @@ mod tests {
     #[test]
     fn test_redundant_store_load() {
         let asm = "    movl %eax, -8(%ebp)\n    movl -8(%ebp), %eax\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         // After store/load elimination, the load is removed. Then never-read
         // store elimination removes the now-unread store too. Both gone.
         assert_eq!(result.trim(), "");
@@ -7459,7 +7601,7 @@ mod tests {
     #[test]
     fn test_store_load_different_reg() {
         let asm = "    movl %eax, -8(%ebp)\n    movl -8(%ebp), %ecx\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("movl %eax, %ecx"), "should forward: {}", result);
         assert!(!result.contains("-8(%ebp), %ecx"), "should eliminate load: {}", result);
     }
@@ -7467,14 +7609,14 @@ mod tests {
     #[test]
     fn test_self_move() {
         let asm = "    movl %eax, %eax\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert_eq!(result.trim(), "");
     }
 
     #[test]
     fn test_redundant_jump() {
         let asm = "    jmp .Lfoo\n.Lfoo:\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(!result.contains("jmp"), "should eliminate redundant jmp: {}", result);
         assert!(result.contains(".Lfoo:"), "should keep label: {}", result);
     }
@@ -7487,7 +7629,7 @@ mod tests {
             ".LBB2:",
             "    movl %eax, %ecx",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("jge .LBB4"), "should invert to jge: {}", result);
         assert!(!result.contains("jmp .LBB4"), "should remove jmp: {}", result);
     }
@@ -7501,7 +7643,7 @@ mod tests {
             "    testl %eax, %eax",
             "    jne .LBB2",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("jl .LBB2"), "should fuse to jl: {}", result);
         assert!(!result.contains("setl"), "should eliminate setl: {}", result);
     }
@@ -7519,7 +7661,7 @@ mod tests {
             "    testl %eax, %eax",
             "    jne .LBB5",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("jge .LBB5"), "should fuse to jge: {}", result);
         assert!(!result.contains("setge"), "should eliminate setge: {}", result);
         assert!(!result.contains("movzbl"), "should eliminate movzbl: {}", result);
@@ -7538,7 +7680,7 @@ mod tests {
             "    testl %eax, %eax",
             "    jne .LBB5",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         // Should NOT fuse because the store has no matching load
         assert!(result.contains("setge"), "should keep setge (unmatched store): {}", result);
     }
@@ -7553,7 +7695,7 @@ mod tests {
             "    testl %eax, %eax",
             "    je .LBB3",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("jge .LBB3"), "should fuse to jge (inverted): {}", result);
         assert!(!result.contains("setl"), "should eliminate setl: {}", result);
     }
@@ -7568,7 +7710,7 @@ mod tests {
             "    movl %ecx, -8(%ebp)",
             "    movl -8(%ebp), %edx",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(!result.contains("%eax, -8(%ebp)"), "first store dead: {}", result);
         assert!(result.contains("%ecx"), "second store alive: {}", result);
     }
@@ -7579,7 +7721,7 @@ mod tests {
             "    movl -48(%ebp), %ecx",
             "    addl %ecx, %eax",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("addl -48(%ebp), %eax"), "should fold: {}", result);
     }
 
@@ -7592,7 +7734,7 @@ mod tests {
             "    movl %eax, %ecx",
             "    movl %ecx, %eax",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert_eq!(result.matches("movl").count(), 1, "should eliminate reverse: {}", result);
     }
 
@@ -7602,7 +7744,7 @@ mod tests {
     #[test]
     fn test_addl_1_to_incl() {
         let asm = "    addl $1, %eax\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("incl %eax"), "should convert to incl: {}", result);
         assert!(!result.contains("addl"), "should eliminate addl: {}", result);
     }
@@ -7610,7 +7752,7 @@ mod tests {
     #[test]
     fn test_subl_1_to_decl() {
         let asm = "    subl $1, %ecx\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("decl %ecx"), "should convert to decl: {}", result);
         assert!(!result.contains("subl"), "should eliminate subl: {}", result);
     }
@@ -7619,7 +7761,7 @@ mod tests {
     fn test_movl_0_to_xorl() {
         // Flags must be dead after for the xorl conversion to fire
         let asm = "    movl $0, %ebx\n    addl $1, %ecx\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("xorl %ebx, %ebx"), "should convert to xorl when flags dead: {}", result);
     }
 
@@ -7627,7 +7769,7 @@ mod tests {
     fn test_movl_0_not_xorl_when_flags_live() {
         // cmovnel reads flags — movl $0 must NOT become xorl (which clobbers flags)
         let asm = "    movl $0, %eax\n    cmovnel 16(%esp), %eax\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("movl $0, %eax"), "must keep movl when flags live for cmov: {}", result);
         assert!(!result.contains("xorl %eax, %eax"), "must NOT convert to xorl when cmov follows: {}", result);
     }
@@ -7638,7 +7780,7 @@ mod tests {
             "    movsbl (%ecx), %eax",
             "    movsbl %al, %eax",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert_eq!(result.matches("movsbl").count(), 1,
             "should eliminate redundant movsbl: {}", result);
     }
@@ -7646,14 +7788,14 @@ mod tests {
     #[test]
     fn test_addl_neg1_to_decl() {
         let asm = "    addl $-1, %edx\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("decl %edx"), "should convert to decl: {}", result);
     }
 
     #[test]
     fn test_subl_neg1_to_incl() {
         let asm = "    subl $-1, %esi\n".to_string();
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("incl %esi"), "should convert to incl: {}", result);
     }
 
@@ -7668,7 +7810,7 @@ mod tests {
             "    addl $1, %eax",
             "    adcl $0, %edx",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("addl $1, %eax"), "must keep addl before adcl: {}", result);
         assert!(!result.contains("incl"), "must NOT convert to incl before adcl: {}", result);
     }
@@ -7681,7 +7823,7 @@ mod tests {
             "    subl $1, %eax",
             "    sbbl $0, %edx",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("subl $1, %eax"), "must keep subl before sbbl: {}", result);
         assert!(!result.contains("decl"), "must NOT convert to decl before sbbl: {}", result);
     }
@@ -7696,7 +7838,7 @@ mod tests {
             "    testl %eax, %eax",
             "    je .LBB3",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("movsbl (%esi), %eax"), "should propagate esi into deref: {}", result);
     }
 
@@ -7710,7 +7852,7 @@ mod tests {
             "    movl $5, %ecx",
             "    addl %ecx, %eax",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("movsbl (%esi), %eax"), "should propagate: {}", result);
         assert!(!result.contains("movl %esi, %ecx"), "move should be dead: {}", result);
     }
@@ -7723,7 +7865,7 @@ mod tests {
             "    movl %ecx, %edx",
             "    addl %edx, %ebx",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("addl %eax, %ebx"), "should propagate through chain: {}", result);
     }
 
@@ -7734,7 +7876,7 @@ mod tests {
             "    movl %eax, %ecx",
             "    movl %ecx, %eax",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert_eq!(result.matches("movl").count(), 1, "reverse move should be eliminated: {}", result);
     }
 
@@ -7756,7 +7898,7 @@ mod tests {
             "    ret",
             ".cfi_endproc",
         ].join("\n") + "\n";
-        let result = peephole_optimize(asm);
+        let result = peephole_optimize(asm, false);
         assert!(result.contains("imull"), "peephole must not remove imull: {}", result);
     }
 
