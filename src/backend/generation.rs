@@ -801,6 +801,82 @@ fn emit_init_fini_arrays(cg: &mut dyn ArchCodegen, module: &IrModule, ptr_dir: s
     }
 }
 
+/// Reorder basic blocks for better fallthrough, reducing unnecessary jump instructions.
+///
+/// Uses a greedy trace layout: starting from the entry block, greedily follow
+/// the preferred successor (the one whose fallthrough eliminates a jump).
+/// For conditional branches, prefer the false branch as the fallthrough target
+/// because the codegen emits `jCC true; jmp false` — placing the false block
+/// next eliminates the `jmp false`.
+fn reorder_blocks_for_layout(blocks: &[BasicBlock]) -> Vec<usize> {
+    use crate::ir::reexports::BlockId;
+
+    let n = blocks.len();
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    // Build label → index map for O(1) lookups
+    let mut label_to_idx: FxHashMap<u32, usize> = FxHashMap::default();
+    for (i, block) in blocks.iter().enumerate() {
+        label_to_idx.insert(block.label.0, i);
+    }
+
+    let find_idx = |target: BlockId| -> Option<usize> {
+        label_to_idx.get(&target.0).copied()
+    };
+
+    let mut placed = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+
+    // Always start with the entry block
+    placed[0] = true;
+    order.push(0);
+    let mut current = 0;
+
+    loop {
+        // Try to extend the trace by following the preferred successor
+        let next = match &blocks[current].terminator {
+            Terminator::Branch(target) => {
+                find_idx(*target).filter(|&i| !placed[i])
+            }
+            Terminator::CondBranch { false_label, true_label, .. } => {
+                // Prefer false_label (eliminates `jmp false` in codegen pattern:
+                // `jCC true; jmp false`). If false is already placed, try true
+                // (codegen can invert the condition).
+                find_idx(*false_label).filter(|&i| !placed[i])
+                    .or_else(|| find_idx(*true_label).filter(|&i| !placed[i]))
+            }
+            Terminator::Switch { default, cases, .. } => {
+                find_idx(*default).filter(|&i| !placed[i])
+                    .or_else(|| cases.iter().find_map(|(_, t)| find_idx(*t).filter(|&i| !placed[i])))
+            }
+            Terminator::IndirectBranch { possible_targets, .. } => {
+                possible_targets.iter().find_map(|t| find_idx(*t).filter(|&i| !placed[i]))
+            }
+            Terminator::Return(_) | Terminator::Unreachable => None,
+        };
+
+        if let Some(next_idx) = next {
+            placed[next_idx] = true;
+            order.push(next_idx);
+            current = next_idx;
+        } else {
+            // No unvisited successor — start a new trace from the next unplaced block
+            match placed.iter().position(|p| !p) {
+                Some(next_start) => {
+                    placed[next_start] = true;
+                    order.push(next_start);
+                    current = next_start;
+                }
+                None => break,
+            }
+        }
+    }
+
+    order
+}
+
 /// Generate code for a single function.
 fn generate_function(cg: &mut dyn ArchCodegen, func: &IrFunction, source_mgr: Option<&SourceManager>, file_table: &FxHashMap<String, u32>) {
     cg.state().reset_for_function();
@@ -942,7 +1018,12 @@ fn generate_function(cg: &mut dyn ArchCodegen, func: &IrFunction, source_mgr: Op
     let mut last_debug_file: u32 = 0;
     let mut last_debug_line: u32 = 0;
 
-    for block in &func.blocks {
+    // Reorder blocks for better fallthrough, reducing unnecessary jumps.
+    let block_order = reorder_blocks_for_layout(&func.blocks);
+
+    for (pos, &block_idx) in block_order.iter().enumerate() {
+        let block = &func.blocks[block_idx];
+
         if Some(block.label) != entry_label {
             // Invalidate register cache at block boundaries: a value in a register
             // from the previous block's fall-through is not guaranteed to be valid
@@ -950,6 +1031,11 @@ fn generate_function(cg: &mut dyn ArchCodegen, func: &IrFunction, source_mgr: Op
             cg.state().reg_cache.invalidate_all();
             cg.state().out.emit_block_label(block.label.0);
         }
+
+        // Set next_block for fallthrough detection by branch emitters.
+        let next_block_label = block_order.get(pos + 1)
+            .map(|&idx| func.blocks[idx].label.0);
+        cg.state().next_block = next_block_label;
 
         // Check for compare-branch fusion opportunity:
         // If the last instruction is a Cmp whose result is only used by the
@@ -999,6 +1085,7 @@ fn generate_function(cg: &mut dyn ArchCodegen, func: &IrFunction, source_mgr: Op
             generate_terminator(cg, &block.terminator, frame_size);
         }
     }
+    cg.state().next_block = None;
 
     if emit_cfi {
         cg.state().emit(".cfi_endproc");
@@ -1128,11 +1215,11 @@ fn generate_instruction(cg: &mut dyn ArchCodegen, inst: &Instruction, gep_fold_m
         }
         Instruction::Call { func, info } => {
             cg.emit_call(info, Some(func), None);
-            cg.state().reg_cache.invalidate_all();
+            cg.state().reg_cache.invalidate_caller_saved();
         }
         Instruction::CallIndirect { func_ptr, info } => {
             cg.emit_call(info, None, Some(func_ptr));
-            cg.state().reg_cache.invalidate_all();
+            cg.state().reg_cache.invalidate_caller_saved();
         }
         Instruction::Memcpy { dest, src, size } => {
             cg.emit_memcpy(dest, src, *size);

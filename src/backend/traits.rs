@@ -1076,7 +1076,12 @@ pub trait ArchCodegen {
     }
 
     /// Emit an unconditional branch to a BlockId, avoiding String allocation.
+    /// Skips the jump entirely if the target is the next block (fallthrough).
     fn emit_branch_to_block(&mut self, block: BlockId) {
+        // Skip the jump if the target is the next block in layout order
+        if self.state_ref().next_block == Some(block.0) {
+            return;
+        }
         // Cache the mnemonic first to avoid borrow conflict with state()
         let mnemonic = self.jump_mnemonic();
         let out = &mut self.state().out;

@@ -29,8 +29,8 @@ pub struct RegCacheEntry {
     pub is_alloca: bool,
 }
 
-/// Register value cache. Tracks which IR values are currently in the accumulator
-/// and secondary registers, avoiding redundant stack loads.
+/// Register value cache. Tracks which IR values are currently in registers,
+/// avoiding redundant stack loads.
 ///
 /// The cache is conservative: it is invalidated on any operation that might clobber
 /// a register (calls, inline asm, complex operations that use scratch registers).
@@ -38,40 +38,91 @@ pub struct RegCacheEntry {
 /// behavior as before the cache existed), while a missing invalidation could cause
 /// incorrect code by skipping a needed load.
 ///
-/// Architecture mapping:
-/// - x86:    acc = %rax,  sec = %rcx
-/// - ARM64:  acc = x0,    sec = x1
-/// - RISC-V: acc = t0,    sec = t1
-#[derive(Debug, Default)]
+/// Architecture mapping for the accumulator (acc / entries[0]):
+/// - x86:    %rax
+/// - i686:   %eax
+/// - ARM64:  x0
+/// - RISC-V: t0
+///
+/// Extended register tracking (entries[1..]) is used by the i686 backend to track
+/// callee-saved and caller-saved registers beyond the accumulator.
+#[derive(Debug)]
 pub struct RegCache {
-    /// Which value is currently in the primary accumulator register.
-    pub acc: Option<RegCacheEntry>,
+    /// Which value is in each tracked register. Index 0 = accumulator (eax/rax/x0/t0).
+    /// Higher indices are backend-specific (i686: 1=ebx, 2=esi, 3=edi, 4=ecx, 5=edx).
+    entries: [Option<RegCacheEntry>; 6],
+}
+
+impl Default for RegCache {
+    fn default() -> Self {
+        Self { entries: [None; 6] }
+    }
 }
 
 impl RegCache {
+    // === Accumulator API (used by all backends, backwards-compatible) ===
+
     /// Record that the accumulator now holds the given value.
     #[inline]
     pub fn set_acc(&mut self, value_id: u32, is_alloca: bool) {
-        self.acc = Some(RegCacheEntry { value_id, is_alloca });
+        self.entries[0] = Some(RegCacheEntry { value_id, is_alloca });
     }
 
     /// Check if the accumulator holds the given value (with matching alloca status).
     #[inline]
     pub fn acc_has(&self, value_id: u32, is_alloca: bool) -> bool {
-        self.acc == Some(RegCacheEntry { value_id, is_alloca })
+        self.entries[0] == Some(RegCacheEntry { value_id, is_alloca })
     }
 
     /// Invalidate the accumulator cache.
     #[inline]
     pub fn invalidate_acc(&mut self) {
-        self.acc = None;
+        self.entries[0] = None;
     }
 
     /// Invalidate all cached register values. Called on operations that may
-    /// clobber any register (calls, inline asm, etc.).
+    /// clobber any register (calls, inline asm, block boundaries, etc.).
     #[inline]
     pub fn invalidate_all(&mut self) {
-        self.acc = None;
+        self.entries = [None; 6];
+    }
+
+    // === Extended register API (used by i686 for multi-register tracking) ===
+
+    /// Record that register `idx` now holds the given value.
+    /// Index 0 = acc (eax), 1 = ebx, 2 = esi, 3 = edi, 4 = ecx, 5 = edx.
+    #[inline]
+    pub fn set_reg(&mut self, idx: usize, value_id: u32, is_alloca: bool) {
+        if idx < self.entries.len() {
+            self.entries[idx] = Some(RegCacheEntry { value_id, is_alloca });
+        }
+    }
+
+    /// Invalidate a specific register's cache entry.
+    #[inline]
+    pub fn invalidate_reg(&mut self, idx: usize) {
+        if idx < self.entries.len() {
+            self.entries[idx] = None;
+        }
+    }
+
+    /// Find any register that holds the given value. Returns the register index.
+    /// Useful for avoiding redundant loads — if a value is in any register,
+    /// we can use that register directly or move from it instead of loading from stack.
+    #[inline]
+    pub fn find_value(&self, value_id: u32, is_alloca: bool) -> Option<usize> {
+        let target = RegCacheEntry { value_id, is_alloca };
+        self.entries.iter().position(|e| *e == Some(target))
+    }
+
+    /// Invalidate caller-saved registers (acc + ecx + edx on i686).
+    /// Called on function calls — callee-saved registers survive.
+    #[inline]
+    pub fn invalidate_caller_saved(&mut self) {
+        self.entries[0] = None; // eax/rax
+        // i686-specific: ecx=4, edx=5
+        if self.entries.len() > 4 { self.entries[4] = None; }
+        if self.entries.len() > 5 { self.entries[5] = None; }
     }
 }
 
@@ -208,6 +259,10 @@ pub struct CodegenState {
     /// Cost-map tag for the current instruction category (--cost-map).
     /// When Some, instruction lines (starting with whitespace) get a `# TAG` suffix.
     pub cost_tag: Option<&'static str>,
+    /// The BlockId of the next block in the layout order. When a branch target
+    /// matches this, the branch can be omitted (fallthrough). Set by the block
+    /// reordering pass in generate_function; None means no fallthrough available.
+    pub next_block: Option<u32>,
 }
 
 impl CodegenState {
@@ -252,6 +307,7 @@ impl CodegenState {
             needs_divdi3_helpers: false,
             emit_cfi: true,
             cost_tag: None,
+            next_block: None,
         }
     }
 

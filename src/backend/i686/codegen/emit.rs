@@ -103,6 +103,33 @@ pub(super) fn phys_reg_name(reg: PhysReg) -> &'static str {
     }
 }
 
+/// Map PhysReg to RegCache index for multi-register tracking.
+/// RegCache: 0=eax, 1=ebx, 2=esi, 3=edi, 4=ecx, 5=edx.
+/// PhysReg:  0=ebx, 1=esi, 2=edi, 3=ebp, 4=ecx, 5=edx.
+fn phys_reg_to_cache_idx(reg: PhysReg) -> Option<usize> {
+    match reg.0 {
+        0 => Some(1), // ebx
+        1 => Some(2), // esi
+        2 => Some(3), // edi
+        // 3 = ebp — not tracked (frame pointer)
+        4 => Some(4), // ecx
+        5 => Some(5), // edx
+        _ => None,
+    }
+}
+
+fn cache_idx_to_reg_name(idx: usize) -> &'static str {
+    match idx {
+        0 => "eax",
+        1 => "ebx",
+        2 => "esi",
+        3 => "edi",
+        4 => "ecx",
+        5 => "edx",
+        _ => unreachable!(),
+    }
+}
+
 /// Map inline asm constraint register names to allocated PhysReg indices.
 pub(super) fn i686_constraint_to_phys(constraint: &str) -> Option<PhysReg> {
     match constraint {
@@ -270,6 +297,16 @@ impl I686Codegen {
             let is_alloca = self.state.is_alloca(v.0);
             if self.state.reg_cache.acc_has(v.0, is_alloca) {
                 return;
+            }
+            // Check if any OTHER register has this value (multi-reg cache).
+            // movl %reg, %eax is 2 bytes vs movl N(%esp), %eax at 4-7 bytes.
+            if let Some(idx) = self.state.reg_cache.find_value(v.0, is_alloca) {
+                if idx != 0 {
+                    let reg = cache_idx_to_reg_name(idx);
+                    emit!(self.state, "    movl %{}, %eax", reg);
+                    self.state.reg_cache.set_acc(v.0, is_alloca);
+                    return;
+                }
             }
         }
 
@@ -463,7 +500,12 @@ impl I686Codegen {
         if let Some(phys) = self.dest_reg(dest) {
             let reg = phys_reg_name(phys);
             emit!(self.state, "    movl %eax, %{}", reg);
-            self.state.reg_cache.invalidate_acc();
+            // eax still holds dest's value after the copy — keep cache valid.
+            self.state.reg_cache.set_acc(dest.0, false);
+            // Also track the value in the destination register's cache slot.
+            if let Some(idx) = phys_reg_to_cache_idx(phys) {
+                self.state.reg_cache.set_reg(idx, dest.0, false);
+            }
         } else if let Some(slot) = self.state.get_slot(dest.0) {
             let sr = self.slot_ref(slot);
             emit!(self.state, "    movl %eax, {}", sr);
@@ -1598,16 +1640,31 @@ impl ArchCodegen for I686Codegen {
             if self.state.is_wide_value(v.0) {
                 self.emit_wide_value_to_eax_ored(v.0);
                 self.state.reg_cache.invalidate_acc();
-                let true_label = true_block.as_label();
-                self.emit_branch_nonzero(&true_label);
-                self.emit_branch_to_block(false_block);
+                if self.state.next_block == Some(true_block.0) {
+                    // True block is next — invert: jump to false on zero
+                    let false_label = false_block.as_label();
+                    self.state.emit("    testl %eax, %eax");
+                    emit!(self.state, "    je {}", false_label);
+                } else {
+                    let true_label = true_block.as_label();
+                    self.emit_branch_nonzero(&true_label);
+                    self.emit_branch_to_block(false_block);
+                }
                 return;
             }
         }
         self.operand_to_eax(cond);
-        let true_label = true_block.as_label();
-        self.emit_branch_nonzero(&true_label);
-        self.emit_branch_to_block(false_block);
+        if self.state.next_block == Some(true_block.0) {
+            // True block is next — invert: jump to false on zero, fall through to true
+            self.state.emit("    testl %eax, %eax");
+            let false_label = false_block.as_label();
+            emit!(self.state, "    je {}", false_label);
+        } else {
+            // Normal: jne true, then jmp false (jmp skipped if false is next block)
+            let true_label = true_block.as_label();
+            self.emit_branch_nonzero(&true_label);
+            self.emit_branch_to_block(false_block);
+        }
     }
 
     fn emit_jump_indirect(&mut self) {

@@ -138,28 +138,55 @@ impl X86Codegen {
         let use_32bit = ty == IrType::I32 || ty == IrType::U32;
         self.emit_int_cmp_insn_typed(lhs, rhs, use_32bit);
 
-        let jcc = match op {
-            IrCmpOp::Eq  => "    je",
-            IrCmpOp::Ne  => "    jne",
-            IrCmpOp::Slt => "    jl",
-            IrCmpOp::Sle => "    jle",
-            IrCmpOp::Sgt => "    jg",
-            IrCmpOp::Sge => "    jge",
-            IrCmpOp::Ult => "    jb",
-            IrCmpOp::Ule => "    jbe",
-            IrCmpOp::Ugt => "    ja",
-            IrCmpOp::Uge => "    jae",
-        };
-        self.state.out.emit_jcc_block(jcc, true_block.0);
-        self.state.out.emit_jmp_block(false_block.0);
+        if self.state.next_block == Some(true_block.0) {
+            // True block is next — invert the condition and jump to false, fall through to true
+            let jcc_inv = match op {
+                IrCmpOp::Eq  => "    jne",
+                IrCmpOp::Ne  => "    je",
+                IrCmpOp::Slt => "    jge",
+                IrCmpOp::Sle => "    jg",
+                IrCmpOp::Sgt => "    jle",
+                IrCmpOp::Sge => "    jl",
+                IrCmpOp::Ult => "    jae",
+                IrCmpOp::Ule => "    ja",
+                IrCmpOp::Ugt => "    jbe",
+                IrCmpOp::Uge => "    jb",
+            };
+            self.state.out.emit_jcc_block(jcc_inv, false_block.0);
+        } else {
+            let jcc = match op {
+                IrCmpOp::Eq  => "    je",
+                IrCmpOp::Ne  => "    jne",
+                IrCmpOp::Slt => "    jl",
+                IrCmpOp::Sle => "    jle",
+                IrCmpOp::Sgt => "    jg",
+                IrCmpOp::Sge => "    jge",
+                IrCmpOp::Ult => "    jb",
+                IrCmpOp::Ule => "    jbe",
+                IrCmpOp::Ugt => "    ja",
+                IrCmpOp::Uge => "    jae",
+            };
+            self.state.out.emit_jcc_block(jcc, true_block.0);
+            // Skip jmp to false_block if it's the next block (fallthrough)
+            if self.state.next_block != Some(false_block.0) {
+                self.state.out.emit_jmp_block(false_block.0);
+            }
+        }
         self.state.reg_cache.invalidate_all();
     }
 
     pub(super) fn emit_cond_branch_blocks_impl(&mut self, cond: &Operand, true_block: BlockId, false_block: BlockId) {
         self.operand_to_rax(cond);
         self.state.emit("    testq %rax, %rax");
-        self.state.out.emit_jcc_block("    jne", true_block.0);
-        self.state.out.emit_jmp_block(false_block.0);
+        if self.state.next_block == Some(true_block.0) {
+            // True block is next — invert: jump to false on zero, fall through to true
+            self.state.out.emit_jcc_block("    je", false_block.0);
+        } else {
+            self.state.out.emit_jcc_block("    jne", true_block.0);
+            if self.state.next_block != Some(false_block.0) {
+                self.state.out.emit_jmp_block(false_block.0);
+            }
+        }
     }
 
     pub(super) fn emit_select_impl(&mut self, dest: &Value, cond: &Operand, true_val: &Operand, false_val: &Operand, _ty: IrType) {

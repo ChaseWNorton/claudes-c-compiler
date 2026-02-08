@@ -500,6 +500,9 @@ impl ArchCodegen for RiscvCodegen {
     }
 
     fn emit_branch_to_block(&mut self, block: BlockId) {
+        if self.state.next_block == Some(block.0) {
+            return;
+        }
         let out = &mut self.state.out;
         out.write_str("    jump .LBB");
         out.write_u64(block.0 as u64);
