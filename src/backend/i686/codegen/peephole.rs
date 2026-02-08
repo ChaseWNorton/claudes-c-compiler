@@ -7358,7 +7358,81 @@ pub fn peephole_optimize(asm: String) -> String {
     combined_local_pass(&mut store, &mut infos);
     eliminate_dead_reg_moves(&store, &mut infos);
 
+    // Phase 9: Eliminate redundant flag tests and shorten comparisons.
+    // Runs last because earlier phases may expose these patterns.
+    eliminate_redundant_flag_tests(&mut store, &mut infos);
+    fold_cmpl_zero_to_testl(&mut store, &mut infos);
+
     store.build_result(|i| infos[i].is_nop())
+}
+
+/// Eliminate `testl %reg, %reg` when the immediately preceding non-NOP
+/// instruction already sets the zero flag on the same register.
+/// Instructions that set ZF: andl, orl, xorl, addl, subl, negl, incl, decl.
+fn eliminate_redundant_flag_tests(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
+    let len = infos.len();
+    let mut changed = false;
+    for i in 0..len {
+        if infos[i].is_nop() || infos[i].kind != LineKind::Cmp { continue; }
+        let s = trimmed(store, &infos[i], i);
+        // Match testl %REG, %REG
+        if !s.starts_with("testl %e") { continue; }
+        let parts: Vec<&str> = s.split(", ").collect();
+        if parts.len() != 2 { continue; }
+        let reg_a = parts[0].strip_prefix("testl ").unwrap_or("");
+        let reg_b = parts[1];
+        if reg_a != reg_b { continue; }
+        // Find the preceding non-NOP instruction
+        let mut prev = i;
+        loop {
+            if prev == 0 { break; }
+            prev -= 1;
+            if !infos[prev].is_nop() && infos[prev].kind != LineKind::Empty { break; }
+        }
+        if prev >= i { continue; }
+        if infos[prev].is_nop() { continue; }
+        // Check if prev instruction sets flags on the same register
+        let prev_s = trimmed(store, &infos[prev], prev);
+        let sets_flags = |line: &str, reg: &str| -> bool {
+            // andl/orl/xorl/addl/subl with dest = reg
+            for op in &["andl ", "orl ", "xorl ", "addl ", "subl ", "imull "] {
+                if let Some(rest) = line.strip_prefix(op) {
+                    if rest.ends_with(reg) { return true; }
+                }
+            }
+            // negl/incl/decl with single operand = reg
+            for op in &["negl ", "incl ", "decl "] {
+                if let Some(rest) = line.strip_prefix(op) {
+                    if rest.trim() == reg { return true; }
+                }
+            }
+            false
+        };
+        if sets_flags(prev_s, reg_a) {
+            infos[i].kind = LineKind::Nop;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Replace `cmpl $0, %reg` with shorter `testl %reg, %reg`.
+/// cmpl $0 encodes as 3-5 bytes while testl is always 2 bytes.
+fn fold_cmpl_zero_to_testl(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
+    let len = infos.len();
+    let mut changed = false;
+    for i in 0..len {
+        if infos[i].is_nop() || infos[i].kind != LineKind::Cmp { continue; }
+        let s = trimmed(store, &infos[i], i);
+        // Match cmpl $0, %REG
+        if !s.starts_with("cmpl $0, %e") { continue; }
+        let reg = s.strip_prefix("cmpl $0, ").unwrap_or("");
+        if !reg.starts_with('%') { continue; }
+        let new_line = format!("    testl {}, {}", reg, reg);
+        store.replace(i, new_line);
+        changed = true;
+    }
+    changed
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
