@@ -174,8 +174,10 @@ impl InlineAsmEmitter for I686Codegen {
                 }
             }
         } else {
-            // All GP registers on i686 (including caller-saved)
-            const ALL_GP: &[&str] = &["ecx", "edx", "esi", "edi", "eax", "ebx"];
+            // All GP registers on i686 — caller-saved first (ecx, edx, eax) to
+            // minimize callee-saved spills. The inline asm framework manages
+            // accumulator state, so eax is safe to use as early scratch here.
+            const ALL_GP: &[&str] = &["ecx", "edx", "eax", "esi", "edi", "ebx"];
             for _ in 0..ALL_GP.len() {
                 let idx = self.asm_scratch_idx;
                 self.asm_scratch_idx += 1;

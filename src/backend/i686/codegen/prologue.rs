@@ -3,8 +3,8 @@
 use crate::ir::reexports::{Instruction, IrFunction, Value};
 use crate::common::types::IrType;
 use crate::backend::generation::{
-    is_i128_type, calculate_stack_space_common, run_regalloc_and_merge_clobbers,
-    filter_available_regs, find_param_alloca, collect_inline_asm_callee_saved_with_generic,
+    is_i128_type, calculate_stack_space_common, run_regalloc_and_merge_clobbers_os,
+    filter_available_regs, find_param_alloca, collect_inline_asm_callee_saved_with_overflow,
 };
 use crate::backend::call_abi::{ParamClass, classify_params};
 use crate::emit;
@@ -37,10 +37,12 @@ impl I686Codegen {
         }
 
         // Run register allocator before stack space computation.
-        // Use the _with_generic variant to conservatively mark all callee-saved
-        // registers as clobbered when generic register constraints (r, q, g) are
-        // present. On i686, the scratch allocator may pick esi/edi/ebx for generic
-        // constraints, which would clobber values the register allocator placed there.
+        // Use the _with_overflow variant to mark callee-saved as clobbered ONLY when
+        // the number of generic GP register operands in any single inline asm exceeds
+        // the caller-saved scratch pool (ecx, edx, eax = 3 registers). This replaces
+        // the overly conservative _with_generic variant, which marked ALL callee-saved
+        // for ANY generic constraint — devastating for boot code using %fs: segment
+        // ops (rdfs8/wrfs32 have "=q"/"r" constraints needing just 1 scratch register).
         let mut asm_clobbered_regs: Vec<PhysReg> = Vec::new();
 
         // When omitting the frame pointer, EBP is available as a callee-saved
@@ -51,11 +53,15 @@ impl I686Codegen {
             I686_CALLEE_SAVED
         };
 
-        collect_inline_asm_callee_saved_with_generic(
+        // The i686 inline asm scratch allocator tries registers in order:
+        // ecx, edx, eax (caller-saved), then esi, edi, ebx (callee-saved).
+        // So 3 caller-saved scratch registers are available before overflow.
+        collect_inline_asm_callee_saved_with_overflow(
             func, &mut asm_clobbered_regs,
             i686_constraint_to_phys,
             i686_clobber_to_phys,
             callee_saved_set,
+            3, // caller_saved_scratch_count: ecx, edx, eax
         );
         // In PIC mode, %ebx (PhysReg(0)) is reserved as the GOT base pointer.
         if self.state.pic_mode && !asm_clobbered_regs.contains(&PhysReg(0)) {
@@ -71,10 +77,11 @@ impl I686Codegen {
             .filter(|r| !asm_clobbered_regs.contains(r))
             .collect();
 
-        let (reg_assigned, cached_liveness) = run_regalloc_and_merge_clobbers(
+        let (reg_assigned, cached_liveness) = run_regalloc_and_merge_clobbers_os(
             func, available_regs, caller_saved_regs, &asm_clobbered_regs,
             &mut self.reg_assignments, &mut self.used_callee_saved,
             false,
+            self.optimize_size,
         );
 
         // In PIC mode, %ebx must be saved/restored as a callee-saved register.

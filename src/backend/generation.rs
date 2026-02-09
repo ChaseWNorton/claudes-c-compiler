@@ -1506,7 +1506,9 @@ pub fn is_wide_int_type(ty: IrType) -> bool {
 pub use super::stack_layout::{
     collect_inline_asm_callee_saved,
     collect_inline_asm_callee_saved_with_generic,
+    collect_inline_asm_callee_saved_with_overflow,
     run_regalloc_and_merge_clobbers,
+    run_regalloc_and_merge_clobbers_os,
     filter_available_regs,
     calculate_stack_space_common,
     find_param_alloca,

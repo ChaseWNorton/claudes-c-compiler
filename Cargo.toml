@@ -29,6 +29,10 @@ path = "src/bin/ccc_i686.rs"
 name = "ccc-superopt"
 path = "src/bin/ccc_superopt.rs"
 
+[[bin]]
+name = "peephole-filter"
+path = "src/bin/peephole_filter.rs"
+
 [features]
 # Allow GCC as a linker fallback. When enabled and GCC is used, a warning is printed.
 gcc_linker = []

@@ -29,7 +29,7 @@ pub fn run_regalloc_and_merge_clobbers(
     used_callee_saved: &mut Vec<PhysReg>,
     allow_inline_asm_regalloc: bool,
 ) -> (FxHashMap<u32, PhysReg>, Option<super::super::liveness::LivenessResult>) {
-    let config = super::super::regalloc::RegAllocConfig { available_regs, caller_saved_regs, allow_inline_asm_regalloc };
+    let config = super::super::regalloc::RegAllocConfig { available_regs, caller_saved_regs, allow_inline_asm_regalloc, optimize_size: false };
     let alloc_result = super::super::regalloc::allocate_registers(func, &config);
     *reg_assignments = alloc_result.assignments;
     *used_callee_saved = alloc_result.used_regs;
@@ -38,6 +38,38 @@ pub fn run_regalloc_and_merge_clobbers(
     // Merge inline-asm clobbered callee-saved registers into the save/restore
     // list (they need to be preserved per the ABI even though we don't allocate
     // values to them).
+    for phys in asm_clobbered_regs {
+        if !used_callee_saved.iter().any(|r| r.0 == phys.0) {
+            used_callee_saved.push(*phys);
+        }
+    }
+    used_callee_saved.sort_by_key(|r| r.0);
+
+    let reg_assigned: FxHashMap<u32, PhysReg> = reg_assignments.clone();
+    (reg_assigned, cached_liveness)
+}
+
+/// Like `run_regalloc_and_merge_clobbers` but with `optimize_size` support.
+pub fn run_regalloc_and_merge_clobbers_os(
+    func: &IrFunction,
+    available_regs: Vec<PhysReg>,
+    caller_saved_regs: Vec<PhysReg>,
+    asm_clobbered_regs: &[PhysReg],
+    reg_assignments: &mut FxHashMap<u32, PhysReg>,
+    used_callee_saved: &mut Vec<PhysReg>,
+    allow_inline_asm_regalloc: bool,
+    optimize_size: bool,
+) -> (FxHashMap<u32, PhysReg>, Option<super::super::liveness::LivenessResult>) {
+    let config = super::super::regalloc::RegAllocConfig { available_regs, caller_saved_regs, allow_inline_asm_regalloc, optimize_size };
+    let alloc_result = if optimize_size {
+        super::super::regalloc::allocate_registers_irc(func, &config)
+    } else {
+        super::super::regalloc::allocate_registers(func, &config)
+    };
+    *reg_assignments = alloc_result.assignments;
+    *used_callee_saved = alloc_result.used_regs;
+    let cached_liveness = alloc_result.liveness;
+
     for phys in asm_clobbered_regs {
         if !used_callee_saved.iter().any(|r| r.0 == phys.0) {
             used_callee_saved.push(*phys);

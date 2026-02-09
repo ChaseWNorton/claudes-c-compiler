@@ -943,6 +943,54 @@ fn flags_live_after(store: &LineStore, infos: &[LineInfo], after: usize) -> bool
     true // couldn't prove flags dead, conservatively assume live
 }
 
+/// Check if the first flag-consuming instruction after position `from`
+/// only uses ZF or SF (not CF or OF). Used to guard test elimination after
+/// addl/subl/incl/decl (which set ZF/SF correctly but may set CF/OF differently
+/// from testl, which clears them).
+fn next_flag_consumer_zf_sf_only(store: &LineStore, infos: &[LineInfo], from: usize) -> bool {
+    let len = infos.len();
+    for j in (from + 1)..len {
+        if infos[j].is_nop() || infos[j].kind == LineKind::Empty { continue; }
+        match infos[j].kind {
+            LineKind::CondJmp => {
+                let s = trimmed(store, &infos[j], j);
+                // je/jne/jz/jnz only use ZF; js/jns only use SF
+                return s.starts_with("je ") || s.starts_with("jne ")
+                    || s.starts_with("jz ") || s.starts_with("jnz ")
+                    || s.starts_with("js ") || s.starts_with("jns ");
+            }
+            LineKind::SetCC { .. } => {
+                let s = trimmed(store, &infos[j], j);
+                return s.starts_with("sete ") || s.starts_with("setne ")
+                    || s.starts_with("setz ") || s.starts_with("setnz ")
+                    || s.starts_with("sets ") || s.starts_with("setns ");
+            }
+            // Flag clobber or control flow boundary → flags dead, safe to eliminate
+            LineKind::Cmp | LineKind::Label | LineKind::Jmp
+            | LineKind::JmpIndirect | LineKind::Ret | LineKind::Call => return true,
+            // Flag-neutral instructions — flags survive
+            LineKind::Move { .. } | LineKind::StoreEbp { .. } | LineKind::LoadEbp { .. }
+            | LineKind::Push { .. } | LineKind::Pop { .. } | LineKind::SelfMove
+            | LineKind::Directive => continue,
+            LineKind::Other { .. } => {
+                let s = trimmed(store, &infos[j], j);
+                if s.starts_with("movl ") || s.starts_with("leal ")
+                    || s.starts_with("movzbl ") || s.starts_with("movsbl ")
+                    || s.starts_with("nop")
+                {
+                    continue; // flag-neutral
+                }
+                if s.starts_with("cmov") {
+                    return false; // cmov reads flags, may depend on CF/OF
+                }
+                return false; // unknown, be conservative
+            }
+            _ => return false,
+        }
+    }
+    true // end of function, flags dead
+}
+
 // ── Pass 1: Local patterns ───────────────────────────────────────────────────
 
 /// Combined local pass: scan once, apply multiple patterns.
@@ -975,7 +1023,6 @@ fn combined_local_pass(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
             if dest_reg != REG_NONE
                 && dest_reg <= REG_GP_MAX
                 && dest_reg != REG_ESP
-                && dest_reg != REG_EBP
             {
                 let s = trimmed(store, &infos[i], i);
                 let rn = reg32_name(dest_reg);
@@ -1088,7 +1135,6 @@ fn combined_local_pass(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
             if dest_reg != REG_NONE
                 && dest_reg <= REG_GP_MAX
                 && dest_reg != REG_ESP
-                && dest_reg != REG_EBP
             {
                 let s = trimmed(store, &infos[i], i);
                 let rn = reg32_name(dest_reg);
@@ -2079,6 +2125,109 @@ fn combined_local_pass(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
                                                         continue;
                                                     }
                                                 }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pattern 12: Store-forwarding into ALU/CMP source operand.
+        // movl %R, N(%ebp); OP N(%ebp), %X → movl %R, N(%ebp); OP %R, %X
+        // Saves 1 byte per instance (memory operand → register operand is shorter).
+        if let LineKind::StoreEbp { reg: stored_reg, offset: store_off, size: MoveSize::L } = infos[i].kind {
+            let j = next_non_nop(infos, i + 1);
+            if j < len {
+                let sj = trimmed(store, &infos[j], j);
+                let off_str = if store_off == 0 { "0".to_string() } else { store_off.to_string() };
+                let ebp_mem = format!("{}(%ebp)", off_str);
+                // Only forward when memory is the SOURCE (first operand in AT&T syntax)
+                if let Some(comma) = sj.find(", ") {
+                    let before = &sj[..comma];
+                    let after = &sj[comma + 2..];
+                    if before.ends_with(&ebp_mem) && after.starts_with('%') {
+                        // Extract mnemonic
+                        if let Some(space) = before.find(' ') {
+                            let mnemonic = &before[..space];
+                            // Only ALU/CMP instructions
+                            if mnemonic == "cmpl" || mnemonic == "addl" || mnemonic == "subl"
+                                || mnemonic == "andl" || mnemonic == "orl" || mnemonic == "xorl"
+                                || mnemonic == "testl"
+                            {
+                                let stored_name = reg32_name(stored_reg);
+                                let new_line = format!("    {} {}, {}", mnemonic, stored_name, after);
+                                store.replace(j, new_line);
+                                infos[j] = classify_line(store.get(j));
+                                changed = true;
+                                i += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pattern 13: Duplicate load elimination for same-offset LoadEbp pairs.
+        // movl N(%ebp), %R1; movl N(%ebp), %R2 → movl N(%ebp), %R1; movl %R1, %R2
+        // Saves 1-3 bytes (register move is shorter than memory load).
+        if let LineKind::LoadEbp { reg: load1_reg, offset: load1_off, size: MoveSize::L } = infos[i].kind {
+            let j = next_non_nop(infos, i + 1);
+            if j < len {
+                if let LineKind::LoadEbp { reg: load2_reg, offset: load2_off, size: MoveSize::L } = infos[j].kind {
+                    if load1_off == load2_off && load1_reg != load2_reg {
+                        let new_line = format!("    movl {}, {}", reg32_name(load1_reg), reg32_name(load2_reg));
+                        store.replace(j, new_line);
+                        infos[j] = LineInfo {
+                            kind: LineKind::Move { dst: load2_reg, src: load1_reg },
+                            trim_start: 4,
+                            has_indirect_mem: false,
+                            ebp_offset: EBP_OFFSET_NONE,
+                        };
+                        changed = true;
+                        i += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Pattern 14: Duplicate large immediate elimination.
+        // movl $IMM, N(%ebp); movl $IMM, %reg → movl $IMM, %reg; movl %reg, N(%ebp)
+        // Saves 4 bytes when IMM needs 4-byte encoding (|IMM| > 127).
+        // movl $IMM, mem = 7+ bytes; movl $IMM, reg = 5 bytes; movl %reg, mem = 3 bytes.
+        if let LineKind::Other { dest_reg: REG_NONE } = infos[i].kind {
+            let si = trimmed(store, &infos[i], i);
+            if si.starts_with("movl $") && si.contains("(%ebp)") {
+                // Parse: movl $IMM, N(%ebp)
+                if let Some(comma) = si.find(", ") {
+                    let imm_str = &si[5..comma]; // "$NNN"
+                    let mem_part = &si[comma + 2..];
+                    if mem_part.ends_with("(%ebp)") {
+                        if let Ok(imm_val) = imm_str.parse::<i64>() {
+                            if imm_val > 127 || imm_val < -128 {
+                                let j = next_non_nop(infos, i + 1);
+                                if j < len {
+                                    if let LineKind::Other { dest_reg: next_dest } = infos[j].kind {
+                                        if next_dest != REG_NONE && next_dest <= REG_GP_MAX && next_dest != REG_ESP {
+                                            let sj = trimmed(store, &infos[j], j);
+                                            let expected = format!("movl ${}, {}", imm_val, reg32_name(next_dest));
+                                            if sj == expected {
+                                                // Swap: first line becomes movl $IMM, %reg; second becomes movl %reg, N(%ebp)
+                                                let reg_name = reg32_name(next_dest);
+                                                let new_first = format!("    movl ${}, {}", imm_val, reg_name);
+                                                let new_second = format!("    movl {}, {}", reg_name, mem_part);
+                                                store.replace(i, new_first);
+                                                store.replace(j, new_second);
+                                                infos[i] = classify_line(store.get(i));
+                                                infos[j] = classify_line(store.get(j));
+                                                changed = true;
+                                                i += 1;
+                                                continue;
                                             }
                                         }
                                     }
@@ -3224,13 +3373,16 @@ fn eliminate_dead_reg_moves(store: &LineStore, infos: &mut [LineInfo]) -> bool {
                 if dest_reg == REG_NONE || dest_reg == REG_ESP || dest_reg > REG_GP_MAX {
                     continue;
                 }
-                // Only eliminate dead pure loads (no flag modifications, no memory writes).
-                // movl/movsbl/movzbl/movswl/movzwl from memory or immediate to register.
+                // Only eliminate dead pure loads/computations (no flag mods, no memory writes).
+                // movl from memory or immediate to register, plus leal (address computation).
                 let s = trimmed(store, &infos[i], i);
+                let rn = reg32_name(dest_reg);
                 let is_pure_load = (s.starts_with("movl $") || s.starts_with("movl "))
                     && !infos[i].has_indirect_mem
-                    && s.ends_with(reg32_name(dest_reg));
-                if !is_pure_load {
+                    && s.ends_with(rn);
+                // leal computes an address into a register (flag-neutral, no memory access)
+                let is_pure_leal = s.starts_with("leal ") && s.ends_with(rn);
+                if !(is_pure_load || is_pure_leal) {
                     continue;
                 }
                 // Verify reg is only the destination, not also a source
@@ -4272,6 +4424,25 @@ fn eliminate_redundant_test_after_alu(store: &mut LineStore, infos: &mut [LineIn
             {
                 found_alu = true;
                 break;
+            }
+
+            // addl/subl set all flags, incl/decl set ZF/SF/PF/OF but NOT CF.
+            // testl clears CF and OF. Only safe when consumer uses just ZF/SF.
+            if (sk.starts_with("addl ") || sk.starts_with("subl "))
+                && sk.ends_with(&target_suffix)
+            {
+                if next_flag_consumer_zf_sf_only(store, infos, i) {
+                    found_alu = true;
+                    break;
+                }
+            }
+            if sk == format!("incl {}", test_reg_name)
+                || sk == format!("decl {}", test_reg_name)
+            {
+                if next_flag_consumer_zf_sf_only(store, infos, i) {
+                    found_alu = true;
+                    break;
+                }
             }
 
             // Check if this is a flag-setting instruction (would invalidate our flags)

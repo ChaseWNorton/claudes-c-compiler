@@ -64,6 +64,11 @@ pub struct RegAllocConfig {
     /// Only enable this when the backend's asm emitter checks reg_assignments
     /// before falling back to stack access. Currently only RISC-V does this.
     pub allow_inline_asm_regalloc: bool,
+    /// When true, Phase 2 (callee-saved spillover) will NOT introduce new
+    /// callee-saved registers — it will only reuse registers already pushed
+    /// by Phase 1. Each new callee-saved register costs 2 bytes (push+pop)
+    /// which is often not worth it for values in straight-line code.
+    pub optimize_size: bool,
 }
 
 /// Run the linear scan register allocator on a function.
@@ -256,7 +261,10 @@ pub fn allocate_registers(
     let mut used_regs_set: FxHashSet<u8> = FxHashSet::default();
 
     for interval in &candidates {
-        if let Some(reg_idx) = find_best_callee_reg(&reg_free_until, interval.start, &config.available_regs, &used_regs_set) {
+        if let Some(reg_idx) = find_best_callee_reg(
+            &reg_free_until, interval.start, &config.available_regs, &used_regs_set,
+            false, // Phase 1: always allow new callee-saved regs for call-spanning values
+        ) {
             reg_free_until[reg_idx] = interval.end + 1;
             assignments.insert(interval.value_id, config.available_regs[reg_idx]);
             used_regs_set.insert(config.available_regs[reg_idx].0);
@@ -278,7 +286,10 @@ pub fn allocate_registers(
         );
 
         for interval in &spillover_candidates {
-            if let Some(reg_idx) = find_best_callee_reg(&reg_free_until, interval.start, &config.available_regs, &used_regs_set) {
+            if let Some(reg_idx) = find_best_callee_reg(
+                &reg_free_until, interval.start, &config.available_regs, &used_regs_set,
+                false, // Phase 2 gate tested 2026-02-09: hurts +336 bytes with correct flags
+            ) {
                 reg_free_until[reg_idx] = interval.end + 1;
                 assignments.insert(interval.value_id, config.available_regs[reg_idx]);
                 used_regs_set.insert(config.available_regs[reg_idx].0);
@@ -371,6 +382,17 @@ pub fn allocate_registers(
         used_regs,
         liveness: Some(liveness),
     }
+}
+
+/// Run graph coloring register allocation using Iterated Register Coalescing.
+///
+/// Drop-in replacement for `allocate_registers()` that aggressively coalesces
+/// Copy instructions to reduce register shuffles. Used under `-Os`.
+pub fn allocate_registers_irc(
+    func: &IrFunction,
+    config: &RegAllocConfig,
+) -> RegAllocResult {
+    super::graph_coloring::allocate_irc(func, config)
 }
 
 /// Collect values whose types don't fit in a single GPR (floats, i128, and
@@ -587,6 +609,10 @@ fn build_sorted_candidates<'a>(
 /// Find the best callee-saved register for an interval, preferring registers
 /// that are already in use (to minimize prologue/epilogue save/restore cost).
 ///
+/// When `only_reuse` is true, only returns registers already in use — never
+/// introduces a new callee-saved register. This is used by Phase 2 under -Os
+/// to avoid paying the 2-byte push/pop cost for non-call-spanning values.
+///
 /// Returns the index into `available_regs` of the chosen register, or None
 /// if no register is free at the interval's start point.
 fn find_best_callee_reg(
@@ -594,6 +620,7 @@ fn find_best_callee_reg(
     interval_start: u32,
     available_regs: &[PhysReg],
     used_regs_set: &FxHashSet<u8>,
+    only_reuse: bool,
 ) -> Option<usize> {
     let mut best_already_used: Option<usize> = None;
     let mut best_already_used_free_time: u32 = u32::MAX;
@@ -619,5 +646,9 @@ fn find_best_callee_reg(
         }
     }
 
-    best_already_used.or(best_new)
+    if only_reuse {
+        best_already_used
+    } else {
+        best_already_used.or(best_new)
+    }
 }

@@ -48,6 +48,7 @@ pub use inline_asm::{
 };
 pub use regalloc_helpers::{
     run_regalloc_and_merge_clobbers,
+    run_regalloc_and_merge_clobbers_os,
     filter_available_regs,
     find_param_alloca,
 };

@@ -20,8 +20,9 @@ pub(crate) mod inline_asm;  // InlineAsmEmitter trait and shared framework
 pub(crate) mod x86_common;  // Shared x86/i686 register names, condition codes, asm template parsing
 
 // Register allocation and liveness analysis
-pub(crate) mod liveness;     // Live interval computation
-pub(crate) mod regalloc;     // Linear scan register allocator
+pub(crate) mod liveness;         // Live interval computation
+pub(crate) mod regalloc;         // Linear scan register allocator
+pub(crate) mod graph_coloring;   // IRC graph coloring register allocator
 
 
 pub(crate) mod x86;

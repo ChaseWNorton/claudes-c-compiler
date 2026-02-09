@@ -8,6 +8,11 @@ pub mod backend;
 pub mod driver;
 pub mod superopt;
 
+/// Run the i686 peephole optimizer on raw assembly text.
+pub fn i686_peephole_optimize(asm: String) -> String {
+    backend::i686::codegen::peephole::peephole_optimize(asm, false)
+}
+
 /// Shared entry point for all compiler binaries. Spawns the real work on a
 /// thread with a large stack so deeply recursive C files don't overflow.
 pub fn compiler_main() {
