@@ -266,49 +266,12 @@ pub fn allocate_registers(
     let mut used_regs: Vec<PhysReg> = used_regs_set.iter().map(|&r| PhysReg(r)).collect();
     used_regs.sort_by_key(|r| r.0);
 
-    // Phase 2: Caller-saved registers for non-call-spanning values.
-    // Each caller-saved register has its own clobber point list. A value can use
-    // register[i] only if it doesn't span any of register[i]'s clobber points.
-    // On i686: ecx (index 0) is clobbered by stores/loads/GEPs/shifts/division,
-    //          edx (index 1) is clobbered by division/indirect stores/64-bit casts.
-    if !config.caller_saved_regs.is_empty() {
-        let caller_candidates = build_sorted_candidates(
-            &liveness, &eligible, &assignments, call_points, &use_count, Some(false),
-        );
-
-        let per_reg_clobbers = &liveness.scratch_clobber_points;
-        let num_caller_regs = config.caller_saved_regs.len();
-        let mut caller_free_until: Vec<u32> = vec![0; num_caller_regs];
-
-        for interval in &caller_candidates {
-            let mut best: Option<usize> = None;
-            let mut best_free_time: u32 = u32::MAX;
-
-            for (i, &free_until) in caller_free_until.iter().enumerate() {
-                // Check per-register clobber points
-                let clobbers = per_reg_clobbers.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
-                if spans_any_call(interval, clobbers) {
-                    continue;
-                }
-                if free_until <= interval.start
-                    && (best.is_none() || free_until < best_free_time) {
-                        best = Some(i);
-                        best_free_time = free_until;
-                    }
-            }
-
-            if let Some(reg_idx) = best {
-                caller_free_until[reg_idx] = interval.end + 1;
-                assignments.insert(interval.value_id, config.caller_saved_regs[reg_idx]);
-            }
-        }
-    }
-
-    // Phase 3: Callee-saved spillover for non-call-spanning values.
+    // Phase 2 (early): Callee-saved spillover for non-call-spanning values.
     //
-    // After Phases 1 and 2, there may be high-priority values in call-free loops
-    // that didn't get a register because the caller-saved pool overflowed. Assign
-    // remaining callee-saved registers to these overflow values.
+    // Moved before caller-saved allocation so that pointer values in callee-saved
+    // registers can refine the clobber points for ecx/edx. Without this, the
+    // clobber analysis conservatively marks every Load/Store as clobbering ecx
+    // (for pointer addressing), which effectively locks ecx/edx out of allocation.
     {
         let spillover_candidates = build_sorted_candidates(
             &liveness, &eligible, &assignments, call_points, &use_count, Some(false),
@@ -324,6 +287,83 @@ pub fn allocate_registers(
 
         used_regs = used_regs_set.iter().map(|&r| PhysReg(r)).collect();
         used_regs.sort_by_key(|r| r.0);
+    }
+
+    // Phase 3: Caller-saved registers for non-call-spanning values.
+    // Each caller-saved register has its own clobber point list. A value can use
+    // register[i] only if it doesn't span any of register[i]'s clobber points.
+    // On i686: ecx (index 0) is clobbered by stores/loads/GEPs/shifts/division,
+    //          edx (index 1) is clobbered by division/indirect stores/64-bit casts.
+    //
+    // Clobber refinement: Load/Store instructions that dereference pointers cause
+    // ecx/edx clobber points (ecx for addressing, edx for save_acc). But when the
+    // pointer value has a callee-saved register (assigned in Phases 1-2), the codegen
+    // dereferences directly through that register (e.g., movl (%esi), %eax) without
+    // touching ecx/edx. We remove those false clobber points so ecx/edx can hold
+    // values across these instructions. This breaks the chicken-and-egg cycle where
+    // ecx was always clobbered because pointers were always on the stack.
+    if !config.caller_saved_regs.is_empty() {
+        // Refine clobber points: remove points where the pointer got a callee-saved register
+        let refined_clobbers: Vec<Vec<u32>> = liveness.scratch_clobber_points.iter()
+            .enumerate()
+            .map(|(reg_idx, clobber_points)| {
+                let refinable = liveness.ptr_clobber_info.get(reg_idx);
+                if let Some(refinable) = refinable {
+                    if refinable.is_empty() {
+                        return clobber_points.clone();
+                    }
+                    // Build set of points to remove
+                    let remove_set: FxHashSet<u32> = refinable.iter()
+                        .filter(|&&(_, ptr_id)| {
+                            // Only refine if ptr is in a callee-saved register
+                            // (not ecx/edx, since those are what we're trying to free)
+                            if let Some(&phys) = assignments.get(&ptr_id) {
+                                phys.0 != 4 && phys.0 != 5  // not ecx, not edx
+                            } else {
+                                false
+                            }
+                        })
+                        .map(|&(point, _)| point)
+                        .collect();
+                    if remove_set.is_empty() {
+                        return clobber_points.clone();
+                    }
+                    clobber_points.iter().filter(|p| !remove_set.contains(p)).copied().collect()
+                } else {
+                    clobber_points.clone()
+                }
+            })
+            .collect();
+
+        let caller_candidates = build_sorted_candidates(
+            &liveness, &eligible, &assignments, call_points, &use_count, Some(false),
+        );
+
+        let num_caller_regs = config.caller_saved_regs.len();
+        let mut caller_free_until: Vec<u32> = vec![0; num_caller_regs];
+
+        for interval in &caller_candidates {
+            let mut best: Option<usize> = None;
+            let mut best_free_time: u32 = u32::MAX;
+
+            for (i, &free_until) in caller_free_until.iter().enumerate() {
+                // Use REFINED clobber points instead of raw ones
+                let clobbers = refined_clobbers.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
+                if spans_any_call(interval, clobbers) {
+                    continue;
+                }
+                if free_until <= interval.start
+                    && (best.is_none() || free_until < best_free_time) {
+                        best = Some(i);
+                        best_free_time = free_until;
+                    }
+            }
+
+            if let Some(reg_idx) = best {
+                caller_free_until[reg_idx] = interval.end + 1;
+                assignments.insert(interval.value_id, config.caller_saved_regs[reg_idx]);
+            }
+        }
     }
 
     RegAllocResult {

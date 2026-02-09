@@ -75,6 +75,30 @@ impl I686Codegen {
             self.state.reg_cache.invalidate_acc();
             return;
         }
+        // Register-direct store through register pointer: if ptr is in a callee-saved
+        // register, store directly through it (no ecx/edx intermediates). This avoids
+        // clobbering ecx/edx, unlocking them for the register allocator.
+        if let Some(ptr_phys) = self.reg_assignments.get(&ptr.0).copied() {
+            if ptr_phys.0 != 4 && ptr_phys.0 != 5 {  // not ecx or edx
+                let ptr_reg = phys_reg_name(ptr_phys);
+                let store_instr = self.store_instr_for_type(ty);
+                // Check if val is also in a register
+                if let Some(val_phys) = self.operand_reg(val) {
+                    if let Some(val_name) = Self::phys_reg_for_type(val_phys, ty) {
+                        if val_phys != ptr_phys {
+                            // Both in registers — no scratch needed at all
+                            emit!(self.state, "    {} {}, (%{})", store_instr, val_name, ptr_reg);
+                            return;
+                        }
+                    }
+                }
+                // Val is const or on stack — load to eax, store through ptr_reg
+                self.operand_to_eax(val);
+                let acc = self.eax_for_type(ty);
+                emit!(self.state, "    {} {}, (%{})", store_instr, acc, ptr_reg);
+                return;
+            }
+        }
         // Register-direct store: if val is in a register, store directly (skip eax)
         if let Some(val_phys) = self.operand_reg(val) {
             if let Some(reg_name) = Self::phys_reg_for_type(val_phys, ty) {
@@ -152,6 +176,28 @@ impl I686Codegen {
             }
             self.state.reg_cache.invalidate_acc();
             return;
+        }
+        // Register-direct load: if ptr is in a callee-saved register, dereference
+        // directly through it (no ecx intermediate). This avoids clobbering ecx,
+        // which unlocks it for the register allocator.
+        if let Some(ptr_phys) = self.reg_assignments.get(&ptr.0).copied() {
+            // Don't use this path if ptr is in ecx — would conflict with scratch usage
+            if ptr_phys.0 != 4 {
+                let ptr_reg = phys_reg_name(ptr_phys);
+                let load_instr = self.mov_load_for_type(ty);
+                if let Some(dest_phys) = self.dest_reg(dest) {
+                    // Best case: ptr in register, dest in register — no eax/ecx involved
+                    let dest_name = phys_reg_name(dest_phys);
+                    emit!(self.state, "    {} (%{}), %{}", load_instr, ptr_reg, dest_name);
+                    if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+                        self.state.reg_cache.set_reg(idx, dest.0, false);
+                    }
+                } else {
+                    emit!(self.state, "    {} (%{}), %eax", load_instr, ptr_reg);
+                    self.store_eax_to(dest);
+                }
+                return;
+            }
         }
         crate::backend::traits::emit_load_default(self, dest, ptr, ty);
     }
@@ -234,6 +280,25 @@ impl I686Codegen {
             }
             self.state.reg_cache.invalidate_acc();
             return;
+        }
+        // Register-direct store through register pointer (with offset)
+        if let Some(base_phys) = self.reg_assignments.get(&base.0).copied() {
+            if base_phys.0 != 4 && base_phys.0 != 5 {  // not ecx or edx
+                let base_reg = phys_reg_name(base_phys);
+                let store_instr = self.store_instr_for_type(ty);
+                if let Some(val_phys) = self.operand_reg(val) {
+                    if let Some(val_name) = Self::phys_reg_for_type(val_phys, ty) {
+                        if val_phys != base_phys {
+                            emit!(self.state, "    {} {}, {}(%{})", store_instr, val_name, offset, base_reg);
+                            return;
+                        }
+                    }
+                }
+                self.operand_to_eax(val);
+                let acc = self.eax_for_type(ty);
+                emit!(self.state, "    {} {}, {}(%{})", store_instr, acc, offset, base_reg);
+                return;
+            }
         }
         // Register-direct store: if val is in a register, store directly (skip eax)
         if let Some(val_phys) = self.operand_reg(val) {
@@ -355,6 +420,24 @@ impl I686Codegen {
             }
             self.state.reg_cache.invalidate_acc();
             return;
+        }
+        // Register-direct load through register pointer (with offset)
+        if let Some(base_phys) = self.reg_assignments.get(&base.0).copied() {
+            if base_phys.0 != 4 {  // not ecx
+                let base_reg = phys_reg_name(base_phys);
+                let load_instr = self.mov_load_for_type(ty);
+                if let Some(dest_phys) = self.dest_reg(dest) {
+                    let dest_name = phys_reg_name(dest_phys);
+                    emit!(self.state, "    {} {}(%{}), %{}", load_instr, offset, base_reg, dest_name);
+                    if let Some(idx) = phys_reg_to_cache_idx(dest_phys) {
+                        self.state.reg_cache.set_reg(idx, dest.0, false);
+                    }
+                } else {
+                    emit!(self.state, "    {} {}(%{}), %eax", load_instr, offset, base_reg);
+                    self.store_eax_to(dest);
+                }
+                return;
+            }
         }
         // Register-direct load: when dest has a PhysReg, load directly to it
         if let Some(dest_phys) = self.dest_reg(dest) {

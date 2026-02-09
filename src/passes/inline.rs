@@ -188,10 +188,13 @@ const MAX_CALLER_INSTRUCTIONS_ABSOLUTE_CAP: usize = 1000;
 /// at -Os. These functions exceed normal -Os limits but may shrink when inlined
 /// at call sites with constant arguments (constant propagation eliminates branches).
 /// GCC's -Os does this: inline when the result is smaller than the call + standalone.
-const MAX_SIZE_POSITIVE_INSTRUCTIONS: usize = 200;
+/// Set to 300 to cover functions like kernel boot's number() (220 inst, 64 blocks)
+/// which GCC inlines into vsprintf() for significant code size savings.
+const MAX_SIZE_POSITIVE_INSTRUCTIONS: usize = 300;
 
 /// Maximum blocks for a size-positive inlining candidate.
-const MAX_SIZE_POSITIVE_BLOCKS: usize = 50;
+/// Set to 80 to cover functions like kernel boot's number() (64 blocks).
+const MAX_SIZE_POSITIVE_BLOCKS: usize = 80;
 
 /// Maximum number of size-positive inline trials per caller function.
 /// Each trial clones the function and runs optimization passes, so we cap
@@ -1382,8 +1385,9 @@ fn build_callee_map(module: &IrModule, optimize_size: bool) -> HashMap<String, C
             && !is_size_positive_candidate
             && (!func.is_static || !func.is_inline) {
                 if debug_callee {
-                    eprintln!("[INLINE_DEBUG] {} skipped: is_static={}, is_inline={}, is_declaration={}",
-                        func.name, func.is_static, func.is_inline, func.is_declaration);
+                    eprintln!("[INLINE_DEBUG] {} skipped: is_static={}, is_inline={}, is_declaration={}, blocks={}, inst={}, size_pos_candidate={}",
+                        func.name, func.is_static, func.is_inline, func.is_declaration,
+                        func.blocks.len(), inst_count_for_static, is_size_positive_candidate);
                 }
                 continue;
             }

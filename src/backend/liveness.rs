@@ -51,6 +51,12 @@ pub struct LivenessResult {
     /// Used by the regalloc to prevent allocating each caller-saved register to values
     /// whose live ranges span that register's clobber points.
     pub scratch_clobber_points: Vec<Vec<u32>>,
+    /// Per-register refinable clobber info: (program_point, ptr_value_id) pairs for
+    /// clobber points caused by Load/Store pointer operations. If the pointer value
+    /// gets a callee-saved register in Phase 1, the codegen will dereference directly
+    /// through that register (no ecx/edx needed), so the clobber point can be removed.
+    /// Index 0 = ecx refinable points, Index 1 = edx refinable points.
+    pub ptr_clobber_info: Vec<Vec<(u32, u32)>>,
     /// Loop nesting depth for each block (block_index -> depth).
     /// Depth 0 = not in any loop. Depth 1 = in one loop. Depth 2 = nested, etc.
     /// Used by the register allocator to weight uses inside loops more heavily.
@@ -145,6 +151,7 @@ struct ProgramPointState {
     setjmp_block_indices: Vec<usize>,
     call_points: Vec<u32>,
     scratch_clobber_points: Vec<Vec<u32>>,
+    ptr_clobber_info: Vec<Vec<(u32, u32)>>,
     num_points: u32,
 }
 
@@ -160,7 +167,7 @@ struct ProgramPointState {
 pub fn compute_live_intervals(func: &IrFunction) -> LivenessResult {
     let num_blocks = func.blocks.len();
     if num_blocks == 0 {
-        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: vec![Vec::new(), Vec::new()], block_loop_depth: Vec::new() };
+        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: vec![Vec::new(), Vec::new()], ptr_clobber_info: vec![Vec::new(), Vec::new()], block_loop_depth: Vec::new() };
     }
 
     let alloca_set = collect_alloca_set(func);
@@ -168,7 +175,7 @@ pub fn compute_live_intervals(func: &IrFunction) -> LivenessResult {
 
     let num_values = value_ids.len();
     if num_values == 0 {
-        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: vec![Vec::new(), Vec::new()], block_loop_depth: Vec::new() };
+        return LivenessResult { intervals: Vec::new(), call_points: Vec::new(), scratch_clobber_points: vec![Vec::new(), Vec::new()], ptr_clobber_info: vec![Vec::new(), Vec::new()], block_loop_depth: Vec::new() };
     }
 
     // Phase 1: Assign program points and build gen/kill sets.
@@ -213,6 +220,7 @@ pub fn compute_live_intervals(func: &IrFunction) -> LivenessResult {
         intervals,
         call_points: ps.call_points,
         scratch_clobber_points: ps.scratch_clobber_points,
+        ptr_clobber_info: ps.ptr_clobber_info,
         block_loop_depth,
     }
 }
@@ -295,6 +303,10 @@ fn assign_program_points(
     // Per-register clobber points: [0]=ecx, [1]=edx
     let mut ecx_clobber_points: Vec<u32> = Vec::new();
     let mut edx_clobber_points: Vec<u32> = Vec::new();
+    // Refinable clobber info: (point, ptr_value_id) for Load/Store pointer ops.
+    // If the pointer gets a callee-saved register, these clobbers can be removed.
+    let mut ecx_ptr_clobber: Vec<(u32, u32)> = Vec::new();
+    let mut edx_ptr_clobber: Vec<(u32, u32)> = Vec::new();
     let is_32bit = crate::common::types::target_is_32bit();
 
     for (block_idx, block) in func.blocks.iter().enumerate() {
@@ -375,10 +387,15 @@ fn assign_program_points(
                     Instruction::Store { ptr, .. } if !alloca_set.contains(&ptr.0) => {
                         ecx_clobber_points.push(point);
                         edx_clobber_points.push(point);
+                        // Track as refinable: if ptr gets a callee-saved register,
+                        // codegen will store directly through it (no ecx/edx needed).
+                        ecx_ptr_clobber.push((point, ptr.0));
+                        edx_ptr_clobber.push((point, ptr.0));
                     }
                     // Load through non-alloca pointers: ecx for addressing (edx NOT clobbered)
                     Instruction::Load { ptr, .. } if !alloca_set.contains(&ptr.0) => {
                         ecx_clobber_points.push(point);
+                        ecx_ptr_clobber.push((point, ptr.0));
                     }
                     // GEP: ecx for complex address computation (edx NOT clobbered)
                     Instruction::GetElementPtr { .. } => {
@@ -484,6 +501,7 @@ fn assign_program_points(
         setjmp_block_indices,
         call_points,
         scratch_clobber_points: vec![ecx_clobber_points, edx_clobber_points],
+        ptr_clobber_info: vec![ecx_ptr_clobber, edx_ptr_clobber],
         num_points: point,
     }
 }
