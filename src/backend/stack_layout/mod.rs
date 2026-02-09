@@ -189,6 +189,9 @@ pub fn calculate_stack_space_common(
     // Phase 7: Propagate wide-value status through Copy chains (32-bit targets only).
     slot_assignment::propagate_wide_values(state, func, &ctx.copy_alias);
 
+    // Phase 8: Reorder stack slots by access frequency for smaller displacements.
+    slot_assignment::optimize_slot_displacements(state, func);
+
     total_space
 }
 

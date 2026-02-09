@@ -858,6 +858,139 @@ pub(super) fn resolve_copy_aliases(
     }
 }
 
+/// Phase 8: Optimize slot displacements by reordering stack slots so that
+/// frequently-accessed values get the most-negative offsets (which produce
+/// the smallest ESP-relative displacements on i686 with frame pointer omission).
+///
+/// On x86, `movl N(%esp), %eax` uses 1-byte displacement when N < 128 (4-byte
+/// instruction) but 4-byte displacement when N >= 128 (7-byte instruction).
+/// By placing high-access values at the most-negative offsets, we save
+/// 3 bytes per access that crosses the 128-byte threshold.
+pub(super) fn optimize_slot_displacements(
+    state: &mut crate::backend::state::CodegenState,
+    func: &IrFunction,
+) {
+    // Only beneficial on 32-bit targets where frame sizes routinely exceed 128 bytes.
+    if !crate::common::types::target_is_32bit() {
+        return;
+    }
+
+    if state.value_locations.len() < 2 {
+        return;
+    }
+
+    // Step 1: Count accesses per value_id.
+    let mut access_count: FxHashMap<u32, u32> = FxHashMap::default();
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            for_each_operand_in_instruction(inst, |op| {
+                if let Operand::Value(v) = op {
+                    *access_count.entry(v.0).or_insert(0) += 1;
+                }
+            });
+            for_each_value_use_in_instruction(inst, |v| {
+                *access_count.entry(v.0).or_insert(0) += 1;
+            });
+            if let Some(dest) = inst.dest() {
+                *access_count.entry(dest.0).or_insert(0) += 1;
+            }
+        }
+        for_each_operand_in_terminator(&block.terminator, |op| {
+            if let Operand::Value(v) = op {
+                *access_count.entry(v.0).or_insert(0) += 1;
+            }
+        });
+    }
+
+    // Step 2: Group values by their current slot offset.
+    // Values sharing an offset (copy aliases, block-local sharing) form one group
+    // and move together to preserve sharing invariants.
+    let mut offset_to_values: FxHashMap<i64, Vec<u32>> = FxHashMap::default();
+    for (&val_id, &slot) in &state.value_locations {
+        offset_to_values.entry(slot.0).or_default().push(val_id);
+    }
+
+    // Step 3: Classify each offset group by slot size and collect swappable groups.
+    // We only swap within same-size classes to preserve non-overlap.
+
+    // Build alloca slot size map from Alloca instructions.
+    let ptr_size = 4i64;
+    let mut alloca_slot_size: FxHashMap<u32, i64> = FxHashMap::default();
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            if let Instruction::Alloca { dest, size, align, .. } = inst {
+                let raw = if *size == 0 { ptr_size } else { (*size as i64).max(ptr_size) };
+                let extra = if *align > 16 { *align as i64 - 1 } else { 0 };
+                // Round up to 4-byte boundary (matches assign_slot closure)
+                alloca_slot_size.insert(dest.0, (raw + extra + 3) & !3);
+            }
+        }
+    }
+
+    // (offset, size_class, total_accesses, value_ids)
+    let mut swappable: Vec<(i64, i64, u32, Vec<u32>)> = Vec::new();
+
+    for (offset, value_ids) in offset_to_values {
+        // Skip groups with over-aligned allocas or asm outputs
+        if value_ids.iter().any(|v| state.alloca_alignments.contains_key(v)) {
+            continue;
+        }
+        if value_ids.iter().any(|v| state.asm_output_values.contains(v)) {
+            continue;
+        }
+
+        // Determine size class: alloca size takes precedence, then type flags
+        let size = if let Some(&asize) = value_ids.iter()
+            .filter_map(|v| alloca_slot_size.get(v))
+            .next()
+        {
+            asize
+        } else if value_ids.iter().any(|v| state.i128_values.contains(v)) {
+            16
+        } else if value_ids.iter().any(|v| state.wide_values.contains(v)) {
+            8
+        } else {
+            4
+        };
+
+        let total: u32 = value_ids.iter()
+            .map(|v| access_count.get(v).copied().unwrap_or(0))
+            .sum();
+
+        swappable.push((offset, size, total, value_ids));
+    }
+
+    // Step 4: Within each size class, reassign offsets by access frequency.
+    // Most-negative offset = smallest ESP displacement = cheapest encoding.
+    // Highest access count = most benefit from cheap encoding.
+    let mut by_size: FxHashMap<i64, Vec<(i64, u32, Vec<u32>)>> = FxHashMap::default();
+    for (offset, size, total, values) in swappable {
+        by_size.entry(size).or_default().push((offset, total, values));
+    }
+
+    for (_size, groups) in &mut by_size {
+        if groups.len() < 2 {
+            continue;
+        }
+
+        // Collect offsets sorted most-negative first (cheapest displacement)
+        let mut offsets: Vec<i64> = groups.iter().map(|g| g.0).collect();
+        offsets.sort();
+
+        // Sort groups by access count descending (most accessed first)
+        groups.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Assign: most-accessed group gets most-negative offset
+        for (group, &new_offset) in groups.iter().zip(offsets.iter()) {
+            if group.0 != new_offset {
+                for &val_id in &group.2 {
+                    state.value_locations.insert(val_id, StackSlot(new_offset));
+                }
+            }
+        }
+    }
+}
+
 /// On 32-bit targets, propagate wide-value status through Copy chains.
 ///
 /// Copy instructions for 64-bit values (F64, I64, U64) need 8-byte copies
