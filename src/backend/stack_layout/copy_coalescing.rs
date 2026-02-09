@@ -16,6 +16,7 @@ use crate::common::types::IrType;
 use crate::common::fx_hash::{FxHashMap, FxHashSet};
 use crate::backend::regalloc::PhysReg;
 use crate::backend::liveness::{
+    LivenessResult,
     for_each_operand_in_instruction, for_each_value_use_in_instruction,
     for_each_operand_in_terminator,
 };
@@ -32,6 +33,7 @@ pub(super) fn build_copy_alias_map(
     multi_def_values: &FxHashSet<u32>,
     reg_assigned: &FxHashMap<u32, PhysReg>,
     use_blocks_map: &FxHashMap<u32, Vec<usize>>,
+    liveness: Option<&LivenessResult>,
 ) -> FxHashMap<u32, u32> {
     // Count uses of each value across all instructions.
     let mut use_count: FxHashMap<u32, u32> = FxHashMap::default();
@@ -53,37 +55,57 @@ pub(super) fn build_copy_alias_map(
         });
     }
 
+    // Build interval-end map for liveness-based coalescing.
+    // When liveness is available, we can coalesce a Copy(dest, src) whenever
+    // src's live interval ends at the Copy's program point (src dies at the Copy),
+    // regardless of how many other uses src had before.
+    let interval_ends: Option<FxHashMap<u32, u32>> = liveness.map(|liv| {
+        liv.intervals.iter().map(|iv| (iv.value_id, iv.end)).collect()
+    });
+
     // Collect Copy instructions eligible for aliasing.
+    // Track program points (same sequencing as liveness analysis) to compare
+    // against interval endpoints when liveness is available.
     let mut raw_aliases: Vec<(u32, u32)> = Vec::new();
+    let mut point: u32 = 0;
     for block in &func.blocks {
         for inst in &block.instructions {
-            if let Instruction::Copy { dest, src: Operand::Value(src_val) } = inst {
-                let d = dest.0;
-                let s = src_val.0;
-                // Exclude multi-def values and register-assigned values.
-                if multi_def_values.contains(&d) || multi_def_values.contains(&s) {
-                    continue;
-                }
-                if reg_assigned.contains_key(&d) || reg_assigned.contains_key(&s) {
-                    continue;
-                }
-                // Only coalesce if Copy is the sole use of the source.
-                if use_count.get(&s).copied().unwrap_or(0) != 1 {
-                    continue;
-                }
-                // Only coalesce if dest's uses are in the same block as source's definition.
-                // Cross-block aliasing is unsafe: the root's liveness interval doesn't
-                // account for the alias's uses in other blocks.
-                if let Some(&src_def_blk) = def_block.get(&s) {
-                    if let Some(dest_use_blocks) = use_blocks_map.get(&d) {
-                        if dest_use_blocks.iter().any(|&b| b != src_def_blk) {
-                            continue;
-                        }
+            let current_point = point;
+            point += 1;
+            let (d, s) = match inst {
+                Instruction::Copy { dest, src: Operand::Value(src_val) } => (dest.0, src_val.0),
+                _ => continue,
+            };
+            // Exclude multi-def values and register-assigned values.
+            if multi_def_values.contains(&d) || multi_def_values.contains(&s) {
+                continue;
+            }
+            if reg_assigned.contains_key(&d) || reg_assigned.contains_key(&s) {
+                continue;
+            }
+            // Liveness-based check: src's interval ends at this Copy (src dies here).
+            // This is strictly more permissive than the sole-use check: a value can
+            // have multiple uses but still die at the Copy if the Copy is its last use.
+            let src_dies_at_copy = interval_ends.as_ref().and_then(|ends| {
+                Some(*ends.get(&s)? == current_point)
+            }).unwrap_or(false);
+            // Allow coalescing if src dies at copy (liveness) OR sole use (conservative).
+            if !src_dies_at_copy && use_count.get(&s).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            // Only coalesce if dest's uses are in the same block as source's definition.
+            // Cross-block aliasing is unsafe: the root's liveness interval doesn't
+            // account for the alias's uses in other blocks.
+            if let Some(&src_def_blk) = def_block.get(&s) {
+                if let Some(dest_use_blocks) = use_blocks_map.get(&d) {
+                    if dest_use_blocks.iter().any(|&b| b != src_def_blk) {
+                        continue;
                     }
                 }
-                raw_aliases.push((d, s));
             }
+            raw_aliases.push((d, s));
         }
+        point += 1; // terminator
     }
 
     // Build alias map with transitive resolution: follow chains to find root.
