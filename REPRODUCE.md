@@ -11,12 +11,12 @@ measurements.
 
 | Config | Code-only (21 files) | Linked _end | Swap test | Status |
 |--------|---------------------|-------------|-----------|--------|
-| CCC -Os -mregparm=3, full peephole (WITH prefixes) | 36,287 bytes | **47,504 (0xb990)** | **21/21 PASS** | OVER by 14,736 |
+| CCC -Os -mregparm=3, full peephole (WITH prefixes) | 31,376 bytes | **39,312 (0x9990)** | **21/21 PASS** | OVER by 6,544 |
 | GCC -Os -mregparm=3 (reference, includes prefixes) | ~14,610 bytes | 22,976 (0x59C0) | 21/21 PASS | Under |
 
 32KB limit = 32,768 bytes (0x8000).
 
-**_end = 0xb990 = 47,504 bytes — 14,736 bytes OVER the 32KB limit. All 21 files pass the QEMU swap test.**
+**_end = 0x9990 = 39,312 bytes — 6,544 bytes OVER the 32KB limit. All 21 files pass the QEMU swap test.**
 
 ### Key correctness milestones
 
@@ -47,7 +47,9 @@ Code-only measurements (WITH .code16gcc prefixes, correct classify_line):
 
 | Stage | Code-only | Linked _end | Delta |
 |-------|-----------|-------------|-------|
-| Current (all optimizations + correctness fixes) | **36,287** | **47,504 (0xb990)** | baseline |
+| Post classify_line fix (correctness baseline) | 36,287 | 47,504 (0xb990) | — |
+| + trimmed() global comment stripping | 32,679 | 43,408 (0xa990) | -3,608 |
+| + jump relaxation .code16gcc fix | **31,376** | **39,312 (0x9990)** | -1,303 |
 | GCC reference | ~14,610 | 22,976 (0x59C0) | target |
 
 The following historical measurements were taken WITHOUT .code16gcc prefixes and
@@ -352,31 +354,31 @@ This is what you should get with the `feat/i686-Os` branch:
 
 ```
 File                         Code-only (with .code16gcc prefixes)
-a20                           1043
-apm                            564
-cmdline                       1969
-cpu                           1058
-cpucheck                      3083
-cpuflags                      1088
-early_serial_console          2284
+a20                            880
+apm                            499
+cmdline                       1607
+cpu                            783
+cpucheck                      2769
+cpuflags                       941
+early_serial_console          2192
 edd                              0
-main                          1103
-memory                         766
-pm                             613
-printf                        6528
+main                          1068
+memory                         727
+pm                             607
+printf                        4918
 regs                           138
-string                        4093
-tty                            839
+string                        3500
+tty                            745
 version                          0
-video-bios                    1243
-video-mode                    2190
-video-vesa                    1540
-video-vga                     1643
-video                         4502
-TOTAL                        36287
+video-bios                    1080
+video-mode                    1976
+video-vesa                    1389
+video-vga                     1577
+video                         3980
+TOTAL                        31376
 ```
 
-Linked: **`_end = 0xb990 = 47,504 bytes`** (14,736 bytes over the 32KB limit)
+Linked: **`_end = 0x9990 = 39,312 bytes`** (6,544 bytes over the 32KB limit)
 
 Swap test: **21/21 PASS** (all files boot correctly in QEMU)
 

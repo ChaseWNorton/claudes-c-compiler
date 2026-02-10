@@ -860,8 +860,25 @@ use crate::backend::peephole_common::LineStore;
 
 // ── Trimmed line helper ──────────────────────────────────────────────────────
 
+/// Returns trimmed line with inline comments stripped.
+/// Comments like `    # PHI_COPY`, `    # BRANCH`, `    # regparm ...` are removed
+/// so that pattern matching (starts_with, ends_with, strip_prefix, strip_suffix)
+/// works correctly on annotated instructions.
 #[inline]
 fn trimmed<'a>(store: &'a LineStore, info: &LineInfo, idx: usize) -> &'a str {
+    let s = &store.get(idx)[info.trim_start as usize..];
+    if let Some(hash_pos) = s.find("    #") {
+        s[..hash_pos].trim_end()
+    } else {
+        s
+    }
+}
+
+/// Returns trimmed line WITH inline comments preserved.
+/// Use this only when comment content is needed (e.g., regparm annotations
+/// like `# regparm %eax %edx %ecx` where register names appear only in the comment).
+#[inline]
+fn trimmed_with_comment<'a>(store: &'a LineStore, info: &LineInfo, idx: usize) -> &'a str {
     &store.get(idx)[info.trim_start as usize..]
 }
 
@@ -3773,8 +3790,8 @@ fn is_reg_dead_after(
 
             // Call: caller-saved registers (eax, ecx, edx) are dead after a call
             LineKind::Call => {
-                let s = trimmed(store, &infos[j], j);
-                // Check if reg is referenced in the call arguments (pushed before)
+                let s = trimmed_with_comment(store, &infos[j], j);
+                // Check if reg is referenced in the call arguments (regparm annotation in comment)
                 if line_references_reg(s, reg) {
                     return false; // reg is read by the call
                 }
@@ -5992,8 +6009,8 @@ fn is_reg_dead_from_no_jmp(store: &LineStore, infos: &[LineInfo], from: usize, r
                 return false
             }
             LineKind::Call => {
-                // Check if reg is referenced in the call line (e.g. regparm annotation)
-                let s = trimmed(store, &infos[k], k);
+                // Use trimmed_with_comment: regparm annotations in comments
+                let s = trimmed_with_comment(store, &infos[k], k);
                 if line_references_reg(s, reg) {
                     return false; // reg is a regparm argument
                 }
@@ -6200,8 +6217,8 @@ fn is_reg_dead_from_inner(
             LineKind::JmpIndirect => return false,
 
             LineKind::Call => {
-                // Check if reg is referenced in the call line (e.g. regparm annotation)
-                let s = trimmed(store, &infos[k], k);
+                // Use trimmed_with_comment: regparm annotations in comments
+                let s = trimmed_with_comment(store, &infos[k], k);
                 if line_references_reg(s, reg) {
                     return false; // reg is a regparm argument
                 }
@@ -9431,17 +9448,12 @@ fn fold_movl_zero_esp_to_andl(store: &mut LineStore, infos: &mut [LineInfo]) -> 
                 continue;
             }
             let s = trimmed(store, &infos[i], i);
-            // Strip inline comments (e.g. "# PHI_COPY") before matching.
-            let s_no_comment = if let Some(hash) = s.find("    #") {
-                s[..hash].trim_end()
-            } else {
-                s
-            };
             // Match: movl $0, N(%esp) or movl $0, (%esp)
-            if !s_no_comment.starts_with("movl $0, ") || !s_no_comment.ends_with("(%esp)") {
+            // (trimmed() already strips inline comments)
+            if !s.starts_with("movl $0, ") || !s.ends_with("(%esp)") {
                 continue;
             }
-            let mem_part = s_no_comment[9..].to_string(); // after "movl $0, "
+            let mem_part = s[9..].to_string(); // after "movl $0, "
             // Verify it parses as a valid ESP store
             let off_str = &mem_part[..mem_part.len() - 6]; // strip "(%esp)"
             if !off_str.is_empty() && off_str.parse::<i32>().is_err() {

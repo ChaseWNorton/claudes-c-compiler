@@ -14,7 +14,7 @@ This was a known limitation of CCC. The original project evaluation stated: *"It
 >
 > 2. **classify_line comment stripping (discovered 2026-02-10):** The peephole optimizer's `classify_line` function parsed register names from text that included `# PHI_COPY` comments. `register_family("%eax    # PHI_COPY")` returned REG_NONE, misclassifying move instructions as `Other`. This broke `propagate_register_copies` — writes to registers were invisible, stale copies persisted, and correct instructions were incorrectly eliminated as self-moves. The video-mode swap test failed until this was fixed. The fix produces correct but larger code.
 >
-> With both bugs fixed: code-only = **36,287 bytes**, linked _end = **47,504 bytes (`0xb990`) — 14,736 bytes over the 32KB limit.** The 32KB goal is not yet achieved. All 21 files pass the QEMU swap test. The code-only optimizations documented below are still valid for relative savings — only the absolute numbers changed.
+> With both bugs fixed: code-only = **36,287 bytes**, linked _end = **47,504 bytes (`0xb990`)**. Two further optimizations — global comment stripping in the `trimmed()` helper (-3,608 bytes) and a jump relaxation registration fix for `.code16gcc` mode (-1,303 bytes) — brought the numbers to: code-only = **31,376 bytes**, linked _end = **39,312 bytes (`0x9990`) — 6,544 bytes over the 32KB limit.** The 32KB goal is not yet achieved. All 21 files pass the QEMU swap test.
 
 ## Starting Point
 
@@ -671,6 +671,58 @@ let s = if let Some(hash_pos) = s_full.find("    #") {
 
 **Result:** `early_serial_console` PASS. The fix is slightly less aggressive (keeps some stores that the original would have eliminated) but correct.
 
+### Global Comment Stripping in `trimmed()` (The 163-Site Fix)
+
+**Discovery:** The `andl $0` zero-store optimization had required manual comment stripping to handle CCC's inline `# PHI_COPY` annotations. This was treated as a one-off issue specific to that pattern. But an audit of all 163 `trimmed()` usage sites revealed the same bug affected EVERY pattern matcher in the peephole optimizer — `ends_with("(%esp)")`, `strip_suffix(", %eax")`, `starts_with("movl $")`, and dozens more all silently failed on annotated lines.
+
+**Root cause:** The `trimmed()` helper stripped leading whitespace but returned lines with inline comments intact. CCC emits annotations like `movl %eax, 0(%esp)    # PHI_COPY` on many instructions. Any pattern matcher using `trimmed()` with suffix/prefix matching would fail to match when a comment was present. This was the same class of bug as the `classify_line` issue, but far more pervasive — 163 call sites vs 1.
+
+**The fix (surgical modification to `trimmed()`):**
+```rust
+fn trimmed<'a>(store: &'a LineStore, info: &LineInfo, idx: usize) -> &'a str {
+    let s = &store.get(idx)[info.trim_start as usize..];
+    if let Some(hash_pos) = s.find("    #") {
+        s[..hash_pos].trim_end()
+    } else {
+        s
+    }
+}
+```
+
+**The exception — `trimmed_with_comment()`:** Three call sites in the peephole's liveness analysis need to see `# regparm %eax %edx %ecx` comments — this is the ONLY source of register argument information for `-mregparm=3` calls. A new `trimmed_with_comment()` helper preserves the old behavior for these 3 sites:
+```rust
+fn trimmed_with_comment<'a>(store: &'a LineStore, info: &LineInfo, idx: usize) -> &'a str {
+    &store.get(idx)[info.trim_start as usize..]
+}
+```
+
+**Result: -3,608 bytes code-only** (36,287 → 32,679). Two alignment cliffs crossed: `_end` dropped from 47,504 to 43,408 (-4,096). QEMU swap test: 21/21 PASS.
+
+This was the highest-leverage single change of the entire project in terms of lines-of-code-changed to bytes-saved ratio: modifying one 5-line helper function unblocked all 163 pattern-matching sites at once.
+
+### Jump Relaxation Registration in `.code16gcc` Mode
+
+**Discovery:** After the `trimmed()` fix, analysis of the remaining code showed 749 long-form jumps vs 342 short-form jumps. In `.code16gcc` mode, a long conditional jump is 7 bytes (`66 0f 8x rel32`) vs a short jump at 2 bytes (`7x rel8`) — a savings of 5 bytes per relaxed conditional. Many of the 749 long jumps had targets well within ±128 bytes, suggesting the assembler's jump relaxation wasn't working.
+
+**Root cause:** In `elf_writer_common.rs`, the jump registration code compared `instr_len` against expected lengths to identify which instructions are jumps:
+
+```rust
+// BEFORE (bug):
+let expected_len = if jump_det.is_conditional { 6 } else { 5 };
+```
+
+These are the correct lengths for 32-bit mode (jcc = `0f 8x rel32` = 6 bytes, jmp = `e9 rel32` = 5 bytes). But in `.code16gcc` mode, every long jump gets a 0x66 operand-size prefix, making them 7 and 6 bytes respectively. Since `instr_len` (7 or 6) never equaled `expected_len` (6 or 5), the jump was silently skipped — never registered for relaxation. Every jump stayed in long form.
+
+**The fix (2 lines):**
+```rust
+let prefix_extra = if self.code_mode == 16 { 1 } else { 0 };
+let expected_len = if jump_det.is_conditional { 6 + prefix_extra } else { 5 + prefix_extra };
+```
+
+The relaxation function itself (`relax_jumps`, line ~1390) already handled the 0x66 prefix correctly — it checked `data[offset] == 0x66` and adjusted accordingly. Only the registration was broken.
+
+**Result: -1,303 bytes code-only** (32,679 → 31,376). One alignment cliff crossed: `_end` dropped from 43,408 to 39,312 (-4,096). QEMU swap test: 21/21 PASS.
+
 ### Combined Result
 
 The IRC allocator, `-mregparm=3`, peephole suite, and correctness fixes combined to produce code that passes all 21 swap tests. The historical code-only progression (pre-prefix, pre-classify_line-fix) shows the relative savings from each optimization:
@@ -685,22 +737,24 @@ IRC + clobber:    27,037 code-only → _end = 0x8990 (35,216) — 2,448 OVER  [c
 + andl $0:        23,551 code-only → _end = 0x7990 (31,120) — 1,648 UNDER
 + .code16gcc:     ~30,400 code-only → _end = 0x8970 (35,184) — 2,416 OVER [prefixes add ~29%]
 + classify_line:  36,287 code-only → _end = 0xb990 (47,504) — 14,736 OVER [correctness fix]
++ trimmed():      32,679 code-only → _end = 0xa990 (43,408) — 10,640 OVER [global comment strip]
++ jump relax:     31,376 code-only → _end = 0x9990 (39,312) —  6,544 OVER [.code16gcc relax fix]
 ```
 
-The correctness fixes (.code16gcc prefix insertion and classify_line comment stripping) are non-negotiable — without them the code doesn't run. The current code is correct and verified by swap test, but significantly over the 32KB limit.
+The correctness fixes (.code16gcc prefix insertion and classify_line comment stripping) are non-negotiable — without them the code doesn't run. The `trimmed()` global comment stripping and jump relaxation fix recovered a significant portion of the correctness regression. The current code is correct and verified by swap test, but still over the 32KB limit.
 
 ## Current State
 
 | Metric | Value |
 |--------|-------|
-| Linked `_end` (setup image) | **47,504 bytes (`0xb990`) — 14,736 OVER 32KB** |
+| Linked `_end` (setup image) | **39,312 bytes (`0x9990`) — 6,544 OVER 32KB** |
 | 32KB limit (`_end ≤ 0x8000`) | 32,768 bytes |
-| Gap | **14,736 bytes over** |
-| Code-only sum (21 .o files, with prefixes) | 36,287 bytes |
+| Gap | **6,544 bytes over** |
+| Code-only sum (21 .o files, with prefixes) | 31,376 bytes |
 | GCC reference `_end` (includes prefixes) | 22,976 bytes (`0x59C0`) |
 | GCC code-only sum (includes prefixes) | ~14,610 bytes |
-| CCC/GCC code-only ratio | 2.48x |
-| Unit tests | 896 passing |
+| CCC/GCC code-only ratio | 2.15x |
+| Unit tests | 901 passing |
 | Boot files compiling | 21/21 (all with CCC, zero GCC) |
 | **QEMU swap test** | **21/21 PASS** |
 | `.code16gcc` assembler support | Implemented and verified (post-process prefix toggle) |
@@ -740,23 +794,30 @@ These measurements are from a clean baseline with correct flags (`-include compi
 | Milestone | Code-only | `_end` | Gap to 32KB | What changed |
 |-----------|-----------|--------|-------------|--------------|
 | + .code16gcc prefixes | ~30,400 | 35,184 | +2,416 | Prefix bytes required for 16-bit execution |
-| + classify_line fix | **36,287** | **47,504** | **+14,736** | Comment stripping correctness fix → 21/21 swap PASS |
+| + classify_line fix | 36,287 | 47,504 | +14,736 | Comment stripping correctness fix → 21/21 swap PASS |
 
-**The code is correct but does not yet fit.** The IRC graph coloring allocator, `-mregparm=3`, and targeted peephole suite produced significant code-only reductions (6,082 bytes / 20.5% from linear scan baseline). However, two correctness fixes — `.code16gcc` prefix insertion (~29% overhead) and `classify_line` comment stripping (changed optimization behavior) — increased the actual output. The current code-only total (36,287 bytes with prefixes) is 2.48x GCC's (14,610 bytes).
+**Era 5: Recovery** (global comment stripping, jump relaxation fix)
+
+| Milestone | Code-only | `_end` | Gap to 32KB | What changed |
+|-----------|-----------|--------|-------------|--------------|
+| + `trimmed()` global comment strip | 32,679 | 43,408 | +10,640 | Unblocked 163 pattern matchers at once |
+| + jump relaxation .code16gcc fix | **31,376** | **39,312** | **+6,544** | Short jumps now registered for relaxation in 16-bit mode |
+
+**The code is correct but does not yet fit.** The IRC graph coloring allocator, `-mregparm=3`, and targeted peephole suite produced significant code-only reductions. Two correctness fixes — `.code16gcc` prefix insertion (~29% overhead) and `classify_line` comment stripping (changed optimization behavior) — increased the output. Two recovery optimizations — global comment stripping in `trimmed()` and jump relaxation fix — recovered 4,911 bytes of the regression. The current code-only total (31,376 bytes with prefixes) is 2.15x GCC's (14,610 bytes).
 
 ### Top CCC vs GCC Code Size Gaps (Current)
 
-CCC's code-only total (36,287 bytes) is 2.48x GCC's (~14,610 bytes). The gap is concentrated in a few files:
+CCC's code-only total (31,376 bytes) is 2.15x GCC's (~14,610 bytes). The gap is concentrated in a few files:
 
 | File | CCC bytes | GCC bytes | Gap | CCC/GCC ratio |
 |------|-----------|-----------|-----|---------------|
-| printf.c | 6,528 | ~1,773 | +4,755 | 3.68x |
-| video.c | 4,502 | ~1,485 | +3,017 | 3.03x |
-| string.c | 4,093 | ~1,173 | +2,920 | 3.49x |
-| cpucheck.c | 3,083 | ~655 | +2,428 | 4.71x |
-| cmdline.c | 1,969 | ~455 | +1,514 | 4.33x |
+| printf.c | 4,918 | ~1,596 | +3,322 | 3.08x |
+| video.c | 3,980 | ~1,348 | +2,632 | 2.95x |
+| string.c | 3,500 | ~909 | +2,591 | 3.85x |
+| cpucheck.c | 2,769 | ~524 | +2,245 | 5.28x |
+| early_serial_console.c | 2,192 | ~1,154 | +1,038 | 1.90x |
 
-These 5 files account for ~14,600 bytes of the ~21,700-byte gap. The accumulator model, lack of aggressive inlining, and now-correct `.code16gcc` prefix overhead all contribute.
+These 5 files account for ~11,800 bytes of the ~16,800-byte gap. The accumulator model, register allocation quality (CCC uses 320-byte stack frames vs GCC's 92 for functions like `number()`), and `.code16gcc` prefix overhead all contribute.
 
 ## What Worked and What Didn't
 
@@ -796,6 +857,8 @@ These 5 files account for ~14,600 bytes of the ~21,700-byte gap. The accumulator
 | **.code16gcc prefix insertion** | Required for correctness | **+~6,800 bytes code** | 0x66/0x67 prefixes for 16-bit real mode execution (~29% overhead) |
 | **classify_line comment stripping** | Required for correctness | **+~5,900 bytes code** | Fixed PHI_COPY misclassification → 21/21 swap test PASS |
 | **ESP dual offset tracking** | Required for correctness | **~0 bytes** | Fixed early_serial_console swap test failure |
+| **`trimmed()` global comment stripping** | Multi-KB | **-3,608 bytes code** | Modified `trimmed()` to strip `    #` comments, unblocking 163 pattern matchers at once |
+| **Jump relaxation .code16gcc fix** | ~1KB | **-1,303 bytes code** | Fixed registration: expected lengths didn't include 0x66 prefix → jumps never relaxed |
 
 ## Lessons Learned
 
@@ -863,13 +926,17 @@ These 5 files account for ~14,600 bytes of the ~21,700-byte gap. The accumulator
 
 **32. Dead infrastructure can produce convincing but wrong results.** CCC's assembler had `.code16gcc` support structurally present — the parser recognized it, the ELF writer tracked it, the encoder had a `code16gcc: bool` field — but the field was never set to `true`. The encoder always produced 32-bit code without the 0x66/0x67 override prefixes required for 16-bit real mode. The resulting code was smaller (no prefix overhead), passed all unit tests (tests don't run in 16-bit mode), and produced valid ELF objects. It took an actual boot attempt to discover the bug — the kernel immediately crashed with #UD (Invalid Opcode). Three separate measurement sessions used these wrong numbers before the boot test exposed the truth. **Always validate that code runs correctly before celebrating size achievements.** Size measurements of non-functional code are meaningless.
 
+**33. Fix the root cause, not each symptom.** The `andl $0` zero-store rule needed manual comment stripping — `s.find("    #")` before matching. This was treated as a one-off. An audit revealed 163 other `trimmed()` call sites with the same latent bug. Modifying the 5-line `trimmed()` helper to strip comments globally fixed all 163 at once (-3,608 bytes) — far more effective than patching each pattern individually. When you find a bug, ask: "is this a symptom of a systemic issue?" before fixing just the instance you found.
+
+**34. Assembler infrastructure bugs hide where different subsystems meet.** The jump relaxation registration (elf_writer_common.rs) and the `.code16gcc` prefix insertion (encoder/mod.rs) were developed and tested independently. Each worked correctly in isolation. The bug was at their intersection: registration used 32-bit mode expected lengths, but the encoder produced `.code16gcc` mode instruction lengths. The `!=` comparison silently skipped every jump. These interface bugs produce no errors, no crashes — just silently suboptimal output. Always verify that the subsystems you're connecting agree on their shared invariants (in this case, instruction length).
+
 **29. Two alignment cliffs can be crossed in one optimization campaign.** The `.pecompat` section's 4KB alignment means each cliff crossing saves 4,096 bytes of `_end`. The journey from 39,312 to 31,120 crossed TWO cliffs (0x8000→0x7000 via clobber refinement, 0x7000→0x6000 via `-mregparm=3`), converting 6,082 bytes of code savings into 8,192 bytes of `_end` reduction. Understanding the cliff structure makes it possible to plan optimization targets around boundary crossings.
 
 ## Conclusion
 
 CCC's i686 backend now compiles all 21 Linux kernel boot C files natively. The `.code16gcc` assembler mode produces correct 16-bit real-mode output with operand/address size override prefixes. **All 21 files pass the QEMU swap test** — each CCC-compiled .o, swapped into a GCC boot image, links and boots to "Linux version". The GCC dependency for C compilation is eliminated. The code is verified correct.
 
-The linked setup image is **47,504 bytes (`_end = 0xb990`) — 14,736 bytes over the 32KB limit.** More optimization work is needed to close the gap. The 32KB goal is not yet achieved.
+The linked setup image is **39,312 bytes (`_end = 0x9990`) — 6,544 bytes over the 32KB limit.** More optimization work is needed to close the gap. The 32KB goal is not yet achieved.
 
 The confirmed savings from all optimization work:
 
@@ -889,9 +956,11 @@ The confirmed savings from all optimization work:
 | **Symbol+offset folding** | **-420 bytes** | **0** | **Peephole: fold `$sym + addl $N` into displacement** |
 | **Extend-fold (Phase 8b)** | **-124 bytes** | **0** | **Peephole: `movzbl+movl` → single `movzbl`** |
 | **andl $0 zero-store** | **-176 bytes** | **0** | **Peephole: `movl $0` → `andl $0` (imm8 encoding)** |
+| **`trimmed()` global comment strip** | **-3,608 bytes** | **-4,096** | **Unblocked 163 peephole pattern matchers at once** |
+| **Jump relaxation .code16gcc fix** | **-1,303 bytes** | **-4,096** | **Fixed registration: expected lengths missing prefix byte** |
 | Other (ecx, direct ALU, etc.) | ~0 bytes | ~0 | Marginal or offset by other costs |
 
-The optimization journey can be grouped into four eras:
+The optimization journey can be grouped into five eras:
 
 1. **The codegen era** (Phases 1-6): Backend improvements to the accumulator model — eax caching, block reordering, multi-register tracking, inlining. Collectively saved ~6,000+ bytes of code-only, but `_end` only dropped from 39,088 to 35,216 (one cliff crossing).
 
@@ -899,13 +968,15 @@ The optimization journey can be grouped into four eras:
 
 3. **The convention + peephole era** (`-mregparm=3` + peephole suite): Register argument passing eliminated the largest remaining waste (stack-based argument copies), and targeted peephole rules (symbol folding, extend-fold, zero-store) provided further reductions. Together: -3,906 bytes code-only.
 
-4. **The correctness era** (`.code16gcc` + classify_line fix): Implementing correct `.code16gcc` prefix insertion added ~29% overhead (required for 16-bit execution). Fixing the classify_line comment stripping bug produced correct optimization behavior but larger code. Together these non-negotiable correctness fixes increased code from the historical 23,551 bytes to the current 36,287 bytes — but the code now actually works. **21/21 swap test PASS.**
+4. **The correctness era** (`.code16gcc` + classify_line fix): Implementing correct `.code16gcc` prefix insertion added ~29% overhead (required for 16-bit execution). Fixing the classify_line comment stripping bug produced correct optimization behavior but larger code. Together these non-negotiable correctness fixes increased code from the historical 23,551 bytes to 36,287 bytes — but the code now actually works. **21/21 swap test PASS.**
 
-GCC produces `_end = 22,976 bytes` for the same source files — CCC's code-only sum is 36,287 bytes vs GCC's ~14,610 bytes (2.48x ratio). The accumulator model remains the fundamental architectural constraint, compounded by the `.code16gcc` prefix overhead.
+5. **The recovery era** (`trimmed()` global comment strip + jump relaxation fix): Modifying the `trimmed()` helper to strip inline comments globally unblocked all 163 pattern-matching sites in the peephole optimizer at once (-3,608 bytes). Fixing jump relaxation registration for `.code16gcc` mode — expected lengths didn't account for the 0x66 prefix byte, so jumps were never registered for short-form relaxation (-1,303 bytes). Together: -4,911 bytes code-only, recovering a third of the correctness-era regression. Two alignment cliffs crossed.
 
-**What this means:** CCC compiles all 21 Linux kernel boot C files natively, produces correct `.code16gcc` assembly output, and all 21 files pass the QEMU swap test (boot to "Linux version"). The GCC dependency for C compilation is eliminated. However, the linked output does not yet fit within the BIOS boot protocol's 32KB constraint — the linker assertion `ASSERT(_end <= 0x8000)` fails by 14,736 bytes.
+GCC produces `_end = 22,976 bytes` for the same source files — CCC's code-only sum is 31,376 bytes vs GCC's ~14,610 bytes (2.15x ratio). The accumulator model remains the fundamental architectural constraint, compounded by the `.code16gcc` prefix overhead.
 
-**What remains:** The 14,736-byte gap requires substantial code size reduction. The `.code16gcc` prefix overhead (~29% of code size) is a fixed cost that GCC also pays — CCC's raw instruction efficiency must improve significantly. The largest remaining gaps vs GCC (printf +4,755 bytes, video +3,017, string +2,920) represent the primary targets. The classify_line fix changed how PHI_COPY moves interact with ALL peephole passes — revisiting the peephole optimization strategy with correct classification may recover some of the regression. Improved inlining, better constant propagation, and potentially a full register-direct codegen model to replace the accumulator architecture are the most promising approaches.
+**What this means:** CCC compiles all 21 Linux kernel boot C files natively, produces correct `.code16gcc` assembly output, and all 21 files pass the QEMU swap test (boot to "Linux version"). The GCC dependency for C compilation is eliminated. However, the linked output does not yet fit within the BIOS boot protocol's 32KB constraint — the linker assertion `ASSERT(_end <= 0x8000)` fails by 6,544 bytes.
+
+**What remains:** The 6,544-byte `_end` gap requires further code size reduction. The largest remaining gaps vs GCC (printf +3,322 bytes, video +2,632, string +2,591) represent the primary targets. CCC's `number()` function uses a 320-byte stack frame vs GCC's 92 — register allocation quality for complex functions is the core issue. Remaining PHI_COPY relays (131 in printf alone) are genuine and not fixable by pattern matching — they need better phi elimination or coalescing upstream. Improved inlining, better constant propagation, and potentially a full register-direct codegen model to replace the accumulator architecture are the most promising approaches.
 
 ## Tools Built Along the Way
 
@@ -929,3 +1000,5 @@ All of these are permanent additions to CCC, not throwaway scripts:
 - **QEMU swap test framework (`test_swap.sh`):** Automated correctness verification: compile one file with CCC, swap into GCC boot image, link, build bzImage, boot in QEMU, check for "Linux version" output. Tests all 21 C files individually. Binary phase search variant stops optimization at specific phases to isolate bugs.
 - **classify_line comment stripping (peephole.rs):** Strips `# PHI_COPY`, `# regparm`, and `# BRANCH` comments before register parsing in the line classifier. Prevents misclassification of annotated instructions. Critical correctness fix for `propagate_register_copies`.
 - **ESP dead store elimination with dual offset tracking (peephole.rs):** Collects both raw and ESP-delta-normalized offsets for stack reads. Eliminates stores only when neither raw nor normalized offset matches any read, ensuring correctness across control flow with different ESP states.
+- **`trimmed()` global comment stripping (peephole.rs):** Modified the `trimmed()` helper to strip `    #` inline comments before returning, unblocking all 163 pattern-matching sites in the peephole optimizer at once. Added `trimmed_with_comment()` for the 3 regparm-checking liveness sites that need to read `# regparm %eax %edx %ecx` comment content. Saved 3,608 bytes code-only — the highest leverage change of the entire project.
+- **Jump relaxation `.code16gcc` fix (elf_writer_common.rs):** Fixed jump registration to account for the 0x66 operand-size prefix in `.code16gcc` mode. Expected lengths (jcc=6, jmp=5) were correct for 32-bit mode but `.code16gcc` adds a prefix byte (jcc=7, jmp=6). The `!=` comparison silently skipped every jump, preventing short-form relaxation. The relaxation function itself already handled 0x66 correctly. Saved 1,303 bytes code-only.

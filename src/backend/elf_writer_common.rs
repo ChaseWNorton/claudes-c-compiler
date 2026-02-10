@@ -812,7 +812,11 @@ impl<A: X86Arch> ElfWriterCore<A> {
                         relaxed: true,
                     });
                 } else {
-                    let expected_len = if jump_det.is_conditional { 6 } else { 5 };
+                    // In .code16gcc mode (code_mode == 16), jumps have an extra 0x66
+                    // prefix byte: conditional = 7, unconditional = 6.
+                    // In 32-bit mode: conditional = 6, unconditional = 5.
+                    let prefix_extra = if self.code_mode == 16 { 1 } else { 0 };
+                    let expected_len = if jump_det.is_conditional { 6 + prefix_extra } else { 5 + prefix_extra };
                     if instr_len == expected_len {
                         self.sections[sec_idx].jumps.push(JumpInfo {
                             offset: base_offset as usize,
