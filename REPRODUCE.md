@@ -7,40 +7,63 @@ CCC compiles the Linux kernel's 16-bit real-mode boot code (21 C files from
 (`_end ≤ 0x8000`). This document describes exactly how to reproduce the
 measurements.
 
-**Current results (2026-02-09):**
+**Current results (2026-02-10):**
 
-> **CORRECTION (2026-02-09):** The code-only and linked _end numbers below were measured
-> WITHOUT `.code16gcc` prefix insertion. CCC's assembler had the `.code16gcc` infrastructure
-> (parser, state tracking, encoder field) but the encoder field was **never wired up** —
-> `code16gcc: bool` was always `false`. No 0x66/0x67 override prefixes were inserted.
-> The resulting code was smaller but **could not execute in 16-bit real mode** (immediate
-> #UD Invalid Opcode on boot attempt). GCC's numbers INCLUDE these prefix bytes because
-> GAS always handled `.code16gcc` correctly.
->
-> With correct `.code16gcc` prefix insertion: **_end = 0x8970 = 35,184 bytes (OVER by 3,184).**
-> The 32KB goal is NOT yet achieved.
-
-| Config | Code-only (21 files) | Linked _end | Status |
-|--------|---------------------|-------------|--------|
-| CCC -Os -mregparm=3, full peephole (NO PREFIXES) | 23,551 bytes | 31,120 (0x7990) | ~~UNDER~~ **WRONG** |
-| CCC -Os -mregparm=3, full peephole (WITH PREFIXES) | ~30,400 bytes | **35,184 (0x8970)** | **OVER by 3,184** |
-| GCC -Os -mregparm=3 (reference, includes prefixes) | ~10,500 bytes | 22,976 (0x59C0) | Under |
+| Config | Code-only (21 files) | Linked _end | Swap test | Status |
+|--------|---------------------|-------------|-----------|--------|
+| CCC -Os -mregparm=3, full peephole (WITH prefixes) | 36,287 bytes | **47,504 (0xb990)** | **21/21 PASS** | OVER by 14,736 |
+| GCC -Os -mregparm=3 (reference, includes prefixes) | ~14,610 bytes | 22,976 (0x59C0) | 21/21 PASS | Under |
 
 32KB limit = 32,768 bytes (0x8000).
 
-**_end = 0x8970 = 35,184 bytes — 3,184 bytes OVER the 32KB limit. More work needed.**
+**_end = 0xb990 = 47,504 bytes — 14,736 bytes OVER the 32KB limit. All 21 files pass the QEMU swap test.**
+
+### Key correctness milestones
+
+- **21/21 compile**: All boot C files compile with CCC natively (no GCC)
+- **21/21 swap test PASS**: Each CCC-compiled .o swapped into GCC boot image, linked,
+  booted in QEMU — prints "Linux version" for all 21 files
+- **.code16gcc prefix insertion**: 0x66/0x67 prefixes correctly inserted for 16-bit
+  real mode execution (required for boot — without them, #UD Invalid Opcode)
+
+### Correction history
+
+> **Correction (2026-02-10):** Previous measurements reported code-only as 23,551 bytes
+> and _end as 31,120 (under 32KB). Those numbers were WRONG for two reasons:
+>
+> 1. **Missing .code16gcc prefixes (2026-02-09):** The assembler's `code16gcc` field was
+>    never wired up. Code was encoded as plain 32-bit — no 0x66/0x67 prefixes. Smaller
+>    but couldn't execute in 16-bit mode (#UD on boot). With prefixes: _end = 0x8970 = 35,184.
+>
+> 2. **classify_line comment stripping bug (2026-02-10):** `classify_line` parsed register
+>    names from text including `# PHI_COPY` comments. `register_family("%eax    # PHI_COPY")`
+>    returned REG_NONE, misclassifying moves as `Other`. This broke `propagate_register_copies`
+>    (writes invisible, stale copies persisted → incorrect NOP elimination). Fixing this
+>    produced correct but larger code. With both fixes: code-only = 36,287, _end = 0xb990 = 47,504.
 
 ### Optimization journey
 
+Code-only measurements (WITH .code16gcc prefixes, correct classify_line):
+
 | Stage | Code-only | Linked _end | Delta |
 |-------|-----------|-------------|-------|
+| Current (all optimizations + correctness fixes) | **36,287** | **47,504 (0xb990)** | baseline |
+| GCC reference | ~14,610 | 22,976 (0x59C0) | target |
+
+The following historical measurements were taken WITHOUT .code16gcc prefixes and
+WITHOUT the classify_line fix. They document the relative savings from each
+optimization, which are still valid, but the absolute numbers are not comparable
+to the current (correct) numbers:
+
+| Stage (historical, pre-prefix, pre-fix) | Code-only | Linked _end | Delta |
+|----------------------------------------|-----------|-------------|-------|
 | Linear scan allocator | 29,633 | 39,312 (0x9990) | baseline |
 | + IRC graph coloring | 27,109 | 39,312 (0x9990) | -2,524 |
-| + IRC clobber refinement | 27,037 | 35,216 (0x8990) | -72 (crossed 0x7000 cliff, -4,096 _end) |
+| + IRC clobber refinement | 27,037 | 35,216 (0x8990) | -72 |
 | + -mregparm=3 | 24,271 | 35,216 (0x8990) | -2,766 |
 | + symbol+offset folding | 23,851 | 35,216 (0x8990) | -420 |
 | + extend-fold (movzbl+movl) | 23,727 | 35,216 (0x8990) | -124 |
-| + andl $0 zero-store | **23,551** | **31,120 (0x7990)** | -176 (crossed 0x6000 cliff, -4,096 _end) |
+| + andl $0 zero-store | 23,551 | 31,120 (0x7990) | -176 |
 
 ## Prerequisites
 
@@ -48,6 +71,7 @@ measurements.
   - Rust toolchain (`rustup`, `cargo`)
   - GNU binutils: `ld`, `as`, `cpp`, `nm`, `size` (the standard `binutils` package)
   - `wget`, `make`, `gcc` (for kernel header generation only)
+  - QEMU (`qemu-system-x86_64`) for swap test verification
   - Linux 6.9 kernel source (downloaded below)
 - CCC source code (this repository), on the `feat/i686-Os` branch
 
@@ -166,17 +190,15 @@ PREAMBLE="-include $KDIR/include/linux/compiler_types.h \
 This produces smaller but **incorrect** code — functions that the kernel
 expects to be inlined are not, changing behavior and invalidating measurements.
 
-**How to tell if you forgot it:** your code-only total will be ~3,000 bytes
-lower than expected (around 21,000 instead of 23,551). The code compiles
-fine but is WRONG.
+**How to tell if you forgot it:** your code-only total will be significantly
+lower than expected. The code compiles fine but is WRONG.
 
 ### WARNING about -mregparm=3
 
 **`-mregparm=3` is part of `REALMODE_CFLAGS` in the kernel's `arch/x86/Makefile`.**
 It passes the first 3 integer arguments in registers (eax, edx, ecx) instead of
 on the stack. Without it, all arguments go on the stack, producing significantly
-larger code (+2,766 bytes across 21 files). This flag was missing from earlier
-measurements, inflating code-only numbers.
+larger code. This flag was missing from earlier measurements, inflating code-only numbers.
 
 ### WARNING about boot_compat.h
 
@@ -286,7 +308,25 @@ size -A /tmp/boot_measure/setup.elf
 
 **Do NOT use `--gc-sections`.** The kernel boot build does not use it.
 
-### 6. Compare against GCC (optional)
+### 6. Swap test (correctness verification)
+
+The swap test verifies that each CCC-compiled object file produces a bootable
+kernel. For each of the 21 C files:
+
+1. Compile ONE file with CCC, the remaining 20 with GCC
+2. Link the mixed image (CCC .o swapped in for GCC .o)
+3. Build bzImage
+4. Boot in QEMU
+5. PASS = prints "Linux version" within 10 seconds
+
+```bash
+# This requires the full test_swap.sh script on the VM
+# See /tmp/test_swap.sh on the Azure VM for the full script
+```
+
+**Current result: 21/21 PASS** — every CCC-compiled .o boots successfully.
+
+### 7. Compare against GCC (optional)
 
 ```bash
 rm -rf /tmp/boot_gcc && mkdir -p /tmp/boot_gcc
@@ -311,86 +351,34 @@ done
 This is what you should get with the `feat/i686-Os` branch:
 
 ```
-File                         Code-only
-a20                              545
-apm                              335
-cmdline                         1388
-cpu                              642
-cpucheck                        2184
-cpuflags                         701
-early_serial_console            1297
-edd                                0
-main                             732
-memory                           422
-pm                               370
-printf                          4757
-regs                             105
-string                          2633
-tty                              406
-version                            0
-video-bios                       760
-video-mode                      1404
-video-vesa                       991
-video-vga                        801
-video                           3078
-TOTAL                          23551
+File                         Code-only (with .code16gcc prefixes)
+a20                           1043
+apm                            564
+cmdline                       1969
+cpu                           1058
+cpucheck                      3083
+cpuflags                      1088
+early_serial_console          2284
+edd                              0
+main                          1103
+memory                         766
+pm                             613
+printf                        6528
+regs                           138
+string                        4093
+tty                            839
+version                          0
+video-bios                    1243
+video-mode                    2190
+video-vesa                    1540
+video-vga                     1643
+video                         4502
+TOTAL                        36287
 ```
 
-Linked: **`_end = 0x7990 = 31,120 bytes`** (1,648 bytes under the 32KB limit)
+Linked: **`_end = 0xb990 = 47,504 bytes`** (14,736 bytes over the 32KB limit)
 
-Section layout:
-```
-.bstext         495       0
-.entrytext      104     620
-.inittext       298     724
-.initdata        30    1022
-.text         23489    1052
-.text32          34   24541
-.pecompat         9   24576    ← at 0x6000 (4KB-aligned)
-.rodata        1313   24592
-.data           140   26000
-.bss           4964   26144
-Total         31089
-```
-
-### IRC + clobber refinement + regparm=3 only (before peephole improvements)
-
-These were the numbers BEFORE the symbol+offset folding, extend-fold, and
-andl $0 optimizations. Recorded for reference:
-
-```
-File                         Code-only
-a20                              577
-apm                              343
-cmdline                         1394
-cpu                              642
-cpucheck                        2257
-cpuflags                         709
-early_serial_console            1351
-edd                                0
-main                             795
-memory                           453
-pm                               412
-printf                          4785
-regs                             111
-string                          2713
-tty                              415
-version                            0
-video-bios                       804
-video-mode                      1433
-video-vesa                      1029
-video-vga                        820
-video                           3228
-TOTAL                          24271
-```
-
-Linked: `_end = 0x8990 = 35,216 bytes` (due to 4KB alignment cliff)
-
-### Without -mregparm=3 (for reference)
-
-Remove `-mregparm=3` from the compilation command.
-
-Expected total: **27,037 bytes** code-only. Same linked _end (cliff-dominated).
+Swap test: **21/21 PASS** (all files boot correctly in QEMU)
 
 ### How alignment cliffs work
 
@@ -404,14 +392,12 @@ step function:
 < 24,576 (0x6000)       0x6000                ~0x7990 = 31,120
 24,576 - 28,671         0x7000                ~0x8990 = 35,216
 28,672 - 32,767         0x8000                ~0x9990 = 39,312
+32,768 - 36,863         0x9000                ~0xa990 = 43,408
+36,864 - 40,959         0xA000                ~0xb990 = 47,504
 ```
 
 Between cliffs, _end does NOT change — savings are absorbed by alignment
 padding. Only when code size crosses a 4KB boundary does _end jump.
-
-The current code (23,551 bytes code-only) produces `.text32` ending at byte
-24,575, which is just BELOW the 0x6000 boundary. This places `.pecompat` at
-0x6000, yielding `_end = 0x7990`.
 
 ## One-Shot Script
 
@@ -512,7 +498,7 @@ size -A /tmp/boot_measure/setup.elf
 ## Common Mistakes
 
 1. **Missing `-include compiler_types.h`** — produces smaller but wrong code.
-   If your numbers are ~3,000 bytes lower than expected, this is probably why.
+   If your numbers are significantly lower than expected, this is probably why.
 
 2. **Missing `-D_SETUP`** — cpucheck.c and cpuflags.c fail to compile or
    produce wrong code (different headers included).
@@ -536,3 +522,8 @@ size -A /tmp/boot_measure/setup.elf
 9. **Forgetting `make ARCH=x86 headers_install`** — without this, generated
    headers like `autoconf.h` and `zoffset.h` don't exist. Compilation fails
    with missing includes.
+
+10. **Comparing pre-fix numbers to post-fix numbers** — the classify_line
+    comment stripping fix (2026-02-10) changed optimization behavior, producing
+    correct but larger code. Historical numbers from before this fix are not
+    directly comparable to current numbers.
