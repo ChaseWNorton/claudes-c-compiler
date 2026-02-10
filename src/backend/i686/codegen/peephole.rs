@@ -10808,6 +10808,148 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // Regression tests for bugs found during boot code swap testing (2026-02-10)
+    // =========================================================================
+
+    #[test]
+    fn test_classify_line_strips_phi_copy_comment() {
+        // Regression: classify_line parsed register names from text including
+        // "# PHI_COPY" comments. register_family("%eax    # PHI_COPY") returned
+        // REG_NONE, misclassifying moves as Other. This broke propagate_register_copies.
+        let info = classify_line("    movl %ebx, %eax    # PHI_COPY");
+        match info.kind {
+            LineKind::Move { src, dst } => {
+                assert_eq!(src, REG_EBX, "src should be ebx");
+                assert_eq!(dst, REG_EAX, "dst should be eax");
+            }
+            other => panic!(
+                "movl %ebx, %eax    # PHI_COPY should classify as Move, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_classify_line_strips_branch_comment() {
+        let info = classify_line("    testl %eax, %eax    # BRANCH");
+        // testl should NOT be classified as Move or Other with REG_NONE
+        match info.kind {
+            LineKind::Cmp => {} // correct
+            LineKind::Other { dest_reg } => {
+                // Also acceptable — testl is ALU, dest_reg should be eax
+                assert_eq!(dest_reg, REG_EAX, "dest_reg should be eax, not REG_NONE");
+            }
+            _ => {} // other classifications are fine as long as it's not broken
+        }
+    }
+
+    #[test]
+    fn test_classify_line_strips_regparm_comment() {
+        // regparm comments are longer, ensure they're stripped too
+        let info = classify_line("    call foo    # regparm %eax %edx %ecx");
+        match info.kind {
+            LineKind::Call => {} // correct
+            other => panic!(
+                "call with regparm comment should classify as Call, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_propagate_copies_invalidates_through_phi_copy_overwrite() {
+        // Regression from video-mode set_mode function (2026-02-10):
+        // After "call", eax holds return value. movl %eax, %edi copies it.
+        // Then movl %ebx, %eax    # PHI_COPY overwrites eax.
+        // Finally movl %edi, %eax    # PHI_COPY should restore edi to eax,
+        // but the bug incorrectly NOP'd this because copy_src[edi]=eax was stale.
+        //
+        // The stores to 0(%esp) and 4(%esp) are read back and combined into
+        // the return value, so they MUST contain different values (ebx and
+        // the call result respectively). If the bug recurs, both get ebx's value.
+        let asm = [
+            "set_mode_repro:",
+            ".cfi_startproc",
+            "    pushl %ebx",
+            "    pushl %edi",
+            "    subl $8, %esp",
+            "    call some_func",
+            "    movl %eax, %edi",
+            "    movl %ebx, %eax    # PHI_COPY",
+            "    movl %eax, 0(%esp)",
+            "    movl %edi, %eax    # PHI_COPY",
+            "    movl %eax, 4(%esp)",
+            "    movl 0(%esp), %eax",
+            "    addl 4(%esp), %eax",
+            "    addl $8, %esp",
+            "    popl %edi",
+            "    popl %ebx",
+            "    ret",
+            ".cfi_endproc",
+            ".size set_mode_repro, .-set_mode_repro",
+        ]
+        .join("\n")
+            + "\n";
+        let result = peephole_optimize(asm, false);
+        // The bug creates "movl %eax, %eax" (self-move) because stale
+        // copy_src[edi]=eax causes %edi to be replaced with %eax.
+        // A self-move is always a no-op and should never survive optimization.
+        // Its presence is the direct smoking gun of the classify_line bug.
+        assert!(
+            !result.contains("movl %eax, %eax"),
+            "self-move 'movl %%eax, %%eax' indicates stale copy propagation bug:\n{}",
+            result
+        );
+        // The correct output stores call result (eax) to 4(%esp) BEFORE
+        // overwriting eax with ebx. The buggy output overwrites eax with
+        // ebx first, losing the call result. Verify the store to 4(%esp)
+        // happens before movl %ebx, %eax.
+        let store_pos = result.find("4(%esp)").expect("must store to 4(%esp)");
+        let ebx_pos = result.find("movl %ebx, %eax").expect("must load ebx to eax");
+        assert!(
+            store_pos < ebx_pos,
+            "call result must be stored to 4(%%esp) BEFORE eax is overwritten with ebx:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_esp_dead_store_not_eliminated_when_read_after_call() {
+        // Regression from early_serial_console (2026-02-10):
+        // eliminate_never_read_esp_in_range must not eliminate a store
+        // to a stack slot when the value is read back after the register
+        // is clobbered by a call. The push in between exercises ESP delta
+        // tracking — with only normalized offsets, a bug in delta calculation
+        // across push/pop makes the store appear dead.
+        let asm = [
+            "esp_repro:",
+            ".cfi_startproc",
+            "    pushl %ebx",
+            "    subl $16, %esp",
+            "    movl %eax, 8(%esp)",
+            "    pushl $0",
+            "    call some_func",
+            "    addl $4, %esp",
+            "    movl 8(%esp), %eax",
+            "    addl $16, %esp",
+            "    popl %ebx",
+            "    ret",
+            ".cfi_endproc",
+            ".size esp_repro, .-esp_repro",
+        ]
+        .join("\n")
+            + "\n";
+        let result = peephole_optimize(asm, false);
+        // The store to 8(%esp) is the ONLY source of the original eax value
+        // after the call clobbers it. It must survive.
+        assert!(
+            result.contains("8(%esp)"),
+            "store to 8(%esp) must survive — call clobbers eax, stack is only source:\n{}",
+            result
+        );
+    }
+
     #[test]
     fn test_symbol_store_forwarding_through_esp() {
         // Pattern: movl $symbol, N(%esp); movl N(%esp), %reg → movl $symbol, %reg
