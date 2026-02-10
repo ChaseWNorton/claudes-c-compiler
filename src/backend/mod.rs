@@ -360,6 +360,10 @@ impl Target {
     /// When the `gcc_assembler` Cargo feature is enabled, uses GCC for assembling
     /// (with a warning). When disabled (default), uses the built-in assembler.
     pub(crate) fn assemble_with_extra(&self, asm_text: &str, output_path: &str, extra_args: &[String]) -> Result<(), String> {
+        self.assemble_with_extra_opts(asm_text, output_path, extra_args, false)
+    }
+
+    pub(crate) fn assemble_with_extra_opts(&self, asm_text: &str, output_path: &str, extra_args: &[String], optimize_size: bool) -> Result<(), String> {
         // When gcc_assembler feature is enabled, use GCC for assembling
         #[cfg(feature = "gcc_assembler")]
         {
@@ -380,7 +384,7 @@ impl Target {
                 Target::Aarch64 => arm::assembler::assemble(asm_text, output_path),
                 Target::X86_64 => x86::assembler::assemble(asm_text, output_path),
                 Target::Riscv64 => riscv::assembler::assemble_with_args(asm_text, output_path, extra_args),
-                Target::I686 => i686::assembler::assemble(asm_text, output_path),
+                Target::I686 => i686::assembler::assemble_with_opts(asm_text, output_path, optimize_size),
             }
         }
     }

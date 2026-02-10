@@ -297,6 +297,7 @@ pub struct ElfWriterCore<A: X86Arch> {
     /// Current code mode (16, 32, or 64). Affects instruction encoding.
     /// Set by `.code16`, `.code32`, `.code64` directives.
     code_mode: u8,
+    optimize_size: bool,
     _arch: std::marker::PhantomData<A>,
 }
 
@@ -323,8 +324,14 @@ impl<A: X86Arch> ElfWriterCore<A> {
             deferred_skips: Vec::new(),
             deferred_byte_diffs: Vec::new(),
             code_mode: A::default_code_mode(),
+            optimize_size: false,
             _arch: std::marker::PhantomData,
         }
+    }
+
+    pub fn with_optimize_size(mut self, optimize_size: bool) -> Self {
+        self.optimize_size = optimize_size;
+        self
     }
 
     /// Build the ELF object file from parsed assembly items.
@@ -346,7 +353,9 @@ impl<A: X86Arch> ElfWriterCore<A> {
             section_type,
             flags,
             data: Vec::new(),
-            alignment: if flags & SHF_EXECINSTR != 0 && name != ".init" && name != ".fini" { 16 } else { 1 },
+            alignment: if flags & SHF_EXECINSTR != 0 && name != ".init" && name != ".fini" {
+                if self.optimize_size { 1 } else { 16 }
+            } else { 1 },
             relocations: Vec::new(),
             jumps: Vec::new(),
             align_markers: Vec::new(),

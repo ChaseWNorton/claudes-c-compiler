@@ -22,8 +22,13 @@ use elf_writer::ElfWriter;
 ///
 /// This is the default assembler (used when the `gcc_assembler` feature is disabled).
 pub fn assemble(asm_text: &str, output_path: &str) -> Result<(), String> {
+    assemble_with_opts(asm_text, output_path, false)
+}
+
+/// Assemble with optimize_size support (reduces section alignment from 16 to 1).
+pub fn assemble_with_opts(asm_text: &str, output_path: &str, optimize_size: bool) -> Result<(), String> {
     let items = parse_asm(asm_text)?;
-    let obj = ElfWriter::new();
+    let obj = ElfWriter::new().with_optimize_size(optimize_size);
     let elf_bytes = obj.build(&items)?;
     std::fs::write(output_path, &elf_bytes)
         .map_err(|e| format!("Failed to write object file: {}", e))?;

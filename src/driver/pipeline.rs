@@ -606,7 +606,7 @@ impl Driver {
                 // Default path: compile with internal codegen
                 let asm = self.compile_to_assembly(input_file)?;
                 let extra = self.build_asm_extra_args();
-                self.target.assemble_with_extra(&asm, &out_path, &extra)?;
+                self.target.assemble_with_extra_opts(&asm, &out_path, &extra, self.optimize_size)?;
             }
             self.write_dep_file(input_file, &out_path);
             if self.verbose {
@@ -660,7 +660,7 @@ impl Driver {
 
                 let tmp = TempFile::new("ccc", Self::input_stem(input_file), "o");
                 let extra = self.build_asm_extra_args();
-                self.target.assemble_with_extra(&asm, tmp.to_str(), &extra)?;
+                self.target.assemble_with_extra_opts(&asm, tmp.to_str(), &extra, self.optimize_size)?;
                 // Write dependency file for this source file. When compiling and
                 // linking in one step, GCC's -Wp,-MMD uses the .o name as the
                 // dependency target. We use the output executable path as target,
