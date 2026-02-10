@@ -1697,6 +1697,7 @@ fn combined_local_pass(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
                             safe = false;
                             break;
                         } // calls clobber EAX, ECX, EDX
+                        LineKind::Push { .. } | LineKind::Pop { .. } => break, // ESP changes invalidate offsets
                         LineKind::Label
                         | LineKind::Jmp
                         | LineKind::JmpIndirect
@@ -3312,6 +3313,7 @@ fn has_implicit_reg_usage(s: &str) -> bool {
     match bytes[0] {
         b'c' => {
             s.starts_with("cmpxchg")
+                || s == "cpuid"
                 || s == "cltd"
                 || s == "cdq"
                 || s == "cbw"
@@ -3339,7 +3341,13 @@ fn implicit_write_regs(s: &str) -> [RegId; 4] {
     }
     match bytes[0] {
         b'c' => {
-            if s == "cltd" || s == "cdq" {
+            if s == "cpuid" {
+                // cpuid writes eax, ebx, ecx, edx
+                result[0] = REG_EAX;
+                result[1] = REG_EBX;
+                result[2] = REG_ECX;
+                result[3] = REG_EDX;
+            } else if s == "cltd" || s == "cdq" {
                 result[0] = REG_EDX; // cltd sign-extends eax into edx
             } else if s.starts_with("cmpxchg8b") {
                 result[0] = REG_EAX;
@@ -8405,6 +8413,7 @@ fn forward_store_to_load(store: &mut LineStore, infos: &mut [LineInfo]) -> bool 
                     continue;
                 }
                 LineKind::Call | LineKind::Ret | LineKind::JmpIndirect => break,
+                LineKind::Push { .. } | LineKind::Pop { .. } => break, // ESP changes invalidate offsets
                 _ => {}
             }
 
@@ -8443,9 +8452,9 @@ fn forward_store_to_load(store: &mut LineStore, infos: &mut [LineInfo]) -> bool 
             }
 
             // Check if src_reg is modified by this instruction.
-            // Comparisons (Cmp kind) and pushes only read, never write GP registers.
+            // Comparisons (Cmp kind) only read, never write GP registers.
             let src_modified = match infos[k].kind {
-                LineKind::Cmp | LineKind::Push { .. } | LineKind::StoreEbp { .. } => false,
+                LineKind::Cmp | LineKind::StoreEbp { .. } => false,
                 _ => text_mentions_reg_family(sk, src_reg),
             };
             if src_modified {
