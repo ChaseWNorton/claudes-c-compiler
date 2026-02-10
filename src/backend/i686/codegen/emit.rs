@@ -2055,6 +2055,18 @@ impl ArchCodegen for I686Codegen {
         }
     }
 
+    fn emit_call_spill_fptr(&mut self, func_ptr: &Operand) {
+        if self.regparm > 0 {
+            self.operand_to_eax(func_ptr);
+            self.state.emit("    pushl %eax");
+            self.esp_adjust += 4;
+        }
+    }
+
+    fn emit_call_fptr_spill_size(&self) -> usize {
+        if self.regparm > 0 { 4 } else { 0 }
+    }
+
     fn emit_inline_asm(&mut self, ops: crate::backend::traits::AsmOperands) {
         crate::backend::inline_asm::emit_inline_asm_common(self, ops);
     }

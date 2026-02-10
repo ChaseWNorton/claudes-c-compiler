@@ -18,6 +18,7 @@ impl X86Arch for X86_64Arch {
     fn encode_instruction(
         instr: &Instruction,
         section_data_len: u64,
+        _code_mode: u8,
     ) -> Result<EncodeResult, String> {
         let mut encoder = InstructionEncoder::new();
         encoder.offset = section_data_len;

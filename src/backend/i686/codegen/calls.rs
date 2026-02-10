@@ -286,25 +286,40 @@ impl I686Codegen {
         if self.regparm == 0 {
             return; // cdecl: no register args
         }
-        // regparm register order: EAX (reg_idx 0), EDX (reg_idx 1), ECX (reg_idx 2).
-        // We must load args into registers in reverse order to avoid clobbering
-        // EAX (the accumulator) before we're done using it to load other values.
-        // Collect register args first, then emit in reverse order.
         let regparm_regs: &[&str] = &["%eax", "%edx", "%ecx"];
-        let mut reg_args: Vec<(usize, usize)> = Vec::new(); // (arg_idx, reg_idx)
+        let mut reg_args: Vec<(usize, usize)> = Vec::new();
         for (i, ac) in arg_classes.iter().enumerate() {
             if let call_abi::CallArgClass::IntReg { reg_idx } = ac {
                 reg_args.push((i, *reg_idx));
             }
         }
-        // Emit in reverse order so we load into edx/ecx before eax
-        // (since operand_to_eax uses eax as accumulator).
         for &(arg_i, reg_idx) in reg_args.iter().rev() {
             if reg_idx < regparm_regs.len() {
                 let dest_reg = regparm_regs[reg_idx];
                 if dest_reg == "%eax" {
+                    // Force load for %eax too - reg_cache may be stale
+                    if let Operand::Value(v) = &args[arg_i] {
+                        if let Some(&phys) = self.reg_assignments.get(&v.0) {
+                            let src = phys_reg_name(phys);
+                            if src != "eax" {
+                                emit!(self.state, "    movl %{}, %eax", src);
+                            }
+                            self.state.reg_cache.invalidate_acc();
+                            continue;
+                        }
+                    }
                     self.operand_to_eax(&args[arg_i]);
                 } else {
+                    if let Operand::Value(v) = &args[arg_i] {
+                        let has_reg = self.reg_assignments.get(&v.0).copied();
+                        if let Some(phys) = has_reg {
+                            let src = phys_reg_name(phys);
+                            emit!(self.state, "    movl %{}, %eax", src);
+                            emit!(self.state, "    movl %eax, {}", dest_reg);
+                            self.state.reg_cache.invalidate_acc();
+                            continue;
+                        }
+                    }
                     self.operand_to_eax(&args[arg_i]);
                     emit!(self.state, "    movl %eax, {}", dest_reg);
                     self.state.reg_cache.invalidate_acc();
@@ -316,26 +331,43 @@ impl I686Codegen {
     pub(super) fn emit_call_instruction_impl(&mut self, direct_name: Option<&str>, func_ptr: Option<&Operand>,
                              indirect: bool, _stack_arg_space: usize) {
         let prev_tag = if self.cost_map { Some(self.set_cost_tag("CALL")) } else { None };
+        // Build regparm annotation so the peephole knows which registers are
+        // live arguments at this call site and doesn't eliminate their setup.
+        let regparm_annotation = if self.regparm > 0 {
+            let regs = ["%eax", "%edx", "%ecx"];
+            let used: Vec<&str> = regs[..self.regparm as usize].to_vec();
+            format!("    # regparm {}", used.join(" "))
+        } else {
+            String::new()
+        };
         if let Some(name) = direct_name {
             if self.state.needs_plt(name) {
-                emit!(self.state, "    call {}@PLT", name);
+                emit!(self.state, "    call {}@PLT{}", name, regparm_annotation);
             } else {
-                emit!(self.state, "    call {}", name);
+                emit!(self.state, "    call {}{}", name, regparm_annotation);
             }
         } else if indirect {
-            if let Some(fptr) = func_ptr {
-                self.operand_to_eax(fptr);
+            if self.regparm > 0 {
+                // Fptr was spilled to stack in emit_call_spill_fptr.
+                // After stack args setup, it sits at stack_arg_space(%esp).
+                emit!(self.state, "    call *{}(%esp){}", _stack_arg_space, regparm_annotation);
+            } else {
+                if let Some(fptr) = func_ptr {
+                    self.operand_to_eax(fptr);
+                }
+                self.state.emit("    call *%eax");
             }
-            self.state.emit("    call *%eax");
         }
         if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
     }
 
-    pub(super) fn emit_call_cleanup_impl(&mut self, stack_arg_space: usize, _f128_temp_space: usize, _indirect: bool) {
-        if stack_arg_space > 0 {
+    pub(super) fn emit_call_cleanup_impl(&mut self, stack_arg_space: usize, _f128_temp_space: usize, indirect: bool) {
+        let fptr_spill = if indirect && self.regparm > 0 { 4usize } else { 0 };
+        let total = stack_arg_space + fptr_spill;
+        if total > 0 {
             let prev_tag = if self.cost_map { Some(self.set_cost_tag("CALL_SETUP")) } else { None };
-            emit!(self.state, "    addl ${}, %esp", stack_arg_space);
-            self.esp_adjust -= stack_arg_space as i64;
+            emit!(self.state, "    addl ${}, %esp", total);
+            self.esp_adjust -= total as i64;
             if let Some(prev) = prev_tag { self.restore_cost_tag(prev); }
         }
     }

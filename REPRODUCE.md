@@ -9,16 +9,26 @@ measurements.
 
 **Current results (2026-02-09):**
 
+> **CORRECTION (2026-02-09):** The code-only and linked _end numbers below were measured
+> WITHOUT `.code16gcc` prefix insertion. CCC's assembler had the `.code16gcc` infrastructure
+> (parser, state tracking, encoder field) but the encoder field was **never wired up** —
+> `code16gcc: bool` was always `false`. No 0x66/0x67 override prefixes were inserted.
+> The resulting code was smaller but **could not execute in 16-bit real mode** (immediate
+> #UD Invalid Opcode on boot attempt). GCC's numbers INCLUDE these prefix bytes because
+> GAS always handled `.code16gcc` correctly.
+>
+> With correct `.code16gcc` prefix insertion: **_end = 0x8970 = 35,184 bytes (OVER by 3,184).**
+> The 32KB goal is NOT yet achieved.
+
 | Config | Code-only (21 files) | Linked _end | Status |
 |--------|---------------------|-------------|--------|
-| CCC -Os -mregparm=3, full peephole suite | **23,551 bytes** | **31,120 (0x7990)** | **UNDER 32KB** |
-| CCC -Os -mregparm=3, IRC + clobber only | 24,271 bytes | 35,216 (0x8990) | Over (cliff) |
-| CCC -Os (no regparm), IRC + clobber only | 27,037 bytes | 35,216 (0x8990) | Over (cliff) |
-| GCC -Os -mregparm=3 (reference) | ~10,500 bytes | 22,976 (0x59C0) | Under |
+| CCC -Os -mregparm=3, full peephole (NO PREFIXES) | 23,551 bytes | 31,120 (0x7990) | ~~UNDER~~ **WRONG** |
+| CCC -Os -mregparm=3, full peephole (WITH PREFIXES) | ~30,400 bytes | **35,184 (0x8970)** | **OVER by 3,184** |
+| GCC -Os -mregparm=3 (reference, includes prefixes) | ~10,500 bytes | 22,976 (0x59C0) | Under |
 
 32KB limit = 32,768 bytes (0x8000).
 
-**_end = 0x7990 = 31,120 bytes — 1,648 bytes of margin under the 32KB limit.**
+**_end = 0x8970 = 35,184 bytes — 3,184 bytes OVER the 32KB limit. More work needed.**
 
 ### Optimization journey
 

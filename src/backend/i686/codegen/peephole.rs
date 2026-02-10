@@ -497,11 +497,24 @@ fn parse_ebp_offset_in_line(s: &str) -> i32 {
 /// Parse the destination register of a generic instruction.
 /// For two-operand instructions (AT&T syntax), the destination is the last operand.
 fn parse_dest_reg(s: &str) -> RegId {
-    // Find the last %reg
+    // Find the last %reg (two-operand: after last comma)
     if let Some(comma) = s.rfind(',') {
         let after = s[comma + 1..].trim();
         if after.starts_with('%') && !after.contains('(') {
             return register_family(after);
+        }
+    }
+    // Single-operand RMW instructions: notl, negl, incl, decl, etc.
+    // The sole operand is both source and destination.
+    if let Some(space) = s.find(' ') {
+        let op = &s[..space];
+        let operand = s[space + 1..].trim();
+        if matches!(op, "notl" | "negl" | "incl" | "decl" | "notw" | "negw" | "incw" | "decw"
+                     | "notb" | "negb" | "incb" | "decb")
+            && operand.starts_with('%')
+            && !operand.contains('(')
+        {
+            return register_family(operand);
         }
     }
     REG_NONE
@@ -624,7 +637,20 @@ fn implicit_reg_use(s: &str, reg: RegId) -> bool {
 
 fn classify_line(raw: &str) -> LineInfo {
     let trim_start = raw.len() - raw.trim_start().len();
-    let s = &raw[trim_start..];
+    let s_full = &raw[trim_start..];
+
+    if s_full.is_empty() {
+        return line_info(LineKind::Empty, trim_start as u16);
+    }
+
+    // Strip trailing GAS comments (# ...) before classification.
+    // Comments break register parsing (e.g., "movl %ebx, %eax    # PHI_COPY"
+    // would cause register_family to see "%eax    # PHI_COPY" → REG_NONE).
+    let s = if let Some(hash_pos) = s_full.find("    #") {
+        s_full[..hash_pos].trim_end()
+    } else {
+        s_full
+    };
 
     if s.is_empty() {
         return line_info(LineKind::Empty, trim_start as u16);
@@ -4907,9 +4933,25 @@ fn eliminate_never_read_esp_in_range(
     start: usize,
     end: usize,
 ) {
-    // Collect all ESP offsets that are read (loaded) anywhere in the function.
-    let mut read_offsets: Vec<i32> = Vec::new();
+    // Collect ESP offsets that are read anywhere in the function, using BOTH
+    // raw offsets and ESP-delta-normalized offsets.
+    //
+    // Why both? Linear delta tracking through assembly with branches is unsound
+    // — after scanning through an epilogue (addl/pop sequence), the delta is
+    // wrong for later blocks reached from the prologue. Raw offsets handle that
+    // case (store at 0(%esp), load at 0(%esp) on a different path).
+    //
+    // But raw offsets miss the push-shift case: store at 0(%esp) before a push,
+    // load at 4(%esp) after the push — same physical slot, different raw offset.
+    // Normalized offsets handle that.
+    //
+    // A store is eliminated only if NEITHER its raw nor normalized offset
+    // appears in any read set. This is conservative but correct.
+    let mut raw_reads: Vec<i32> = Vec::new();
+    let mut normalized_reads: Vec<i32> = Vec::new();
+    let mut store_entries: Vec<(usize, i32, i32)> = Vec::new(); // (line, raw_off, norm_off)
     let mut esp_addr_taken = false;
+    let mut esp_delta: i32 = 0;
 
     for i in start..end {
         if infos[i].is_nop() {
@@ -4918,11 +4960,59 @@ fn eliminate_never_read_esp_in_range(
         let s = trimmed(store, &infos[i], i);
 
         // leal N(%esp), %reg — address of stack slot escapes, bail out.
-        // This is the only way a register can point to a stack slot.
-        // Regular indirect memory (e.g. (%ecx)) accesses heap/data, not stack.
         if s.starts_with("leal ") && s.contains("(%esp)") {
             esp_addr_taken = true;
             break;
+        }
+
+        // Track ESP delta from push/pop.
+        // Push reads THEN decrements ESP; record any ESP-relative read first.
+        if matches!(infos[i].kind, LineKind::Push { .. }) {
+            if s.contains("(%esp)") {
+                if let Some(pos) = s.find("(%esp)") {
+                    let before = &s[..pos];
+                    let off_start = before
+                        .rfind(|c: char| !c.is_ascii_digit() && c != '-')
+                        .map(|p| p + 1)
+                        .unwrap_or(0);
+                    let off_str = &before[off_start..];
+                    let off = if off_str.is_empty() {
+                        0
+                    } else {
+                        off_str.parse::<i32>().unwrap_or(i32::MIN)
+                    };
+                    if off != i32::MIN {
+                        raw_reads.push(off);
+                        normalized_reads.push(off + esp_delta);
+                    }
+                }
+            }
+            esp_delta -= 4;
+            continue;
+        }
+        if matches!(infos[i].kind, LineKind::Pop { .. }) {
+            esp_delta += 4;
+            continue;
+        }
+
+        // Track ESP delta from subl/addl $N, %esp
+        if s.starts_with("subl $") && s.ends_with(", %esp") {
+            if let Ok(n) = s[6..s.len() - 6].parse::<i32>() {
+                esp_delta -= n;
+            } else {
+                esp_addr_taken = true;
+                break;
+            }
+            continue;
+        }
+        if s.starts_with("addl $") && s.ends_with(", %esp") {
+            if let Ok(n) = s[6..s.len() - 6].parse::<i32>() {
+                esp_delta += n;
+            } else {
+                esp_addr_taken = true;
+                break;
+            }
+            continue;
         }
 
         if !s.contains("(%esp)") {
@@ -4932,33 +5022,38 @@ fn eliminate_never_read_esp_in_range(
         // Explicit load: movl N(%esp), %reg
         if let Some((off_str, _)) = parse_load_from_esp(s) {
             if let Ok(off) = off_str.parse::<i32>() {
-                read_offsets.push(off);
+                raw_reads.push(off);
+                normalized_reads.push(off + esp_delta);
             } else if off_str.is_empty() {
-                read_offsets.push(0);
+                raw_reads.push(0);
+                normalized_reads.push(esp_delta);
             }
+            continue;
+        }
+
+        // Pure store: movl %reg, N(%esp)
+        if let Some(store_off) = parse_esp_store_offset(s) {
+            store_entries.push((i, store_off, store_off + esp_delta));
             continue;
         }
 
         // For any other instruction referencing N(%esp), if it's NOT a pure store,
         // it's a read (e.g., cmpl $0, N(%esp) or addl %eax, N(%esp)).
-        if parse_esp_store_offset(s).is_none() {
-            // Not a pure store — this is a read of some ESP slot.
-            // Parse the offset from the (%esp) reference.
-            if let Some(pos) = s.find("(%esp)") {
-                let before = &s[..pos];
-                let off_start = before
-                    .rfind(|c: char| !c.is_ascii_digit() && c != '-')
-                    .map(|p| p + 1)
-                    .unwrap_or(0);
-                let off_str = &before[off_start..];
-                let off = if off_str.is_empty() {
-                    0
-                } else {
-                    off_str.parse::<i32>().unwrap_or(i32::MIN)
-                };
-                if off != i32::MIN {
-                    read_offsets.push(off);
-                }
+        if let Some(pos) = s.find("(%esp)") {
+            let before = &s[..pos];
+            let off_start = before
+                .rfind(|c: char| !c.is_ascii_digit() && c != '-')
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            let off_str = &before[off_start..];
+            let off = if off_str.is_empty() {
+                0
+            } else {
+                off_str.parse::<i32>().unwrap_or(i32::MIN)
+            };
+            if off != i32::MIN {
+                raw_reads.push(off);
+                normalized_reads.push(off + esp_delta);
             }
         }
     }
@@ -4967,20 +5062,12 @@ fn eliminate_never_read_esp_in_range(
         return;
     }
 
-    // Now remove stores to ESP offsets that are never read
-    for i in start..end {
-        if infos[i].is_nop() {
-            continue;
-        }
-        if !matches!(infos[i].kind, LineKind::Other { .. }) {
-            continue;
-        }
-
-        let s = trimmed(store, &infos[i], i);
-        if let Some(store_off) = parse_esp_store_offset(s) {
-            if !read_offsets.contains(&store_off) {
-                infos[i].kind = LineKind::Nop;
-            }
+    // Remove stores only if NEITHER raw nor normalized offset matches any read.
+    // Raw handles control-flow cases (linear delta is wrong after epilogues).
+    // Normalized handles ESP-shift cases (push between store and load).
+    for &(idx, raw_off, norm_off) in &store_entries {
+        if !raw_reads.contains(&raw_off) && !normalized_reads.contains(&norm_off) {
+            infos[idx].kind = LineKind::Nop;
         }
     }
 }
@@ -5905,6 +5992,11 @@ fn is_reg_dead_from_no_jmp(store: &LineStore, infos: &[LineInfo], from: usize, r
                 return false
             }
             LineKind::Call => {
+                // Check if reg is referenced in the call line (e.g. regparm annotation)
+                let s = trimmed(store, &infos[k], k);
+                if line_references_reg(s, reg) {
+                    return false; // reg is a regparm argument
+                }
                 if is_caller_saved(reg) {
                     return true;
                 }
@@ -6108,6 +6200,11 @@ fn is_reg_dead_from_inner(
             LineKind::JmpIndirect => return false,
 
             LineKind::Call => {
+                // Check if reg is referenced in the call line (e.g. regparm annotation)
+                let s = trimmed(store, &infos[k], k);
+                if line_references_reg(s, reg) {
+                    return false; // reg is a regparm argument
+                }
                 // Calls clobber caller-saved regs
                 if is_caller_saved(reg) {
                     return true;
@@ -6865,8 +6962,19 @@ fn fold_copy_op_copy(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
                 // The OPs on %tmp are fine — they'll be rewritten to use %C.
                 // But other instructions must not mention %C.
                 if k == first_op_idx || additional_ops.contains(&k) {
-                    // This is an OP — check only that %C doesn't appear in the source operand
-                    // (it shouldn't, since we're about to overwrite %C)
+                    // This is an OP on %tmp — check that %C doesn't appear as a
+                    // source operand.  If the OP reads %C and we rewrite %tmp → %C,
+                    // we'd create a self-reference (e.g. xorl %C, %C = 0).
+                    let op_s = trimmed(store, &infos[k], k);
+                    // Extract the source portion (everything before the last comma)
+                    // e.g. "xorl %edx, %ebx" → source portion is "xorl %edx"
+                    if let Some(comma) = op_s.rfind(',') {
+                        let src_part = &op_s[..comma];
+                        if text_mentions_reg_family(src_part, copy_target_reg) {
+                            c_safe = false;
+                            break;
+                        }
+                    }
                     continue;
                 }
                 if text_mentions_reg_family(s, copy_target_reg) {
@@ -8862,9 +8970,32 @@ fn eliminate_unused_frames(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
             }
             let line = trimmed(store, &infos[k], k);
 
-            // Check for addl $frame_size, %esp (epilogue)
+            // Check for addl $frame_size, %esp (epilogue only).
+            // Must verify this is actually an epilogue addl — only pop/ret/cfi/nop
+            // instructions between it and function end. Mid-function addl (e.g.,
+            // fptr spill cleanup for indirect calls) must NOT be matched.
             if line == format!("addl ${}, %esp", frame_size) {
-                addl_esp_indices.push(k);
+                let mut is_epilogue = true;
+                for m in (k + 1)..func_end {
+                    if infos[m].is_nop() || infos[m].kind == LineKind::Empty {
+                        continue;
+                    }
+                    let ml = trimmed(store, &infos[m], m);
+                    if ml.starts_with("popl ")
+                        || ml == "ret"
+                        || ml.starts_with(".cfi_")
+                        || ml.starts_with(".size ")
+                        || ml.starts_with("# ")
+                    {
+                        continue;
+                    }
+                    // Non-epilogue instruction found after this addl
+                    is_epilogue = false;
+                    break;
+                }
+                if is_epilogue {
+                    addl_esp_indices.push(k);
+                }
                 continue;
             }
 
@@ -8879,6 +9010,8 @@ fn eliminate_unused_frames(store: &mut LineStore, infos: &mut [LineInfo]) -> boo
                     .map(|p| p + 1)
                     .unwrap_or(0);
                 let off_str = &before[off_start..];
+                // Strip leading '*' from indirect call/memory syntax (e.g., call *0(%esp))
+                let off_str = off_str.strip_prefix('*').unwrap_or(off_str);
                 if off_str.is_empty() {
                     // 0(%esp) or (%esp) — offset 0, which is within the frame
                     uses_frame_slot = true;
@@ -9600,6 +9733,8 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
         .map(|i| classify_line(store.get(i)))
         .collect();
 
+    let dump_fn = |_store: &LineStore, _infos: &[LineInfo], _phase: &str| {};
+
     // Phase 1: Iterative local passes
     let mut changed = true;
     let mut pass_count = 0;
@@ -9607,15 +9742,22 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
         changed = false;
         changed |= combined_local_pass(&mut store, &mut infos);
         pass_count += 1;
+        dump_fn(&store, &infos, &format!("phase1_iter{}", pass_count));
     }
-
+    dump_fn(&store, &infos, "P1_end");
     // Phase 2: Global passes (run once)
     let global_changed = global_store_forwarding(&mut store, &mut infos);
+    dump_fn(&store, &infos, "P2_global_store_fwd");
     let global_changed = global_changed | global_esp_store_forwarding(&mut store, &mut infos);
+    dump_fn(&store, &infos, "P2_global_esp_store_fwd");
     let global_changed = global_changed | propagate_register_copies(&mut store, &mut infos);
+    dump_fn(&store, &infos, "P2_propagate_reg_copies");
     let global_changed = global_changed | eliminate_dead_reg_moves(&store, &mut infos);
+    dump_fn(&store, &infos, "P2_elim_dead_reg_moves");
     let global_changed = global_changed | eliminate_dead_stores(&store, &mut infos);
+    dump_fn(&store, &infos, "P2_elim_dead_stores");
     let global_changed = global_changed | eliminate_dead_esp_stores(&store, &mut infos);
+    dump_fn(&store, &infos, "P2_elim_dead_esp_stores");
     let global_changed = global_changed | fuse_compare_and_branch(&mut store, &mut infos);
     let global_changed = global_changed | fold_mask_test_branch(&mut store, &mut infos);
     let global_changed = global_changed | eliminate_redundant_test_after_alu(&mut store, &mut infos);
@@ -9624,6 +9766,8 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
     let global_changed =
         global_changed | eliminate_redundant_condition_tests(&mut store, &mut infos);
     let global_changed = global_changed | fold_absolute_addressing(&mut store, &mut infos);
+
+    dump_fn(&store, &infos, "P2_end");
 
     // Phase 3: Local cleanup after global passes
     if global_changed {
@@ -9645,6 +9789,8 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
         }
     }
 
+    dump_fn(&store, &infos, "P3_end");
+
     // Phase 3.5: Late optimizations after cleanup stabilizes.
     // These run outside the Phase 3 loop to avoid cascading interactions.
     // fold_copy_op_copy runs before fold_load_into_alu so that copy-op-copyback
@@ -9655,8 +9801,12 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
     {
         let mut late_changed = false;
         late_changed |= fold_dest_through_stack(&mut store, &mut infos);
+        dump_fn(&store, &infos,"3.5_fold_dest_through_stack");
         late_changed |= fold_flag_forward(&mut store, &mut infos);
+        dump_fn(&store, &infos,"3.5_fold_flag_forward");
         late_changed |= fold_dest_forward(&mut store, &mut infos);
+        dump_fn(&store, &infos,"3.5_fold_dest_forward");
+        dump_fn(&store, &infos, "P3.5_pre_fold_copy_op_copy");
         // Iterate fold_copy_op_copy until convergence (max 4)
         for _ in 0..4 {
             if !fold_copy_op_copy(&mut store, &mut infos) {
@@ -9664,10 +9814,14 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
             }
             late_changed = true;
             eliminate_dead_reg_moves(&store, &mut infos);
+            dump_fn(&store, &infos,"3.5_fold_copy_op_copy");
         }
         late_changed |= fold_load_op_store_to_mem(&mut store, &mut infos);
+        dump_fn(&store, &infos,"3.5_fold_load_op_store_to_mem");
         late_changed |= fold_load_into_alu(&mut store, &mut infos);
+        dump_fn(&store, &infos,"3.5_fold_load_into_alu");
         late_changed |= eliminate_dead_alu_writes(&store, &mut infos);
+        dump_fn(&store, &infos,"3.5_eliminate_dead_alu_writes");
         if late_changed {
             combined_local_pass(&mut store, &mut infos);
             eliminate_dead_reg_moves(&store, &mut infos);
@@ -9688,9 +9842,13 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
         }
     }
 
+    dump_fn(&store, &infos,"phase3.5_end");
+
     // Phase 3.75: Forward store-to-load across branches.
     // Must run before dead store elimination so forwarded loads make stores dead.
     forward_store_to_load(&mut store, &mut infos);
+
+    dump_fn(&store, &infos,"phase3.75_end");
 
     // Phase 4: Dead and never-read store elimination
     eliminate_dead_stack_stores(&store, &mut infos);
@@ -9779,12 +9937,15 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
         }
     }
 
+    dump_fn(&store, &infos,"phase4_end");
+
     // Phase 5: Callee-saved register elimination
     // Run after all other passes so dead writes to callee-saved regs are already removed.
     eliminate_unused_callee_saves(&mut store, &mut infos);
-
+    dump_fn(&store, &infos,"phase5_callee_saves");
     // Phase 6: Eliminate unused stack frames
     eliminate_unused_frames(&mut store, &mut infos);
+    dump_fn(&store, &infos,"phase6_unused_frames");
 
     // Phase 7: Merge duplicate epilogues
     merge_duplicate_epilogues(&mut store, &mut infos);

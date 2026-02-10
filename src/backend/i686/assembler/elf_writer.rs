@@ -23,9 +23,11 @@ impl X86Arch for I686Arch {
     fn encode_instruction(
         instr: &Instruction,
         section_data_len: u64,
+        code_mode: u8,
     ) -> Result<EncodeResult, String> {
         let mut encoder = InstructionEncoder::new();
         encoder.offset = section_data_len;
+        encoder.code16gcc = code_mode == 16;
         encoder.encode(instr)?;
 
         let instr_len = encoder.bytes.len();
@@ -46,7 +48,11 @@ impl X86Arch for I686Arch {
                             already_short: true,
                         })
                     } else {
-                        let expected_len = if is_conditional { 6 } else { 5 };
+                        // In .code16gcc mode, 0x66 prefix adds 1 byte to long jumps:
+                        //   jmp:  5 (E9 rel32) → 6 (66 E9 rel32)
+                        //   jcc:  6 (0F 8x rel32) → 7 (66 0F 8x rel32)
+                        let prefix_extra = if code_mode == 16 { 1 } else { 0 };
+                        let expected_len = if is_conditional { 6 + prefix_extra } else { 5 + prefix_extra };
                         if instr_len == expected_len {
                             Some(JumpDetection {
                                 is_conditional,

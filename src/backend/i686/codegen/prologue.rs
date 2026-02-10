@@ -265,7 +265,7 @@ impl I686Codegen {
         // Used to handle the case where param alloca was eliminated by mem2reg
         // but the register allocator assigned a callee-saved register.
         let mut paramref_dests: Vec<Option<Value>> = vec![None; func.params.len()];
-        if self.is_fastcall {
+        if self.is_fastcall || self.regparm > 0 {
             for block in &func.blocks {
                 for inst in &block.instructions {
                     if let Instruction::ParamRef { dest, param_idx, .. } = inst {
@@ -283,7 +283,7 @@ impl I686Codegen {
         // Build a map from physical register -> list of param indices that use it,
         // so we can detect when two params share the same callee-saved register.
         let mut reg_to_params: crate::common::fx_hash::FxHashMap<u8, Vec<usize>> = crate::common::fx_hash::FxHashMap::default();
-        if self.is_fastcall {
+        if self.is_fastcall || self.regparm > 0 {
             for (i, _) in func.params.iter().enumerate() {
                 if let Some(paramref_dest) = paramref_dests[i] {
                     if let Some(&phys_reg) = self.reg_assignments.get(&paramref_dest.0) {
@@ -335,6 +335,35 @@ impl I686Codegen {
                         fastcall_reg_idx += 1;
                         continue;
                     }
+                }
+            }
+
+            // Pre-store for regparm register params with eliminated alloca.
+            // Same logic as fastcall pre-store: save the ABI register to the
+            // assigned physical register or spill slot before it gets clobbered.
+            if let ParamClass::IntReg { reg_idx } = class {
+                let regparm_regs = ["%eax", "%edx", "%ecx"];
+                let has_alloca_slot = find_param_alloca(func, i)
+                    .and_then(|(dest, _)| self.state.get_slot(dest.0))
+                    .is_some();
+                if !has_alloca_slot {
+                    let src_reg = regparm_regs[reg_idx];
+                    if let Some(paramref_dest) = paramref_dests[i] {
+                        if let Some(&phys_reg) = self.reg_assignments.get(&paramref_dest.0) {
+                            let shared = reg_to_params.get(&phys_reg.0)
+                                .is_some_and(|users| users.len() > 1);
+                            if !shared {
+                                let dest_reg = phys_reg_name(phys_reg);
+                                emit!(self.state, "    movl {}, %{}", src_reg, dest_reg);
+                                self.state.param_pre_stored.insert(i);
+                            }
+                        } else if let Some(slot) = self.state.get_slot(paramref_dest.0) {
+                            let slot_ref = self.slot_ref(slot);
+                            emit!(self.state, "    movl {}, {}", src_reg, slot_ref);
+                            self.state.param_pre_stored.insert(i);
+                        }
+                    }
+                    continue;
                 }
             }
 
@@ -526,11 +555,53 @@ impl I686Codegen {
     pub(super) fn emit_param_ref_impl(&mut self, dest: &Value, param_idx: usize, ty: IrType) {
         use crate::backend::call_abi::ParamClass;
 
-        // If this param was pre-stored in the prologue (fastcall register param
-        // with eliminated alloca), the value is already in the correct physical
-        // register or stack slot. No code generation needed.
+        // If this param was pre-stored in the prologue (fastcall/regparm register
+        // param with eliminated alloca), the value is already in the correct
+        // physical register or stack slot. No code generation needed.
         if self.state.param_pre_stored.contains(&param_idx) {
             return;
+        }
+
+        // For regparm IntReg params with alloca slots: the value was stored from
+        // the ABI register to the alloca slot in emit_store_params. Load from
+        // that slot (NOT from the stack param offset, since regparm params
+        // aren't on the stack at all).
+        if param_idx < self.state.param_classes.len() {
+            if let ParamClass::IntReg { .. } = self.state.param_classes[param_idx] {
+                if param_idx < self.state.param_alloca_slots.len() {
+                    if let Some((alloca_slot, _alloca_ty)) = self.state.param_alloca_slots[param_idx] {
+                        if let Some(dest_slot) = self.state.get_slot(dest.0) {
+                            if dest_slot.0 == alloca_slot.0 {
+                                // Same slot — already populated by emit_store_params.
+                                if let Some(phys) = self.dest_reg(dest) {
+                                    let reg = phys_reg_name(phys);
+                                    let load_instr = self.mov_load_for_type(ty);
+                                    let src_ref = self.slot_ref(alloca_slot);
+                                    emit!(self.state, "    {} {}, %eax", load_instr, src_ref);
+                                    emit!(self.state, "    movl %eax, %{}", reg);
+                                    self.state.reg_cache.invalidate_acc();
+                                }
+                                return;
+                            }
+                            // Different slot — copy from alloca to dest.
+                            let load_instr = self.mov_load_for_type(ty);
+                            let src_ref = self.slot_ref(alloca_slot);
+                            emit!(self.state, "    {} {}, %eax", load_instr, src_ref);
+                            self.store_eax_to(dest);
+                            return;
+                        }
+                        // No dest slot (accumulator-based codegen): load the
+                        // regparm value from the alloca slot into %eax.
+                        let load_instr = self.mov_load_for_type(ty);
+                        let src_ref = self.slot_ref(alloca_slot);
+                        emit!(self.state, "    {} {}, %eax", load_instr, src_ref);
+                        self.store_eax_to(dest);
+                        return;
+                    }
+                }
+                // IntReg param with no alloca and no pre-store — shouldn't happen,
+                // but fall through to default handling.
+            }
         }
 
         if param_idx < self.state.param_alloca_slots.len() {

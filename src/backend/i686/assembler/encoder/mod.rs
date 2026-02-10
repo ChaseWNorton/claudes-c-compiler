@@ -81,9 +81,8 @@ pub struct InstructionEncoder {
     /// Current offset within the section.
     pub offset: u64,
     /// Whether we are in .code16gcc mode (16-bit real mode with 32-bit instructions).
-    /// Currently .code16gcc is handled at the assembly text level (prepended to asm output);
-    /// this field is infrastructure for future per-instruction operand size overrides.
-    #[allow(dead_code)]
+    /// When true, 0x66 (operand-size override) and 0x67 (address-size override)
+    /// prefixes are inserted before instructions that use 32-bit operands/addresses.
     pub code16gcc: bool,
 }
 
@@ -98,6 +97,13 @@ impl InstructionEncoder {
     }
 
     /// Encode a single instruction and append bytes.
+    ///
+    /// In `.code16gcc` mode, the encoder uses a **post-processing** strategy:
+    /// 1. Encode the instruction as if in normal 32-bit mode
+    /// 2. Toggle 0x66 operand-size prefixes (the meaning of 0x66 reverses
+    ///    between 16-bit and 32-bit modes — it's a toggle, not absolute)
+    /// 3. Add 0x67 address-size override for 32-bit addressing
+    /// 4. Fix up relocation offsets for any inserted/removed prefix bytes
     pub fn encode(&mut self, instr: &Instruction) -> Result<(), String> {
         let start_len = self.bytes.len();
 
@@ -111,13 +117,233 @@ impl InstructionEncoder {
             }
         }
 
-        let result = self.encode_mnemonic(instr);
+        if self.code16gcc {
+            let prefix_end = self.bytes.len();
+            let reloc_start = self.relocations.len();
 
-        if result.is_ok() {
+            // Encode in 32-bit mode first
+            self.encode_mnemonic(instr)?;
+
+            let mut adjustment: i32 = 0;
+
+            // Toggle 0x66 operand-size prefix for .code16gcc mode.
+            // In 16-bit real mode, 0x66 means "use 32-bit operand size" (opposite
+            // of 32-bit mode where 0x66 means "use 16-bit operand size").
+            if self.needs_operand_size_prefix(&instr.mnemonic) {
+                // 32-bit instruction: needs 0x66 to override 16-bit default
+                self.bytes.insert(prefix_end, 0x66);
+                adjustment += 1;
+            } else if self.is_16bit_gp_with_prefix(&instr.mnemonic) {
+                // 16-bit GP instruction encoded with 0x66 in 32-bit mode:
+                // strip the 0x66 because 16-bit is the default in .code16gcc
+                if self.bytes.get(prefix_end) == Some(&0x66) {
+                    self.bytes.remove(prefix_end);
+                    adjustment -= 1;
+                }
+            }
+
+            // Add 0x67 for 32-bit addressing (32-bit address regs like EBP/ESP/ESI/EDI)
+            if self.needs_address_size_prefix(&instr.mnemonic, &instr.operands) {
+                self.bytes.insert(prefix_end, 0x67);
+                adjustment += 1;
+            }
+
+            // Fix relocation offsets for inserted/removed prefix bytes
+            if adjustment != 0 {
+                for reloc in &mut self.relocations[reloc_start..] {
+                    reloc.offset = (reloc.offset as i64 + adjustment as i64) as u64;
+                }
+            }
+
             self.offset += (self.bytes.len() - start_len) as u64;
+            Ok(())
+        } else {
+            // Normal 32-bit mode encoding
+            let result = self.encode_mnemonic(instr);
+            if result.is_ok() {
+                self.offset += (self.bytes.len() - start_len) as u64;
+            }
+            result
+        }
+    }
+
+    /// Check if a mnemonic needs a 0x66 operand-size override in .code16gcc mode.
+    /// Returns true for 32-bit operations that need the prefix to override
+    /// the 16-bit default operand size.
+    fn needs_operand_size_prefix(&self, mnemonic: &str) -> bool {
+        // 8-bit operations never need 0x66
+        if matches!(mnemonic,
+            "movb" | "addb" | "subb" | "andb" | "orb" | "xorb" | "cmpb" | "testb"
+            | "negb" | "notb" | "incb" | "decb" | "shlb" | "shrb" | "sarb" | "rolb" | "rorb"
+            | "xchgb" | "cmpxchgb" | "xaddb" | "adcb"
+            | "movsb" | "stosb" | "cmpsb" | "scasb" | "lodsb" | "insb" | "outsb"
+            | "outb" | "inb"
+        ) {
+            return false;
         }
 
-        result
+        // 16-bit GP operations (handled by is_16bit_gp_with_prefix for stripping)
+        if self.is_16bit_gp_with_prefix(mnemonic) {
+            return false;
+        }
+
+        // Conditional set (setcc) is always 8-bit
+        if mnemonic.starts_with("set") {
+            return false;
+        }
+
+        // Instructions that are inherently size-independent (no 0x66 needed)
+        if matches!(mnemonic,
+            "nop" | "ud2" | "pause" | "mfence" | "lfence" | "sfence"
+            | "hlt" | "int" | "cpuid" | "rdtsc" | "rdtscp" | "xgetbv"
+            | "syscall" | "sysenter" | "emms" | "clflush"
+            | "rdmsr" | "wrmsr" | "rdpmc" | "wbinvd" | "invlpg"
+            | "lock" | "rep" | "repe" | "repz" | "repnz" | "repne"
+            | "cld" | "std" | "cli" | "sti" | "clts" | "stc" | "clc" | "cmc"
+            | "sahf" | "lahf"
+            | "endbr32" | "endbr64"
+            | "verw" | "lsl"
+        ) {
+            return false;
+        }
+
+        // SSE/x87 instructions — the 0x66 in their encoding is a mandatory
+        // opcode prefix, NOT an operand-size override. Don't touch it.
+        if matches!(mnemonic,
+            "movss" | "movsd" | "movd" | "movq" | "movdqu" | "movupd" | "movups"
+            | "movaps" | "movdqa" | "movlps" | "movhps" | "movlpd" | "movhpd"
+            | "movnti" | "movntil" | "movntdq" | "movmskps" | "movmskpd"
+            | "movntpd" | "movapd"
+            | "addsd" | "subsd" | "mulsd" | "divsd" | "addss" | "subss" | "mulss" | "divss"
+            | "addpd" | "subpd" | "mulpd" | "divpd" | "addps" | "subps" | "mulps" | "divps"
+            | "sqrtsd" | "sqrtss" | "sqrtps" | "sqrtpd" | "rsqrtss" | "rsqrtps"
+            | "rcpss" | "rcpps" | "maxsd" | "maxss" | "minsd" | "minss"
+            | "maxpd" | "maxps" | "minpd" | "minps"
+            | "ucomisd" | "ucomiss" | "comisd" | "comiss"
+            | "xorpd" | "xorps" | "andpd" | "andps" | "andnpd" | "andnps" | "orpd" | "orps"
+            | "unpcklps" | "unpckhps" | "unpcklpd" | "unpckhpd"
+            | "shufps" | "shufpd" | "cmpsd" | "cmpss" | "cmppd" | "cmpps"
+            | "pclmulqdq" | "aesenc" | "aesenclast" | "aesdec" | "aesdeclast"
+            | "aesimc" | "aeskeygenassist"
+            | "cvtsd2ss" | "cvtss2sd" | "cvtsi2sdl" | "cvtsi2sd" | "cvtsi2ssl" | "cvtsi2ss"
+            | "cvttsd2sil" | "cvttsd2si" | "cvtsd2sil" | "cvtsd2si"
+            | "cvttss2sil" | "cvttss2si" | "cvtss2sil" | "cvtss2si"
+            | "cvtps2pd" | "cvtpd2ps" | "cvtdq2ps" | "cvtps2dq" | "cvttps2dq"
+            | "cvtdq2pd" | "cvtpd2dq"
+            | "pshufd" | "pshuflw" | "pshufhw" | "pxor" | "pand" | "por" | "pandn"
+            | "pcmpeqb" | "pcmpeqd" | "pcmpeqw" | "pcmpgtb" | "pcmpgtd" | "pcmpgtw"
+            | "pmovmskb" | "paddb" | "paddw" | "paddd" | "paddq"
+            | "psubb" | "psubw" | "psubd" | "psubq" | "pmullw" | "pmulld" | "pmulhw"
+            | "pmulhuw" | "pmuludq" | "paddusb" | "paddusw" | "psubusb" | "psubusw"
+            | "paddsb" | "paddsw" | "psubsb" | "psubsw" | "pmaxub" | "pmaxsw"
+            | "pminub" | "pminsw" | "pavgb" | "pavgw" | "psadbw" | "pmaddwd"
+            | "pslld" | "psllw" | "psllq" | "pslldq" | "psrld" | "psrlw" | "psrlq" | "psrldq"
+            | "psrad" | "psraw" | "punpcklbw" | "punpckhbw" | "punpcklwd" | "punpckldq"
+            | "punpckhwd" | "punpckhdq" | "punpcklqdq" | "punpckhqdq"
+            | "packsswb" | "packssdw" | "packuswb" | "pinsrw" | "pextrw"
+            | "ldmxcsr" | "stmxcsr"
+            | "pinsrb" | "pinsrd" | "pextrb" | "pextrd" | "pblendw" | "blendps" | "blendpd"
+            | "blendvps" | "blendvpd" | "pblendvb" | "dpps" | "dppd"
+            | "roundps" | "roundpd" | "roundss" | "roundsd"
+            | "pmaxsb" | "pmaxsd" | "pmaxuw" | "pmaxud" | "pminsb" | "pminsd" | "pminuw" | "pminud"
+            | "pmovsxbw" | "pmovsxbd" | "pmovsxbq" | "pmovsxwd" | "pmovsxwq" | "pmovsxdq"
+            | "pmovzxbw" | "pmovzxbd" | "pmovzxbq" | "pmovzxwd" | "pmovzxwq" | "pmovzxdq"
+            | "phminposuw" | "packusdw" | "pmuldq" | "pcmpeqq" | "pcmpestri" | "pcmpestrm"
+            | "pcmpistri" | "pcmpistrm" | "ptest" | "insertps" | "extractps"
+            | "mpsadbw" | "haddps" | "hsubps" | "haddpd" | "hsubpd" | "addsubpd" | "addsubps"
+            | "palignr" | "pshufb" | "phaddw" | "phaddd" | "phsubw" | "phsubd" | "pmulhrsw"
+            | "pabsb" | "pabsw" | "pabsd" | "pcmpgtq" | "movmskps"
+        ) {
+            return false;
+        }
+        // x87 FPU
+        if mnemonic.starts_with('f') {
+            return false;
+        }
+
+        // ljmp/lcall/lret have their own encoding
+        if matches!(mnemonic, "ljmpl" | "ljmpw" | "ljmp" | "lcallw" | "lcalll" | "lcall"
+            | "lret" | "lretl" | "lretq") {
+            return false;
+        }
+
+        // sbb is an ALU op, not a 'b' suffix — it's 32-bit default
+        // (but "sbbl"/"sbbw"/"sbbb" are explicit, bare "sbb" defaults to 32-bit)
+
+        // Everything else is assumed to be 32-bit and needs 0x66 in .code16gcc.
+        // This covers: movl, addl, subl, cmpl, testl, pushl, popl, ret, call, jmp, jcc,
+        // leal, imull, mull, divl, idivl, negl, notl, incl, decl, shll, shrl, sarl,
+        // cmovXXl, cltd, cwtl, bswap, xchgl, cmpxchgl, xaddl, movswl, movzwl,
+        // movsbl, movzbl, sbb, adc, etc.
+        true
+    }
+
+    /// Returns true for 16-bit GP instructions whose 32-bit mode encoding
+    /// includes a 0x66 operand-size prefix that must be STRIPPED in .code16gcc
+    /// mode (because 16-bit is the default operand size in real mode).
+    fn is_16bit_gp_with_prefix(&self, mnemonic: &str) -> bool {
+        matches!(mnemonic,
+            // 16-bit ALU/data
+            "movw" | "addw" | "subw" | "andw" | "orw" | "xorw" | "cmpw" | "testw"
+            | "negw" | "notw" | "incw" | "decw" | "shlw" | "shrw" | "sarw"
+            | "rolw" | "rorw" | "shldw" | "shrdw"
+            | "adcw" | "sbbw"
+            // 16-bit stack
+            | "pushw" | "popw"
+            // 16-bit exchange/atomic
+            | "xchgw" | "cmpxchgw" | "xaddw"
+            // 16-bit multiply/divide
+            | "imulw" | "mulw" | "divw" | "idivw"
+            // 16-bit sign extension (these have hardcoded 0x66 in 32-bit encoding)
+            | "cbtw" | "cbw" | "cwtd" | "cwd"
+            // 16-bit I/O and string ops
+            | "insw" | "outsw"
+            | "movsw" | "stosw" | "cmpsw" | "lodsw" | "scasw"
+            | "inw" | "outw"
+            // 16-bit movsx/movzx (16-bit destination)
+            | "movsbw" | "movzbw"
+            // 16-bit bit scan
+            | "bsrw" | "bsfw"
+            // 16-bit conditional moves
+            | "cmovew" | "cmovnew" | "cmovlw" | "cmovlew" | "cmovgw" | "cmovgew"
+            | "cmovbw" | "cmovbew" | "cmovaw" | "cmovaew"
+            | "cmovsw" | "cmovnsw" | "cmovzw" | "cmovnzw" | "cmovpw" | "cmovnpw"
+            | "cmovow" | "cmovnow" | "cmovcw" | "cmovncw"
+            // 16-bit bit test
+            | "btw" | "btsw" | "btrw" | "btcw"
+            // 16-bit lea
+            | "leaw"
+        )
+    }
+
+    /// Check if an instruction needs a 0x67 address-size override in .code16gcc mode.
+    /// Returns true if any operand uses 32-bit addressing (memory operands) or
+    /// for string ops that use implicit 32-bit address registers (ESI/EDI).
+    fn needs_address_size_prefix(&self, mnemonic: &str, operands: &[Operand]) -> bool {
+        // Jump/call targets are relative (not memory accesses), no 0x67 needed
+        let is_branch = mnemonic == "jmp" || mnemonic == "call"
+            || mnemonic == "loop" || mnemonic == "jecxz" || mnemonic == "jcxz"
+            || (mnemonic.starts_with('j') && mnemonic.len() >= 2);
+        for op in operands {
+            match op {
+                Operand::Memory { .. } => return true,
+                // Labels used as memory operands (movl symbol, %eax) need 0x67
+                // for 32-bit address form, but NOT for branch targets (rel32)
+                Operand::Label(_) if !is_branch => return true,
+                Operand::Indirect(_) => return true,
+                _ => {}
+            }
+        }
+        // String operations use implicit DS:[ESI]/ES:[EDI] which need 0x67
+        if matches!(mnemonic,
+            "movsb" | "movsl" | "movsw" | "stosb" | "stosl" | "stosw"
+            | "cmpsb" | "cmpsl" | "cmpsw" | "scasb" | "scasl" | "scasw"
+            | "lodsb" | "lodsl" | "lodsw"
+            | "insb" | "insl" | "insw" | "outsb" | "outsl" | "outsw"
+        ) {
+            return true;
+        }
+        false
     }
 
     /// Main mnemonic dispatch.

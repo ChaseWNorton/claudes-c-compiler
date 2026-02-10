@@ -37,9 +37,11 @@ use crate::backend::elf::{self as elf_mod,
 pub trait X86Arch {
     /// Encode an instruction, returning (bytes, relocations, optional jump info).
     /// The `section_data_len` parameter is the current offset in the section.
+    /// The `code_mode` parameter is the current code mode (16, 32, or 64).
     fn encode_instruction(
         instr: &Instruction,
         section_data_len: u64,
+        code_mode: u8,
     ) -> Result<EncodeResult, String>;
 
     /// ELF machine type (EM_X86_64 or EM_386).
@@ -91,7 +93,7 @@ pub trait X86Arch {
         instr: &Instruction,
         section_data_len: u64,
     ) -> Result<EncodeResult, String> {
-        Self::encode_instruction(instr, section_data_len)
+        Self::encode_instruction(instr, section_data_len, 64)
     }
 
 }
@@ -792,7 +794,7 @@ impl<A: X86Arch> ElfWriterCore<A> {
         let result = if self.code_mode == 64 && A::default_code_mode() != 64 {
             A::encode_instruction_code64(instr, base_offset)?
         } else {
-            A::encode_instruction(instr, base_offset)?
+            A::encode_instruction(instr, base_offset, self.code_mode)?
         };
         let instr_len = result.bytes.len();
         self.sections[sec_idx].data.extend_from_slice(&result.bytes);
@@ -1391,8 +1393,15 @@ impl<A: X86Arch> ElfWriterCore<A> {
 
                     // Rewrite instruction bytes
                     let data = &mut self.sections[sec_idx].data;
+                    // In .code16gcc mode, jumps have a 0x66 prefix:
+                    //   jmp:  [0x66, 0xE9, rel32] (6 bytes)
+                    //   jcc:  [0x66, 0x0F, 0x8x, rel32] (7 bytes)
+                    // Normal mode:
+                    //   jmp:  [0xE9, rel32] (5 bytes)
+                    //   jcc:  [0x0F, 0x8x, rel32] (6 bytes)
+                    let prefix_skip = if data[offset] == 0x66 { 1 } else { 0 };
                     if is_conditional {
-                        let cc = data[offset + 1] - 0x80;
+                        let cc = data[offset + prefix_skip + 1] - 0x80;
                         data[offset] = 0x70 + cc;
                         data[offset + 1] = 0;
                     } else {
@@ -1421,7 +1430,11 @@ impl<A: X86Arch> ElfWriterCore<A> {
                     // Update relocations: remove the one for this jump, shift others
                     self.sections[sec_idx].relocations.retain_mut(|reloc| {
                         let reloc_off = reloc.offset as usize;
-                        let old_reloc_pos = if is_conditional { offset + 2 } else { offset + 1 };
+                        let old_reloc_pos = if is_conditional {
+                            offset + prefix_skip + 2
+                        } else {
+                            offset + prefix_skip + 1
+                        };
                         if reloc_off == old_reloc_pos {
                             return false;
                         }
