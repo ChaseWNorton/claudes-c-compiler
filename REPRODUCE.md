@@ -7,15 +7,16 @@ CCC compiles the Linux kernel's 16-bit real-mode boot code (21 C files from
 (`_end ≤ 0x8000`). This document describes exactly how to reproduce the
 measurements.
 
-**Current results (2026-02-09, commit 4dcfbaf9):**
+**Current results (2026-02-09):**
 
 | Config | Code-only (21 files) | Linked _end |
 |--------|---------------------|-------------|
-| CCC -Os, IRC allocator | 27,109 bytes | 39,312 (0x9990) |
+| CCC -Os, IRC + clobber refinement | 27,037 bytes | 35,216 (0x8990) |
+| CCC -Os, IRC baseline | 27,109 bytes | 39,312 (0x9990) |
 | CCC -Os, linear scan | 29,633 bytes | 39,312 (0x9990) |
 | GCC -Os (reference) | ~10,500 bytes | 22,976 (0x59C0) |
 
-32KB limit = 32,768 bytes (0x8000). Gap: 6,544 bytes.
+32KB limit = 32,768 bytes (0x8000). Gap: 2,448 bytes.
 
 ## Prerequisites
 
@@ -218,52 +219,61 @@ done
 # Same measurement loop as step 2
 ```
 
-## Expected Results (commit 4dcfbaf9)
+## Expected Results
 
-### IRC allocator (default under -Os)
+### IRC allocator + clobber refinement (default under -Os)
 
 ```
 File                         Code-only
 a20                              766
-apm                              427
+apm                              429
 cmdline                         1415
-cpu                              726
+cpu                              724
 cpucheck                        2314
-cpuflags                         800
+cpuflags                         794
 early_serial_console            1744
 edd                                0
-main                             928
-memory                           562
+main                             924
+memory                           561
 pm                               524
-printf                          4910
+printf                          4895
 regs                             118
-string                          2869
-tty                              569
+string                          2859
+tty                              567
 version                            0
-video-bios                       941
-video-mode                      1581
-video-vesa                      1201
-video-vga                       1294
-video                           3420
-TOTAL                          27109
+video-bios                       945
+video-mode                      1570
+video-vesa                      1174
+video-vga                       1286
+video                           3428
+TOTAL                          27037
 ```
 
-Linked: `_end = 0x9990 = 39,312 bytes`
+Linked: `_end = 0x8990 = 35,216 bytes`
+
+### IRC allocator without clobber refinement (for reference)
+
+To disable clobber refinement, remove the pass-2 block in
+`src/backend/graph_coloring.rs` (the `refine_clobber_points` call in `allocate_irc`).
+
+Expected total: **27,109 bytes** code-only. Linked _end: 39,312 (0x9990).
 
 ### Linear scan allocator (for comparison)
 
 To force linear scan instead of IRC, edit `src/backend/stack_layout/regalloc_helpers.rs`
 line 65: change `allocate_registers_irc` to `allocate_registers`, rebuild, recompile.
 
-Expected total: **29,633 bytes** code-only. Same linked _end (39,312).
+Expected total: **29,633 bytes** code-only. Linked _end: 39,312 (0x9990).
 
 ### Alignment cliff note
 
-The `.pecompat` section has 4KB alignment. Currently at `0x8000`. The code
-sections end at byte 28,743 — just 71 bytes above the `0x7000` boundary.
-If code shrinks by 71+ bytes, `.pecompat` drops to `0x7000` and `_end`
-drops by ~4,096 bytes. Between cliffs, _end does NOT change (savings are
-absorbed by alignment padding).
+The `.pecompat` section has 4KB alignment. Currently at `0x7000` (crossed down
+from `0x8000` thanks to clobber refinement saving 72 bytes of code). The next
+cliff at `0x6000` would require ~4KB more code savings. Between cliffs, _end
+does NOT change (savings are absorbed by alignment padding).
+
+Note: only 2,448 bytes over the 32KB limit — but the next _end reduction won't
+happen until code savings push past the `0x6000` alignment boundary.
 
 ## Common Mistakes
 

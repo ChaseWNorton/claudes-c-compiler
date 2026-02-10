@@ -777,6 +777,7 @@ fn build_graph(
     eligible: &FxHashSet<u32>,
     use_count: &FxHashMap<u32, u64>,
     config: &RegAllocConfig,
+    clobber_override: Option<&[Vec<u32>]>,
 ) -> IrcGraph {
     // Filter intervals to eligible values only
     let eligible_intervals: Vec<&LiveInterval> = liveness
@@ -856,10 +857,13 @@ fn build_graph(
 
     // Add clobber interference: caller-saved precolored nodes interfere
     // with values live at their clobber points.
+    // Use refined clobber points if provided (second pass after refinement),
+    // otherwise use the original clobber points from liveness analysis.
+    let clobber_source = clobber_override.unwrap_or(liveness.scratch_clobber_points.as_slice());
     let num_caller_saved = config.caller_saved_regs.len();
     for reg_idx in 0..num_caller_saved {
         let precolored_node = num_virtual as u32 + reg_idx as u32;
-        if let Some(clobber_points) = liveness.scratch_clobber_points.get(reg_idx) {
+        if let Some(clobber_points) = clobber_source.get(reg_idx) {
             for &point in clobber_points {
                 // Find all values live at this point (interval contains point)
                 for (&vid, &(start, end)) in &interval_map {
@@ -906,6 +910,60 @@ fn build_graph(
     graph
 }
 
+// ── Clobber refinement ───────────────────────────────────────────────────────
+
+/// Refine scratch clobber points after an initial IRC pass.
+///
+/// On i686, Load/Store through non-alloca pointers cause ecx/edx clobber points
+/// (ecx for addressing, edx for save_acc). But when the pointer value gets a
+/// callee-saved register (ebx/esi/edi), codegen dereferences directly through
+/// that register (e.g., `movl (%esi), %eax`) without touching ecx/edx.
+///
+/// This function checks which pointer values got callee-saved registers in the
+/// first IRC pass and removes their corresponding clobber points. The caller
+/// then rebuilds the interference graph with fewer ecx/edx edges, letting those
+/// registers serve more values and reducing spills.
+fn refine_clobber_points(
+    liveness: &LivenessResult,
+    assignments: &FxHashMap<u32, PhysReg>,
+    config: &RegAllocConfig,
+) -> Option<Vec<Vec<u32>>> {
+    let caller_saved_ids: FxHashSet<u8> = config.caller_saved_regs.iter().map(|r| r.0).collect();
+    let mut any_refined = false;
+
+    let refined: Vec<Vec<u32>> = liveness.scratch_clobber_points.iter()
+        .enumerate()
+        .map(|(reg_idx, clobber_points)| {
+            if let Some(refinable) = liveness.ptr_clobber_info.get(reg_idx) {
+                if refinable.is_empty() {
+                    return clobber_points.clone();
+                }
+                let remove_set: FxHashSet<u32> = refinable.iter()
+                    .filter(|&&(_, ptr_id)| {
+                        // Only refine if pointer got a callee-saved register
+                        // (not ecx/edx — those are what we're trying to free)
+                        if let Some(&phys) = assignments.get(&ptr_id) {
+                            !caller_saved_ids.contains(&phys.0)
+                        } else {
+                            false
+                        }
+                    })
+                    .map(|&(point, _)| point)
+                    .collect();
+                if remove_set.is_empty() {
+                    return clobber_points.clone();
+                }
+                any_refined = true;
+                clobber_points.iter().filter(|p| !remove_set.contains(p)).copied().collect()
+            } else {
+                clobber_points.clone()
+            }
+        })
+        .collect();
+
+    if any_refined { Some(refined) } else { None }
+}
+
 // ── Public entry point ──────────────────────────────────────────────────────
 
 /// Run graph coloring register allocation using Iterated Register Coalescing.
@@ -913,6 +971,15 @@ fn build_graph(
 /// Drop-in replacement for `allocate_registers()` that aggressively coalesces
 /// Copy instructions (especially phi-eliminated copies) to reduce register
 /// shuffles. Activated under `-Os` for code size optimization.
+///
+/// Two-pass allocation with clobber refinement:
+/// 1. Pass 1: Run IRC with original clobber points → pointer values get
+///    callee-saved registers (ebx/esi/edi).
+/// 2. Refine: For pointer values that got callee-saved registers, remove their
+///    ecx/edx clobber points (codegen dereferences directly through the
+///    callee-saved register, never touching ecx/edx).
+/// 3. Pass 2: Rebuild interference graph with fewer ecx/edx edges → ecx/edx
+///    can serve more values → fewer spills.
 pub fn allocate_irc(
     func: &IrFunction,
     config: &RegAllocConfig,
@@ -936,7 +1003,8 @@ pub fn allocate_irc(
         };
     }
 
-    let mut graph = build_graph(&liveness, func, &eligible, &use_count, config);
+    // Pass 1: Build graph with original clobber points
+    let mut graph = build_graph(&liveness, func, &eligible, &use_count, config, None);
 
     if graph.num_nodes == 0 || graph.k == 0 {
         return RegAllocResult {
@@ -951,6 +1019,36 @@ pub fn allocate_irc(
 
     // Assign colors and map back to PhysReg
     let (assignments, used_regs) = graph.assign_colors();
+
+    // Pass 2: Clobber refinement — if pointer values got callee-saved registers,
+    // remove their ecx/edx clobber points and re-run IRC with a cleaner graph.
+    // Compare both results per-function and keep the better one: the refined
+    // graph may change coalescing decisions, sometimes for the worse.
+    if let Some(refined) = refine_clobber_points(&liveness, &assignments, config) {
+        let mut graph2 = build_graph(&liveness, func, &eligible, &use_count, config, Some(&refined));
+        if graph2.num_nodes > 0 && graph2.k > 0 {
+            graph2.run();
+            let (assignments2, used_regs2) = graph2.assign_colors();
+
+            // Score each result: benefit from register assignments (weighted by
+            // use count — each use avoids a ~4-byte stack roundtrip) minus cost
+            // of callee-saved registers (2 bytes each for push+pop).
+            let score = |a: &FxHashMap<u32, PhysReg>, r: &[PhysReg]| -> i64 {
+                let benefit: i64 = a.keys()
+                    .map(|&vid| use_count.get(&vid).copied().unwrap_or(1) as i64)
+                    .sum();
+                benefit - (r.len() as i64 * 3)
+            };
+
+            if score(&assignments2, &used_regs2) >= score(&assignments, &used_regs) {
+                return RegAllocResult {
+                    assignments: assignments2,
+                    used_regs: used_regs2,
+                    liveness: Some(liveness),
+                };
+            }
+        }
+    }
 
     RegAllocResult {
         assignments,
