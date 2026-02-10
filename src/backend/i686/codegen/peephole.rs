@@ -879,7 +879,7 @@ fn flags_live_after(store: &LineStore, infos: &[LineInfo], after: usize) -> bool
     let len = infos.len();
     let mut k = after;
     let mut count = 0;
-    while k < len && count < 10 {
+    while k < len && count < 40 {
         if infos[k].is_nop() || infos[k].kind == LineKind::Empty {
             k += 1;
             continue;
@@ -5657,8 +5657,8 @@ fn fold_absolute_addressing(store: &mut LineStore, infos: &mut [LineInfo]) -> bo
             i += 1;
             continue;
         };
-        let imm_str = &line_i[6..comma];
-        let reg_str = line_i[comma + 2..].trim();
+        let imm_str = line_i[6..comma].to_string();
+        let reg_str = line_i[comma + 2..].trim().to_string();
         if !reg_str.starts_with('%') || reg_str.contains('(') {
             i += 1;
             continue;
@@ -5682,8 +5682,8 @@ fn fold_absolute_addressing(store: &mut LineStore, infos: &mut [LineInfo]) -> bo
         } else {
             imm_str.to_string()
         };
-        let imm_reg = register_family(reg_str);
-        if imm_reg > REG_GP_MAX || imm_reg == REG_ESP || imm_reg == REG_EBP {
+        let imm_reg = register_family(&reg_str);
+        if imm_reg > REG_GP_MAX || imm_reg == REG_ESP {
             i += 1;
             continue;
         }
@@ -5738,25 +5738,36 @@ fn fold_absolute_addressing(store: &mut LineStore, infos: &mut [LineInfo]) -> bo
 
         // Pattern 3: movl $IMM, %reg; addl $OFF, %reg; movl %src, (%reg)
         //           → movl %src, (IMM+OFF)
-        // Only for numeric immediates (symbol+offset needs different syntax).
-        if let Some(imm_val) = imm_numeric {
+        // Handles both numeric immediates and symbol addresses.
         if line_j.starts_with("addl $") && line_j.ends_with(format!(", {}", reg_str).as_str()) {
             let off_str = &line_j[6..line_j.len() - reg_str.len() - 2];
             let Ok(off_val) = off_str.parse::<i64>() else {
                 i += 1;
                 continue;
             };
-            let combined = imm_val + off_val;
+
+            // Compute folded address: numeric sum for numeric imm, "sym+N" for symbols
+            let combined_addr = if let Some(imm_val) = imm_numeric {
+                format!("{}", imm_val + off_val)
+            } else {
+                // Symbol + offset: emit "sym+N" or "sym-N" syntax
+                if off_val == 0 {
+                    imm_str.to_string()
+                } else if off_val > 0 {
+                    format!("{}+{}", imm_str, off_val)
+                } else {
+                    format!("{}{}", imm_str, off_val) // negative includes '-'
+                }
+            };
 
             // Find next instruction after the addl
             let mut k = j + 1;
             while k < len && (infos[k].is_nop() || infos[k].kind == LineKind::Empty) {
                 k += 1;
             }
-            if k >= len {
-                i += 1;
-                continue;
-            }
+
+            // Pattern 3a: ...followed by load/store through %reg
+            if k < len {
             let line_k = trimmed(store, &infos[k], k);
 
             if line_k.starts_with("movl ") && line_k.contains(&reg_indirect) {
@@ -5769,8 +5780,8 @@ fn fold_absolute_addressing(store: &mut LineStore, infos: &mut [LineInfo]) -> bo
                 let dst = rest[c3 + 2..].trim();
 
                 if dst == &reg_indirect && src.starts_with('%') && !src.contains('(') {
-                    // Store: movl %src, (%reg) → movl %src, combined
-                    let new_line = format!("    movl {}, {}", src, combined);
+                    // Store: movl %src, (%reg) → movl %src, combined_addr
+                    let new_line = format!("    movl {}, {}", src, combined_addr);
                     store.replace(k, new_line);
                     infos[k] = classify_line(store.get(k));
                     infos[i].kind = LineKind::Nop;
@@ -5779,8 +5790,8 @@ fn fold_absolute_addressing(store: &mut LineStore, infos: &mut [LineInfo]) -> bo
                     i = k + 1;
                     continue;
                 } else if src == &reg_indirect && dst.starts_with('%') && !dst.contains('(') {
-                    // Load: movl (%reg), %dst → movl combined, %dst
-                    let new_line = format!("    movl {}, {}", combined, dst);
+                    // Load: movl (%reg), %dst → movl combined_addr, %dst
+                    let new_line = format!("    movl {}, {}", combined_addr, dst);
                     store.replace(k, new_line);
                     infos[k] = classify_line(store.get(k));
                     infos[i].kind = LineKind::Nop;
@@ -5790,8 +5801,60 @@ fn fold_absolute_addressing(store: &mut LineStore, infos: &mut [LineInfo]) -> bo
                     continue;
                 }
             }
+
+            } // end if k < len
+
+            // Pattern 3b: fold the address computation (highest priority — saves more than 3a-ext)
+            // movl $sym, %reg; addl $OFF, %reg → movl $sym+OFF, %reg
+            // Only safe when flags from addl are dead (movl doesn't set flags).
+            if !flags_live_after(store, infos, j + 1) {
+                let new_line = format!("    movl ${}, {}", combined_addr, reg_str);
+                store.replace(i, new_line);
+                infos[i] = classify_line(store.get(i));
+                infos[j].kind = LineKind::Nop;
+                changed = true;
+                i = j + 1;
+                continue;
+            }
+
+            // Pattern 3a-ext (fallback): when flags are live so 3b can't fire, fold
+            // the offset into the memory operand's displacement instead.
+            // movl $sym, %reg; addl $OFF, %reg; movzbl (%reg), %dst
+            //   → movl $sym, %reg; movzbl OFF(%reg), %dst   (saves ~2 bytes)
+            if k < len {
+            let line_k = trimmed(store, &infos[k], k);
+            for prefix in &["movzbl ", "movzwl ", "movsbl ", "movswl ", "movw ", "movb "] {
+                if line_k.starts_with(prefix) && line_k.contains(&reg_indirect) {
+                    let rest = &line_k[prefix.len()..];
+                    if let Some(c3) = rest.find(", ") {
+                        let src = rest[..c3].trim();
+                        let dst = rest[c3 + 2..].trim();
+
+                        if src == &reg_indirect && dst.starts_with('%') && !dst.contains('(') {
+                            // Load: movzbl (%reg), %dst → movzbl OFF(%reg), %dst
+                            let new_load = format!("    {}{}({}), {}", prefix, off_val, reg_str, dst);
+                            store.replace(k, new_load);
+                            infos[k] = classify_line(store.get(k));
+                            infos[j].kind = LineKind::Nop; // remove the addl
+                            changed = true;
+                            i = k + 1;
+                            break;
+                        } else if dst == &reg_indirect && src.starts_with('%') && !src.contains('(') {
+                            // Store: movw %src, (%reg) → movw %src, OFF(%reg)
+                            let new_store = format!("    {}{}, {}({})", prefix, src, off_val, reg_str);
+                            store.replace(k, new_store);
+                            infos[k] = classify_line(store.get(k));
+                            infos[j].kind = LineKind::Nop; // remove the addl
+                            changed = true;
+                            i = k + 1;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            }
         }
-        } // end if let Some(imm_val)
 
         i += 1;
     }
@@ -9217,38 +9280,113 @@ fn fold_cmpl_immediate_to_reg(store: &mut LineStore, infos: &mut [LineInfo]) -> 
 /// Replace `movl $0, N(%esp)` with `andl $0, N(%esp)` (saves 3 bytes).
 /// `movl $0, mem` is 8-11 bytes while `andl $0, mem` is 5-8 bytes (imm8 sign-extended).
 /// Only safe when flags are not live after.
+/// Iterates REVERSE to bootstrap: converting a later store to andl (flag-setter)
+/// makes flags_live_after return false for the one above it, enabling cascading.
 fn fold_movl_zero_esp_to_andl(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
     let len = infos.len();
     let mut changed = false;
 
-    for i in 0..len {
-        if infos[i].is_nop() {
-            continue;
-        }
-        if !matches!(infos[i].kind, LineKind::Other { .. }) {
-            continue;
-        }
-        let s = trimmed(store, &infos[i], i);
-        // Match: movl $0, N(%esp) or movl $0, (%esp)
-        if !s.starts_with("movl $0, ") || !s.ends_with("(%esp)") {
-            continue;
-        }
-        let mem_part = &s[9..]; // after "movl $0, "
-                                // Verify it parses as a valid ESP store
-        if parse_esp_store_offset(s) != Some(0) {
-            // Not $0 — but we already checked starts_with("movl $0, ")
-            // parse_esp_store_offset checks for movl prefix, so let's verify offset
+    // Reverse iteration: convert bottom-up so each andl enables the one above.
+    // Multiple passes to handle chains longer than what one reverse pass catches.
+    for _pass in 0..4 {
+        let mut pass_changed = false;
+        for i in (0..len).rev() {
+            if infos[i].is_nop() {
+                continue;
+            }
+            if !matches!(infos[i].kind, LineKind::Other { .. }) {
+                continue;
+            }
+            let s = trimmed(store, &infos[i], i);
+            // Strip inline comments (e.g. "# PHI_COPY") before matching.
+            let s_no_comment = if let Some(hash) = s.find("    #") {
+                s[..hash].trim_end()
+            } else {
+                s
+            };
+            // Match: movl $0, N(%esp) or movl $0, (%esp)
+            if !s_no_comment.starts_with("movl $0, ") || !s_no_comment.ends_with("(%esp)") {
+                continue;
+            }
+            let mem_part = s_no_comment[9..].to_string(); // after "movl $0, "
+            // Verify it parses as a valid ESP store
             let off_str = &mem_part[..mem_part.len() - 6]; // strip "(%esp)"
             if !off_str.is_empty() && off_str.parse::<i32>().is_err() {
                 continue;
             }
+            if !flags_live_after(store, infos, i + 1) {
+                let new_line = format!("    andl $0, {}", mem_part);
+                store.replace(i, new_line);
+                infos[i] = classify_line(store.get(i));
+                pass_changed = true;
+            }
         }
-        if !flags_live_after(store, infos, i + 1) {
-            let new_line = format!("    andl $0, {}", mem_part);
-            store.replace(i, new_line);
-            infos[i] = classify_line(store.get(i));
-            changed = true;
+        if !pass_changed {
+            break;
         }
+        changed = true;
+    }
+
+    changed
+}
+
+/// Fold `movzbl/movzwl/movsbl/movswl SRC, %REG; movl %REG, %DST` → ext SRC, %DST.
+/// Saves 2 bytes per instance by eliminating the intermediate movl.
+/// Runs as a late pass to avoid disrupting earlier optimizations.
+fn fold_extend_then_move(store: &mut LineStore, infos: &mut [LineInfo]) -> bool {
+    let len = infos.len();
+    let mut changed = false;
+    let mut i = 0;
+
+    while i < len {
+        if infos[i].is_nop() {
+            i += 1;
+            continue;
+        }
+        // Find next non-nop
+        let mut j = i + 1;
+        while j < len && infos[j].is_nop() {
+            j += 1;
+        }
+        if j >= len {
+            break;
+        }
+
+        if let LineKind::Move { src: mov_src, dst: mov_dst } = infos[j].kind {
+            if let LineKind::Other { dest_reg: ext_dst } = infos[i].kind {
+                if mov_src == ext_dst && mov_dst != ext_dst {
+                    let si = trimmed(store, &infos[i], i).to_string();
+                    let mut matched = false;
+                    for prefix in &["movzbl ", "movzwl ", "movsbl ", "movswl "] {
+                        if si.starts_with(prefix) {
+                            let suffix = format!(", {}", reg32_name(ext_dst));
+                            if si.ends_with(&suffix) {
+                                let src_operand = &si[prefix.len()..si.len() - suffix.len()];
+                                if !line_references_reg(src_operand, mov_dst)
+                                    && is_reg_dead_from(store, infos, j + 1, ext_dst)
+                                {
+                                    let new_line = format!(
+                                        "    {}{}, {}",
+                                        prefix, src_operand, reg32_name(mov_dst)
+                                    );
+                                    store.replace(i, new_line);
+                                    infos[i] = classify_line(store.get(i));
+                                    infos[j].kind = LineKind::Nop;
+                                    changed = true;
+                                    matched = true;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    if matched {
+                        i = j + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        i = j;
     }
 
     changed
@@ -9660,6 +9798,13 @@ pub fn peephole_optimize(asm: String, cost_map: bool) -> String {
     }
     combined_local_pass(&mut store, &mut infos);
     eliminate_dead_reg_moves(&store, &mut infos);
+
+    // Phase 8b: Fold movzbl/movzwl/movsbl/movswl + movl into single instruction.
+    // Runs late to avoid disrupting earlier optimization phases.
+    if fold_extend_then_move(&mut store, &mut infos) {
+        eliminate_dead_reg_moves(&store, &mut infos);
+        combined_local_pass(&mut store, &mut infos);
+    }
 
     // Phase 9: Eliminate redundant flag tests and shorten comparisons.
     // Runs last because earlier phases may expose these patterns.
