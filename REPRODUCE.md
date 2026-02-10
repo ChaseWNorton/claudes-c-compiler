@@ -11,12 +11,12 @@ measurements.
 
 | Config | Code-only (21 files) | Linked _end |
 |--------|---------------------|-------------|
-| CCC -Os, IRC + clobber refinement | 27,037 bytes | 35,216 (0x8990) |
-| CCC -Os, IRC baseline | 27,109 bytes | 39,312 (0x9990) |
-| CCC -Os, linear scan | 29,633 bytes | 39,312 (0x9990) |
-| GCC -Os (reference) | ~10,500 bytes | 22,976 (0x59C0) |
+| CCC -Os -mregparm=3, IRC + clobber refinement | 24,271 bytes | 35,216 (0x8990) |
+| CCC -Os (no regparm), IRC + clobber refinement | 27,037 bytes | 35,216 (0x8990) |
+| GCC -Os -mregparm=3 (reference) | ~10,500 bytes | 22,976 (0x59C0) |
 
-32KB limit = 32,768 bytes (0x8000). Gap: 2,448 bytes.
+32KB limit = 32,768 bytes (0x8000). Linked _end unchanged due to 4KB alignment cliff.
+.text32 ends at 25,295 — 719 bytes from 0x6000 cliff. Crossing it drops _end to ~31,120.
 
 ## Prerequisites
 
@@ -112,6 +112,8 @@ DFLAGS="-D__KERNEL__ -D_SETUP -D__EXPORTED_HEADERS__ \
         -DSVGA_MODE=NORMAL_VGA -DDISABLE_BRANCH_PROFILING \
         -D__DISABLE_EXPORTS"
 
+CFLAGS="-mregparm=3"
+
 PREAMBLE="-include $KDIR/include/linux/compiler_types.h \
           -include /tmp/boot_compat.h"
 ```
@@ -123,8 +125,13 @@ PREAMBLE="-include $KDIR/include/linux/compiler_types.h \
 This produces smaller but **incorrect** code — functions that the kernel
 expects to be inlined are not, changing behavior and invalidating measurements.
 
-This exact mistake was made twice during development (2026-02-08, 2026-02-09),
-producing the invalid numbers 26,413 / 34,528 that appeared in earlier notes.
+### WARNING about -mregparm=3
+
+**`-mregparm=3` is part of `REALMODE_CFLAGS` in the kernel's `arch/x86/Makefile`.**
+It passes the first 3 integer arguments in registers (eax, edx, ecx) instead of
+on the stack. Without it, all arguments go on the stack, producing significantly
+larger code (+2,766 bytes across 21 files). This flag was missing from earlier
+measurements, inflating code-only numbers.
 
 ## Step-by-Step Reproduction
 
@@ -139,7 +146,7 @@ FILES="a20 apm cmdline cpu cpucheck cpuflags early_serial_console
        video-bios video-mode video-vesa video-vga video"
 
 for src in $FILES; do
-    $CCC -m16 -Os -c \
+    $CCC -m16 -Os -mregparm=3 -c \
         $IFLAGS $DFLAGS $PREAMBLE \
         arch/x86/boot/${src}.c \
         -o /tmp/boot_measure/${src}.o
@@ -221,59 +228,50 @@ done
 
 ## Expected Results
 
-### IRC allocator + clobber refinement (default under -Os)
+### IRC allocator + clobber refinement + regparm=3 (default under -Os)
 
 ```
 File                         Code-only
-a20                              766
-apm                              429
-cmdline                         1415
-cpu                              724
-cpucheck                        2314
-cpuflags                         794
-early_serial_console            1744
+a20                              577
+apm                              343
+cmdline                         1394
+cpu                              642
+cpucheck                        2257
+cpuflags                         709
+early_serial_console            1351
 edd                                0
-main                             924
-memory                           561
-pm                               524
-printf                          4895
-regs                             118
-string                          2859
-tty                              567
+main                             795
+memory                           453
+pm                               412
+printf                          4785
+regs                             111
+string                          2713
+tty                              415
 version                            0
-video-bios                       945
-video-mode                      1570
-video-vesa                      1174
-video-vga                       1286
-video                           3428
-TOTAL                          27037
+video-bios                       804
+video-mode                      1433
+video-vesa                      1029
+video-vga                        820
+video                           3228
+TOTAL                          24271
 ```
 
-Linked: `_end = 0x8990 = 35,216 bytes`
+Linked: `_end = 0x8990 = 35,216 bytes` (due to 4KB alignment cliff)
 
-### IRC allocator without clobber refinement (for reference)
+### Without -mregparm=3 (for reference)
 
-To disable clobber refinement, remove the pass-2 block in
-`src/backend/graph_coloring.rs` (the `refine_clobber_points` call in `allocate_irc`).
+Remove `-mregparm=3` from the compilation command.
 
-Expected total: **27,109 bytes** code-only. Linked _end: 39,312 (0x9990).
-
-### Linear scan allocator (for comparison)
-
-To force linear scan instead of IRC, edit `src/backend/stack_layout/regalloc_helpers.rs`
-line 65: change `allocate_registers_irc` to `allocate_registers`, rebuild, recompile.
-
-Expected total: **29,633 bytes** code-only. Linked _end: 39,312 (0x9990).
+Expected total: **27,037 bytes** code-only. Same linked _end (cliff-dominated).
 
 ### Alignment cliff note
 
-The `.pecompat` section has 4KB alignment. Currently at `0x7000` (crossed down
-from `0x8000` thanks to clobber refinement saving 72 bytes of code). The next
-cliff at `0x6000` would require ~4KB more code savings. Between cliffs, _end
-does NOT change (savings are absorbed by alignment padding).
+The `.pecompat` section has 4KB alignment, currently at `0x7000`. `.text32`
+ends at byte 25,295 — **719 bytes above the `0x6000` boundary**. If code
+shrinks by 719+ bytes, `.pecompat` drops to `0x6000` and `_end` drops to
+~0x7990 = 31,120 bytes — **under the 32KB limit**.
 
-Note: only 2,448 bytes over the 32KB limit — but the next _end reduction won't
-happen until code savings push past the `0x6000` alignment boundary.
+Between cliffs, _end does NOT change (savings are absorbed by alignment padding).
 
 ## Common Mistakes
 
