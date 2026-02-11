@@ -681,6 +681,7 @@ pub trait ArchCodegen {
         // base_addr + constant using efficient addressing modes.
         if let Operand::Const(c) = offset {
             let const_offset = match c {
+                IrConst::Zero => Some(0i64),
                 IrConst::I64(n) => Some(*n),
                 IrConst::I32(n) => Some(*n as i64),
                 IrConst::I16(n) => Some(*n as i64),

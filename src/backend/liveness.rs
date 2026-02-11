@@ -397,9 +397,15 @@ fn assign_program_points(
                         ecx_clobber_points.push(point);
                         ecx_ptr_clobber.push((point, ptr.0));
                     }
-                    // GEP: ecx for complex address computation (edx NOT clobbered)
-                    Instruction::GetElementPtr { .. } => {
-                        ecx_clobber_points.push(point);
+                    // GEP: ecx only needed for non-constant offsets (dynamic index).
+                    // Constant-offset GEPs use leal offset(%reg), %eax — no ecx.
+                    Instruction::GetElementPtr { offset, .. } => {
+                        let is_const_offset = matches!(offset, Operand::Const(
+                            IrConst::Zero | IrConst::I64(_) | IrConst::I32(_) | IrConst::I16(_) | IrConst::I8(_)
+                        ));
+                        if !is_const_offset {
+                            ecx_clobber_points.push(point);
+                        }
                     }
                     // Non-immediate shifts require %cl (ecx only), division uses both
                     Instruction::BinOp { op, rhs, ty, .. }
